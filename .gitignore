@@ -1,0 +1,94 @@
+# ---- Django / Backend ----
+backend/__pycache__/
+backend/**/*.py[cod]
+backend/**/*.pyo
+backend/**/*.pyd
+backend/**/*.so
+backend/**/*.egg-info/
+backend/dist/
+backend/build/
+
+# Django stuff
+backend/db.sqlite3
+backend/db.sqlite3-journal
+backend/media/
+backend/staticfiles/
+backend/*.log
+
+# Virtualenv
+backend/.env
+backend/.venv
+backend/env/
+backend/venv/
+backend/ENV/
+backend/*.env
+backend/*.local
+
+# Django migrations (keep __init__.py though)
+backend/**/migrations/*.py
+!backend/**/migrations/__init__.py
+
+# ---- React Native / Frontend ----
+frontend/node_modules/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.pnpm-debug.log*
+
+# Metro / Expo / React Native bundler
+frontend/.expo/
+frontend/.expo-shared/
+frontend/.expo-dev/
+frontend/.expo-web/
+frontend/*.packager
+frontend/*.bundle
+frontend/*.tmp
+frontend/*.lock
+frontend/*.log
+frontend/*.pid
+
+# React Native build
+frontend/ios/build/
+frontend/ios/Pods/
+frontend/ios/Podfile.lock
+frontend/android/.gradle/
+frontend/android/app/build/
+frontend/android/build/
+frontend/android/.idea/
+frontend/android/local.properties
+frontend/android/*.iml
+
+# React Native caches
+frontend/*.keystore
+frontend/*.gradle
+frontend/.gradle/
+frontend/*.apk
+frontend/*.aab
+frontend/*.app
+frontend/*.xcworkspace
+frontend/xcuserdata/
+frontend/DerivedData/
+
+# Watchman
+frontend/.watchmanconfig
+
+# Xcode
+frontend/*.pbxuser
+!frontend/default.pbxuser
+frontend/*.mode1v3
+!frontend/default.mode1v3
+frontend/*.mode2v3
+!frontend/default.mode2v3
+frontend/*.perspectivev3
+!frontend/default.perspectivev3
+frontend/*.xcuserstate
+
+# ---- OS / Editor files ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*.bak
+
