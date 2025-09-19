@@ -228,27 +228,58 @@ export default function PostCard({ post, onReport, onMute, onCopyText, onRepost 
           activeOpacity={0.95}
         >
           {post.rendered_image_url ? (
-            <Image 
-              source={{ uri: post.rendered_image_url }}
-              style={[
-                styles.postImage, 
-                { 
-                  aspectRatio: imageAspectRatio,
-                  maxHeight: screenWidth * 1.5 // Prevent overflow while allowing full content
+            <View
+              style={(() => {
+                const canvasWidth = post.image_width && post.image_width > 0 ? post.image_width : null;
+                const canvasHeight = post.image_height && post.image_height > 0 ? post.image_height : null;
+                const topY = typeof post.top_y === 'number' ? post.top_y : null;
+                const bottomY = typeof post.bottom_y === 'number' ? post.bottom_y : null;
+                if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
+                  const scale = screenWidth / canvasWidth;
+                  const croppedHeight = Math.max(bottomY - topY, 1);
+                  return [styles.postImageWrapper, { height: croppedHeight * scale }];
                 }
-              ]}
-              resizeMode="contain"
-              onLoad={(event) => {
-                const { width, height } = event.nativeEvent.source;
-                const aspectRatio = width / height;
-                setImageAspectRatio(aspectRatio);
-                console.log('📐 Image dimensions:', { width, height, aspectRatio });
-              }}
-              onError={(error) => {
-                console.error('Error loading post image:', error);
-                console.log('Failed image URL:', post.rendered_image_url);
-              }}
-            />
+                return [styles.postImageWrapper, { aspectRatio: imageAspectRatio, maxHeight: screenWidth * 1.5 }];
+              })()}
+            >
+              <Image 
+                source={{ uri: post.rendered_image_url }}
+                style={(() => {
+                  const canvasWidth = post.image_width && post.image_width > 0 ? post.image_width : null;
+                  const canvasHeight = post.image_height && post.image_height > 0 ? post.image_height : null;
+                  const topY = typeof post.top_y === 'number' ? post.top_y : null;
+                  const bottomY = typeof post.bottom_y === 'number' ? post.bottom_y : null;
+                  if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
+                    const scale = screenWidth / canvasWidth;
+                    return [
+                      styles.postImage,
+                      {
+                        height: canvasHeight * scale,
+                        transform: [{ translateY: -topY * scale }],
+                      },
+                    ];
+                  }
+                  return [
+                    styles.postImage,
+                    {
+                      aspectRatio: imageAspectRatio,
+                      maxHeight: screenWidth * 1.5,
+                    }
+                  ];
+                })()}
+                resizeMode="cover"
+                onLoad={(event) => {
+                  const { width, height } = event.nativeEvent.source;
+                  const aspectRatio = width / height;
+                  setImageAspectRatio(aspectRatio);
+                  console.log('📐 Image dimensions:', { width, height, aspectRatio });
+                }}
+                onError={(error) => {
+                  console.error('Error loading post image:', error);
+                  console.log('Failed image URL:', post.rendered_image_url);
+                }}
+              />
+            </View>
           ) : (
             <View style={styles.placeholderImage}>
               <Text style={styles.placeholderText}>
@@ -313,6 +344,11 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  postImageWrapper: {
+    width: '100%',
+    overflow: 'hidden',
+    backgroundColor: Colors.surface,
   },
   postImage: {
     width: '100%',

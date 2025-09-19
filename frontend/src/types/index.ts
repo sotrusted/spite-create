@@ -33,6 +33,10 @@ export interface Post {
   is_repost?: boolean;
   original_post?: Post;
   repost_screenshot_url?: string;
+  image_width?: number;
+  image_height?: number;
+  top_y?: number;
+  bottom_y?: number;
 }
 
 export interface TextElement {
