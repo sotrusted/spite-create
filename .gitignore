@@ -92,3 +92,4 @@ Thumbs.db
 *.swo
 *.bak
 
+frontend/node_modules/
