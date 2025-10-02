@@ -1,6 +1,6 @@
 # Development Workflow Guide
 
-This guide explains how to develop and debug the TBD frontend effectively, especially for someone new to React Native/TypeScript.
+This guide explains how to develop and debug the Subscript frontend effectively, especially for someone new to React Native/TypeScript.
 
 ## 🚀 Daily Development Workflow
 
@@ -386,4 +386,3 @@ Before committing code, check:
 4. **Native modules**: Bridge to native code
 
 Remember: Start small, make incremental changes, and test frequently. The React Native ecosystem is vast, but you can be productive with just the basics!
-

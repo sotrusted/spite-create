@@ -22,6 +22,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { PanGestureHandler, PinchGestureHandler, State } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
 import AnimatedReanimated, {
   useAnimatedStyle,
   useSharedValue,
@@ -30,10 +32,24 @@ import AnimatedReanimated, {
 } from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
 import { Colors, FontChoices } from '../constants/colors';
-import { PostCreate, RepostData } from '../types';
+import { PostCreate, RepostData, StickerElement, User } from '../types';
 import { api, endpoints } from '../config/api';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+const DEFAULT_SIGNATURE_STYLE = 'default';
+
+// User can pick their own images as stickers - no presets needed
+
+// Helper function to get the next background color in the sequence
+const getNextBackgroundColor = (currentColor: string): string => {
+  const colorIndex = Colors.postColors.indexOf(currentColor);
+  if (colorIndex === -1) {
+    // If current color is not in the list, return the first color
+    return Colors.postColors[0];
+  }
+  // Return the next color in the sequence, wrapping around to the beginning
+  return Colors.postColors[(colorIndex + 1) % Colors.postColors.length];
+};
 
 interface TextElement {
   id: string;
@@ -95,11 +111,12 @@ const RepostImageLayer = ({ uri }: { uri?: string }) => {
         style={{ 
           width: '100%', 
           height: '100%',
-          opacity: 0.7
+          opacity: 0.95, // Very minimal opacity reduction
         }}
         resizeMode="contain" // Use contain to prevent overflow
         onLoad={() => console.log('✅ Image loaded successfully')}
         onError={(error) => console.log('❌ Image error:', error)}
+        // Note: Quality compression will be handled in backend
       />
     </View>
   );
@@ -129,16 +146,62 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const [selectedTextId, setSelectedTextId] = useState<string>('1');
   const [isEditingText, setIsEditingText] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
+  const [userProfile, setUserProfile] = useState<User | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
   const [currentFontSize, setCurrentFontSize] = useState<number>(24); // Current editing font size (12-48)
+
+  // Sticker elements state
+  const [stickerElements, setStickerElements] = useState<StickerElement[]>([]);
+  const [selectedStickerId, setSelectedStickerId] = useState<string | null>(null);
+  const [isDraggingElement, setIsDraggingElement] = useState(false);
+  const [isPickerOpen, setIsPickerOpen] = useState(false); // For trash can visibility
+  
+  // Sticker scaling state (similar to image background)
+  const stickerBaseScale = useRef<Record<string, number>>({});
+  
+  // Animation values for deletion
+  const deletionScale = useSharedValue(1);
+  const deletionOpacity = useSharedValue(1);
+  
+  // Animated style for deletion effect
+  const deletionAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: deletionScale.value }],
+      opacity: deletionOpacity.value,
+    };
+  });
   
   // Local state for immediate text input updates (prevents input lag)
   const [localTextContent, setLocalTextContent] = useState<Record<string, string>>({});
   
-  // Canvas background
-  const [backgroundColor, setBackgroundColor] = useState('#F8F8FF');
+  // Canvas background - use next color in sequence if reposting
+  const getInitialBackgroundColor = () => {
+    if (repostData?.originalPost?.background_color) {
+      return getNextBackgroundColor(repostData.originalPost.background_color);
+    }
+    return Colors.postColors[0]; // Default to first color in the list
+  };
+  
+  const [backgroundColor, setBackgroundColor] = useState(getInitialBackgroundColor());
   const [backgroundGradient, setBackgroundGradient] = useState<string[]>([]);
-  const backgroundOptions = ['#F8F8FF', '#1B1B1B', '#FF1A1A', '#4A90E2', '#7B68EE', '#FF6B6B', '#4ECDC4'];
-  const [currentBgIndex, setCurrentBgIndex] = useState(0);
+  const backgroundOptions = Colors.postColors; // Use the proper color list
+  const [currentBgIndex, setCurrentBgIndex] = useState(() => {
+    const initialColor = getInitialBackgroundColor();
+    return Colors.postColors.indexOf(initialColor);
+  });
+
+  // Image background state
+  const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
+  const [imageBackgroundScale, setImageBackgroundScale] = useState(1);
+  const [imageBackgroundPosition, setImageBackgroundPosition] = useState({ x: 0, y: 0 });
+  
+  // Shared values for image background gestures
+  const imageScale = useSharedValue(1);
+  const imageTranslateX = useSharedValue(0);
+  const imageTranslateY = useSharedValue(0);
+  const imageBaseScale = useSharedValue(1);
+  const imageBaseTranslateX = useSharedValue(0);
+  const imageBaseTranslateY = useSharedValue(0);
   
   // UI state - Instagram Create Mode
   const [activeControlOption, setActiveControlOption] = useState<'font' | 'color' | 'glow' | 'background'>('font');
@@ -148,9 +211,84 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   // Animations
   const postButtonScale = useSharedValue(1);
   const postButtonOpacity = useSharedValue(1);
+  const longPressTriggeredRef = useRef(false);
 
   const maxLength = 500;
 
+  // Image background functions
+  const requestPermissions = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Sorry, we need camera roll permissions to add image backgrounds!');
+      return false;
+    }
+    return true;
+  };
+
+  const pickImageBackground = async () => {
+    console.log('🎯 pickImageBackground called');
+    
+    if (isPickerOpen) {
+      console.log('🚫 Picker already open, ignoring request');
+      return;
+    }
+    
+    setIsPickerOpen(true);
+    
+    try {
+      const hasPermission = await requestPermissions();
+      if (!hasPermission) {
+        console.log('❌ No permission granted');
+        setIsPickerOpen(false);
+        return;
+      }
+      console.log('📱 Launching image picker...');
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.8,
+        aspect: undefined,
+      });
+
+      console.log('📸 Image picker result:', result);
+
+      if (!result.canceled && result.assets[0]) {
+        const imageUri = result.assets[0].uri;
+        console.log('✅ Image selected:', imageUri);
+        setBackgroundImage(imageUri);
+        
+        // Reset image position and scale to center and full width
+        resetImageBackground();
+        
+        Toast.show({
+          type: 'success',
+          text1: 'Image background added!',
+          text2: 'Pinch to zoom, drag to reposition',
+          position: 'top',
+          visibilityTime: 2000,
+        });
+      } else {
+        console.log('❌ Image picker canceled or no assets');
+      }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image. Please try again.');
+    } finally {
+      setIsPickerOpen(false);
+    }
+  };
+
+  const resetImageBackground = () => {
+    // Reset to center and full width
+    imageScale.value = withSpring(1);
+    imageTranslateX.value = withSpring(0);
+    imageTranslateY.value = withSpring(0);
+    imageBaseScale.value = 1;
+    imageBaseTranslateX.value = 0;
+    imageBaseTranslateY.value = 0;
+    setImageBackgroundScale(1);
+    setImageBackgroundPosition({ x: 0, y: 0 });
+  };
 
   const getCurrentTextElement = () => {
     return textElements.find(el => el.id === selectedTextId) || textElements[0];
@@ -165,6 +303,155 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       console.log('📝 Text elements updated:', newElements);
     return newElements;
     });
+  };
+
+  // Upload sticker image to backend
+  const uploadStickerImage = async (localUri: string): Promise<string | null> => {
+    try {
+      const formData = new FormData();
+      
+      // Create file object from URI
+      const response = await fetch(localUri);
+      const blob = await response.blob();
+      
+      // Determine file extension from URI or blob type
+      let extension = '.jpg';
+      if (localUri.includes('.png')) extension = '.png';
+      else if (localUri.includes('.webp')) extension = '.webp';
+      else if (blob.type.includes('png')) extension = '.png';
+      else if (blob.type.includes('webp')) extension = '.webp';
+      
+      formData.append('image', blob as any, `sticker${extension}`);
+      
+      const uploadResponse = await api.post(endpoints.uploadSticker, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      
+      console.log('✅ Sticker uploaded:', uploadResponse.data);
+      // Convert relative URL to full URL
+      const fullUrl = uploadResponse.data.url.startsWith('http') 
+        ? uploadResponse.data.url 
+        : `http://192.168.1.158:8001${uploadResponse.data.url}`;
+      console.log('🔗 Full sticker URL:', fullUrl);
+      return fullUrl;
+      
+    } catch (error) {
+      console.error('❌ Sticker upload failed:', error);
+      return null;
+    }
+  };
+
+  // Sticker management functions
+  const pickImageSticker = async () => {
+    console.log('🎯 pickImageSticker called, isPickerOpen:', isPickerOpen);
+    
+    if (isPickerOpen) {
+      console.log('🚫 Picker already open, ignoring request');
+      return;
+    }
+    
+    console.log('🔓 Setting picker open to true');
+    setIsPickerOpen(true);
+    
+    try {
+      const hasPermission = await requestPermissions();
+      if (!hasPermission) {
+        console.log('❌ No permission granted');
+        setIsPickerOpen(false);
+        return;
+      }
+
+      console.log('📱 Launching image picker for sticker...');
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false, // No cropping by default - preserve full dimensions
+        quality: 0.8,
+      });
+
+      console.log('📸 Sticker picker result:', result);
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const imageUri = result.assets[0].uri;
+        console.log('✅ Sticker image selected:', imageUri);
+        
+        // Upload the image to backend first
+        console.log('📤 Uploading sticker image...');
+        const uploadedUrl = await uploadStickerImage(imageUri);
+        console.log('🔍 Upload result:', uploadedUrl);
+        
+        if (!uploadedUrl) {
+          console.log('❌ Upload failed, no URL returned');
+          Toast.show({
+            type: 'error',
+            text1: 'Upload failed',
+            text2: 'Could not upload sticker image',
+            position: 'top',
+            visibilityTime: 2000,
+          });
+          return;
+        }
+
+        console.log('🎯 Creating new sticker with uploaded URL:', uploadedUrl);
+        const newSticker: StickerElement = {
+          id: `sticker-${Date.now()}`,
+          uri: uploadedUrl, // Use the uploaded URL instead of local URI
+          x: screenWidth / 2,
+          y: screenHeight / 2,
+          width: 120, // Larger default size for image stickers
+          height: 120,
+          scale: 1,
+          rotation: 0,
+          shape: 'full', // Default to full dimensions (no cropping)
+        };
+        
+        console.log('📝 Adding sticker to elements:', newSticker);
+        console.log('📊 Current sticker elements before add:', stickerElements);
+        setStickerElements(prev => {
+          const updated = [...prev, newSticker];
+          console.log('📋 Updated sticker elements:', updated);
+          console.log('📊 Sticker elements length:', updated.length);
+          return updated;
+        });
+        setSelectedStickerId(newSticker.id);
+        console.log('🎯 Selected sticker ID set to:', newSticker.id);
+        console.log('✅ Sticker should now be visible on canvas');
+        
+        Toast.show({
+          type: 'success',
+          text1: 'Image sticker added!',
+          text2: 'Drag to move, pinch to resize',
+          position: 'top',
+          visibilityTime: 1500,
+        });
+      } else {
+        console.log('❌ Sticker picker canceled or no assets');
+      }
+    } catch (error) {
+      console.error('❌ Error picking sticker image:', error);
+      Toast.show({
+        type: 'error',
+        text1: 'Failed to pick image',
+        text2: 'Please try again',
+        position: 'top',
+        visibilityTime: 2000,
+      });
+    } finally {
+      setIsPickerOpen(false);
+    }
+  };
+
+  const updateStickerElement = (id: string, updates: Partial<StickerElement>) => {
+    setStickerElements(prev => 
+      prev.map(el => el.id === id ? { ...el, ...updates } : el)
+    );
+  };
+
+  const deleteSticker = (id: string) => {
+    setStickerElements(prev => prev.filter(el => el.id !== id));
+    if (selectedStickerId === id) {
+      setSelectedStickerId(null);
+    }
   };
 
   // Handle text input changes with only local updates (no state updates until editing stops)
@@ -274,7 +561,47 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     }
   };
 
-  const handlePost = async () => {
+  useEffect(() => {
+    let isMounted = true;
+    const fetchProfile = async () => {
+      try {
+        const response = await api.get(endpoints.getUserProfile);
+        if (isMounted) {
+          setUserProfile(response.data);
+        }
+      } catch (error) {
+        console.error('Error loading user profile:', error);
+      } finally {
+        if (isMounted) {
+          setLoadingProfile(false);
+        }
+      }
+    };
+
+    fetchProfile();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const resolveSignaturePreference = () => {
+    const prefersSigned = userProfile?.default_signed_posts ?? false;
+    const style = (userProfile?.preferred_signature_style || DEFAULT_SIGNATURE_STYLE).toLowerCase();
+    return { prefersSigned, style };
+  };
+
+  const signaturePrefs = resolveSignaturePreference();
+  const tapPostMode: 'signed' | 'anonymous' = signaturePrefs.prefersSigned ? 'signed' : 'anonymous';
+  const longPressPostMode: 'signed' | 'anonymous' = signaturePrefs.prefersSigned ? 'anonymous' : 'signed';
+  const postHintText = signaturePrefs.prefersSigned
+    ? 'Tap to post with signature · Hold to go anonymous'
+    : 'Tap to post anonymously · Hold to sign';
+
+  const handlePost = async (mode: 'default' | 'signed' | 'anonymous' = 'default') => {
+    if (isPosting) {
+      return;
+    }
+
     // Commit any pending local text changes to state before posting
     Object.entries(localTextContent).forEach(([id, content]) => {
       updateTextElement(id, { content });
@@ -293,8 +620,9 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       .map(el => el.content)
       .join(' ');
     
-    if (!allText.trim()) {
-      Alert.alert('Error', 'Please add some text before posting');
+    // Allow posting with just image background (no text required)
+    if (!allText.trim() && !backgroundImage) {
+      Alert.alert('Error', 'Please add some text or an image background before posting');
       return;
     }
 
@@ -309,6 +637,18 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     
     setIsPosting(true);
 
+    const { prefersSigned, style: preferredStyle } = resolveSignaturePreference();
+    let shouldSign: boolean;
+    if (mode === 'signed') {
+      shouldSign = true;
+    } else if (mode === 'anonymous') {
+      shouldSign = false;
+    } else {
+      shouldSign = prefersSigned;
+    }
+
+    const signatureStyle = shouldSign ? preferredStyle : undefined;
+
     const postData: PostCreate = {
       text_content: allText,
       text_elements: currentElements.map(el => ({
@@ -321,11 +661,25 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         hasBackground: el.hasBackground,
         backgroundColor: el.backgroundColor,
       })),
+      sticker_elements: stickerElements.map(sticker => ({
+        id: sticker.id,
+        uri: sticker.uri,
+        x: sticker.x,
+        y: sticker.y,
+        width: sticker.width,
+        height: sticker.height,
+        scale: sticker.scale,
+        rotation: sticker.rotation,
+        shape: sticker.shape,
+      })),
       font_choice: currentElements[0]?.fontFamily || 'arial-black',
       font_size: Math.round((currentElements[0]?.fontSize || 24) * (currentElements[0]?.scale || 1)),
       text_color: currentElements[0]?.color || '#FF1A1A',
       background_color: backgroundColor,
       background_gradient: backgroundGradient.length > 0 ? backgroundGradient : undefined,
+      background_image: backgroundImage || undefined,
+      background_image_scale: backgroundImage ? imageBackgroundScale : undefined,
+      background_image_position: backgroundImage ? imageBackgroundPosition : undefined,
       has_outline: false,
       outline_color: '#000000',
       has_text_background: currentElements[0]?.hasBackground || false,
@@ -342,6 +696,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           scale: 1.0, // Scale factor
         },
       } : undefined,
+      is_signed: shouldSign,
+      signature_style: signatureStyle,
     };
 
     try {
@@ -351,12 +707,13 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       postButtonScale.value = withSpring(1.1, { duration: 200 });
       
       setTimeout(() => {
+        setIsPosting(false);
         onPost?.(response.data);
         onClose?.();
         
         Toast.show({
           type: 'success',
-          text1: 'Posted! 🚀',
+          text1: 'Posted!',
           position: 'bottom',
           visibilityTime: 2000,
         });
@@ -500,8 +857,9 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     };
   };
 
-  // Keep the start positions per element
+  // Keep the start positions per element (text and stickers)
   const dragStart = useRef<Record<string, { x: number; y: number }>>({});
+  const stickerDragStart = useRef<Record<string, { x: number; y: number }>>({});
 
   const handlePanStateChange = (event: any, elementId: string) => {
     const { state } = event.nativeEvent;
@@ -541,6 +899,241 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     }
   };
 
+
+  // Unified gesture handler that detects target and action
+  const handleUnifiedGesture = (event: any, gestureType: 'pan' | 'pinch') => {
+    const { state } = event.nativeEvent;
+    
+    if (gestureType === 'pan') {
+      const { translationY, velocityY, translationX, absoluteX, absoluteY } = event.nativeEvent;
+      console.log('👆 Unified pan gesture:', { state, translationY, velocityY, translationX });
+      
+      // Show trash can when dragging elements (but not during swipe up)
+      if (state === State.ACTIVE && (selectedStickerId || selectedTextId) && 
+          Math.abs(translationY) < 50) { // Only show trash can for horizontal/small movements
+        setIsDraggingElement(true);
+      }
+      
+      // Hide trash can when drag ends
+      if (state === State.END) {
+        setIsDraggingElement(false);
+        
+        // Check if dropped on trash can (bottom center area)
+        const trashZone = {
+          x: screenWidth / 2 - 50,
+          y: screenHeight - 150,
+          width: 100,
+          height: 100,
+        };
+        
+        console.log('🗑️ Checking trash zone:', { 
+          absoluteX, absoluteY, 
+          trashZone, 
+          selectedStickerId, 
+          selectedTextId 
+        });
+        
+        // More lenient trash zone detection
+        const isInTrashZone = absoluteX >= trashZone.x - 20 && 
+                             absoluteX <= trashZone.x + trashZone.width + 20 &&
+                             absoluteY >= trashZone.y - 20 && 
+                             absoluteY <= trashZone.y + trashZone.height + 20;
+        
+        if (isInTrashZone) {
+          console.log('✅ Element dropped in trash zone!');
+          
+          // Animate deletion
+          deletionScale.value = withSpring(0, { duration: 300 });
+          deletionOpacity.value = withTiming(0, { duration: 300 });
+          
+          setTimeout(() => {
+            if (selectedStickerId) {
+              deleteSticker(selectedStickerId);
+              Toast.show({
+                type: 'success',
+                text1: 'Sticker deleted',
+                position: 'top',
+                visibilityTime: 1000,
+              });
+            } else if (selectedTextId && textElements.length > 1) {
+              // Don't delete the last text element
+              setTextElements(prev => prev.filter(el => el.id !== selectedTextId));
+              setSelectedTextId('');
+              Toast.show({
+                type: 'success',
+                text1: 'Text element deleted',
+                position: 'top',
+                visibilityTime: 1000,
+              });
+            }
+            
+            // Reset animation values
+            deletionScale.value = 1;
+            deletionOpacity.value = 1;
+          }, 300);
+          
+          return;
+        } else {
+          console.log('❌ Element not in trash zone');
+        }
+      }
+      
+      // Check for swipe up (image picker) - prioritize this over element dragging
+      if (state === State.ACTIVE && translationY < -50 && velocityY < -500) {
+        console.log('✅ Swipe up detected, launching image picker');
+        pickImageBackground();
+        return;
+      }
+      
+      // Handle sticker drag start
+      if (selectedStickerId && state === State.BEGAN) {
+        const sticker = stickerElements.find(s => s.id === selectedStickerId);
+        if (sticker) {
+          stickerDragStart.current[selectedStickerId] = { x: sticker.x, y: sticker.y };
+        }
+      }
+      
+      // Check if we're dragging a selected sticker
+      if (selectedStickerId && state === State.ACTIVE) {
+        const start = stickerDragStart.current[selectedStickerId];
+        if (start) {
+          const newX = start.x + translationX;
+          const newY = start.y + translationY;
+          updateStickerElement(selectedStickerId, { x: newX, y: newY });
+          console.log('📍 Sticker drag:', { x: newX, y: newY });
+          return;
+        }
+      }
+      
+      // Check if we're dragging the image background (when no elements are selected)
+      if (backgroundImage && state === State.ACTIVE && !selectedStickerId && !selectedTextId) {
+        imageTranslateX.value = imageBaseTranslateX.value + translationX;
+        imageTranslateY.value = imageBaseTranslateY.value + translationY;
+        console.log('📍 Image drag:', { x: imageTranslateX.value, y: imageTranslateY.value });
+        return;
+      }
+      
+      // Handle pan end for image background
+      if (backgroundImage && state === State.END && !selectedStickerId && !selectedTextId) {
+        imageBaseTranslateX.value = imageTranslateX.value;
+        imageBaseTranslateY.value = imageTranslateY.value;
+        setImageBackgroundPosition({
+          x: imageTranslateX.value,
+          y: imageTranslateY.value,
+        });
+        console.log('✅ Image drag ended');
+        return;
+      }
+    }
+    
+    if (gestureType === 'pinch') {
+      const { scale } = event.nativeEvent;
+      console.log('🤏 Unified pinch gesture:', { state, scale });
+      
+      // Handle sticker pinch start
+      if (selectedStickerId && state === State.BEGAN) {
+        const sticker = stickerElements.find(s => s.id === selectedStickerId);
+        if (sticker) {
+          stickerBaseScale.current[selectedStickerId] = sticker.scale;
+        }
+      }
+      
+      // Check if we're pinching a selected sticker
+      if (selectedStickerId && state === State.ACTIVE) {
+        const baseScale = stickerBaseScale.current[selectedStickerId] || 1;
+        // Continuous, unbounded scaling
+        const newScale = baseScale * scale;
+        updateStickerElement(selectedStickerId, { scale: newScale });
+        console.log('📏 Sticker pinch:', newScale);
+        return;
+      }
+      
+      // Handle sticker pinch end
+      if (selectedStickerId && state === State.END) {
+        const sticker = stickerElements.find(s => s.id === selectedStickerId);
+        if (sticker) {
+          stickerBaseScale.current[selectedStickerId] = sticker.scale;
+        }
+      }
+      
+      // Check if we're pinching the image background (when no elements are selected)
+      if (backgroundImage && state === State.ACTIVE && !selectedStickerId && !selectedTextId) {
+        const newScale = imageBaseScale.value * scale;
+        imageScale.value = newScale;
+        console.log('📏 Image pinch:', newScale);
+        return;
+      }
+      
+      // Handle pinch end for image background
+      if (backgroundImage && state === State.END && !selectedStickerId && !selectedTextId) {
+        imageBaseScale.value = imageScale.value;
+        setImageBackgroundScale(imageScale.value);
+        console.log('✅ Image pinch ended');
+        return;
+      }
+    }
+  };
+
+  // Render sticker elements
+  const renderStickers = () => {
+    console.log('🎨 renderStickers called, elements:', stickerElements.length);
+    return stickerElements.map((sticker) => {
+      const isSelected = selectedStickerId === sticker.id;
+      
+      return (
+        <AnimatedReanimated.View
+          key={sticker.id}
+          style={[
+            isSelected ? deletionAnimatedStyle : {},
+          ]}
+        >
+          <TouchableOpacity
+            style={[
+              styles.stickerElement,
+              {
+                left: sticker.x - (sticker.width * sticker.scale) / 2,
+                top: sticker.y - (sticker.height * sticker.scale) / 2,
+                width: sticker.width * sticker.scale,
+                height: sticker.height * sticker.scale,
+                transform: [{ rotate: `${sticker.rotation}deg` }],
+              }
+            ]}
+            onPress={() => {
+              if (selectedStickerId === sticker.id) {
+                // Cycle through shapes if already selected
+                const shapes: Array<'full' | 'square' | 'rounded'> = ['full', 'square', 'rounded'];
+                const currentIndex = shapes.indexOf(sticker.shape);
+                const nextShape = shapes[(currentIndex + 1) % shapes.length];
+                updateStickerElement(sticker.id, { shape: nextShape });
+                
+                Toast.show({
+                  type: 'info',
+                  text1: `Shape: ${nextShape}`,
+                  position: 'top',
+                  visibilityTime: 1000,
+                });
+              } else {
+                // Select sticker
+                setSelectedStickerId(sticker.id);
+                setSelectedTextId(''); // Deselect text
+              }
+            }}
+            activeOpacity={0.8}
+          >
+            <ExpoImage
+              source={{ uri: sticker.uri }}
+              style={[
+                styles.stickerImage,
+                { borderRadius: sticker.shape === 'rounded' ? 12 : sticker.shape === 'square' ? 0 : 8 }
+              ]}
+              contentFit={sticker.shape === 'full' ? 'contain' : 'cover'}
+            />
+          </TouchableOpacity>
+        </AnimatedReanimated.View>
+      );
+    });
+  };
+
   const renderEditableText = () => {
     return textElements.map((element) => {
       return (
@@ -555,7 +1148,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               {
                 left: element.x - 60,
                 top: element.y - 60,
-              }
+              },
+              selectedTextId === element.id ? deletionAnimatedStyle : {},
             ]}
           >
             <PanGestureHandler
@@ -569,14 +1163,16 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
                     key={`input-${element.id}-${isEditingText}`} // Stable key for re-rendering
                     style={[
                       getTextStyle(element), 
-                      styles.textInput, 
                       { 
                         fontSize: currentFontSize, // Use current editing font size
-                        width: screenWidth * 0.95,
-                        maxWidth: screenWidth * 0.95,
+                        width: screenWidth * 0.9,
+                        maxWidth: screenWidth * 0.9,
                         position: 'absolute',
-                        left: -(screenWidth * 0.95) / 2,
+                        left: -(screenWidth * 0.9) / 2,
                         top: -currentFontSize / 2,
+                        padding: 0, // Remove any default padding
+                        margin: 0, // Remove any default margin
+                        textAlign: 'center', // Ensure centering
                       }
                     ]}
                     value={getDisplayText(element)}
@@ -605,28 +1201,83 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     });
   };
 
+  // Image background animated style
+  const imageBackgroundAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [
+        { translateX: imageTranslateX.value },
+        { translateY: imageTranslateY.value },
+        { scale: imageScale.value },
+      ],
+    };
+  });
+
+  // Simple image background component (no gestures - handled by unified handlers)
+  const renderImageBackground = () => {
+    if (!backgroundImage) return null;
+
+    return (
+      <AnimatedReanimated.View style={[StyleSheet.absoluteFill, { zIndex: 1 }, imageBackgroundAnimatedStyle]}>
+        <ExpoImage
+          source={{ uri: backgroundImage }}
+          style={styles.backgroundImage}
+          contentFit="cover"
+        />
+      </AnimatedReanimated.View>
+    );
+  };
+
+  // Trash can component that appears during drag
+  const renderTrashCan = () => {
+    if (!isDraggingElement) return null;
+    
+    return (
+      <View style={styles.trashCanContainer}>
+        <View style={styles.trashCan}>
+          <Ionicons name="trash" size={30} color="white" />
+        </View>
+      </View>
+    );
+  };
+
   const renderCanvas = () => {
 
     const canvasChildren = (
-      <View style={styles.fullScreenCanvas}>
-        {/* Repost image layer */}
-        <RepostImageLayer uri={repostData?.screenshotUri} />
-    
-        {/* 2) (Optional) keep your debug tint exactly in the same layer */}
-        {/* <View style={[styles.repostImage, { backgroundColor: 'rgba(0,255,0,0.15)' }]} pointerEvents="none" /> */}
-    
-        {/* 3) Dim overlay lives ABOVE the image but BELOW text */}
-        {screenDarkened && <View style={styles.screenOverlay} pointerEvents="none" />}
-        {/* 4) Interaction/text layer sits on top */}
-        <TouchableOpacity
-          style={[StyleSheet.absoluteFill, { zIndex: 20 }]} 
-          onPress={handleCanvasTap}
-          activeOpacity={1}
-        >
-
-          {renderEditableText()}
-        </TouchableOpacity>
-      </View>    
+      <PinchGestureHandler
+        onGestureEvent={(event) => handleUnifiedGesture(event, 'pinch')}
+        onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pinch')}
+      >
+        <AnimatedReanimated.View style={styles.fullScreenCanvas}>
+          <PanGestureHandler
+            onGestureEvent={(event) => handleUnifiedGesture(event, 'pan')}
+            onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pan')}
+            shouldCancelWhenOutside={false}
+            minPointers={1}
+            maxPointers={1}
+          >
+            <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
+              {/* Image background layer (lowest) */}
+              {renderImageBackground()}
+              
+              {/* Repost image layer */}
+              <RepostImageLayer uri={repostData?.screenshotUri} />
+          
+              {/* Dim overlay lives ABOVE the image but BELOW text */}
+              {screenDarkened && <View style={styles.screenOverlay} pointerEvents="none" />}
+              
+              {/* Interaction/text layer sits on top */}
+              <TouchableOpacity
+                style={[StyleSheet.absoluteFill, { zIndex: 20 }]} 
+                onPress={handleCanvasTap}
+                activeOpacity={1}
+              >
+                {renderEditableText()}
+                {renderStickers()}
+              </TouchableOpacity>
+            </AnimatedReanimated.View>
+          </PanGestureHandler>
+        </AnimatedReanimated.View>
+      </PinchGestureHandler>
     );
 
     if (backgroundGradient.length > 0) {
@@ -659,6 +1310,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         
         {/* Right - Controls */}
         <View style={styles.topMenuRight}>
+          {/* Sticker Button */}
+          <TouchableOpacity style={styles.topMenuButton} onPress={pickImageSticker}>
+            <Ionicons name="images" size={20} color="white" />
+          </TouchableOpacity>
+          
           {/* Background Color Cycle */}
           <TouchableOpacity style={styles.topMenuButton} onPress={cycleBackgroundColor}>
             <View style={[styles.backgroundPreview, { backgroundColor }]} />
@@ -667,15 +1323,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           {/* Text Button */}
           <TouchableOpacity style={styles.topMenuButton} onPress={createNewTextElement}>
             <Text style={styles.topMenuText}>Text</Text>
-          </TouchableOpacity>
-          
-          {/* Placeholder buttons */}
-          <TouchableOpacity style={styles.topMenuButton} disabled>
-            <Ionicons name="image" size={20} color="rgba(255,255,255,0.5)" />
-          </TouchableOpacity>
-          
-          <TouchableOpacity style={styles.topMenuButton} disabled>
-            <Ionicons name="brush" size={20} color="rgba(255,255,255,0.5)" />
           </TouchableOpacity>
         </View>
       </View>
@@ -921,20 +1568,44 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       
       {/* Scale Slider (when editing text) */}
       {renderScaleSlider()}
-      
+
+        {/* Trash Can (appears during drag) */}
+        {renderTrashCan()}
+
+
         {/* Post Button */}
         {!isEditingText && (
-          <TouchableOpacity 
-            style={styles.postButton} 
-            onPress={handlePost}
-            disabled={isPosting}
-          >
-            {isPosting ? (
-              <ActivityIndicator color="white" size="small" />
-            ) : (
-              <Text style={styles.postButtonText}>Post</Text>
-            )}
-          </TouchableOpacity>
+          <View style={styles.postActionCluster}>
+            <TouchableOpacity 
+              style={styles.postButton} 
+              onPress={() => {
+                if (longPressTriggeredRef.current) {
+                  longPressTriggeredRef.current = false;
+                  return;
+                }
+                handlePost(tapPostMode);
+              }}
+              onLongPress={() => {
+                if (isPosting) {
+                  return;
+                }
+                longPressTriggeredRef.current = true;
+                handlePost(longPressPostMode);
+              }}
+              onPressOut={() => {
+                longPressTriggeredRef.current = false;
+              }}
+              delayLongPress={600}
+              disabled={isPosting}
+            >
+              {isPosting ? (
+                <ActivityIndicator color="white" size="small" />
+              ) : (
+                <Text style={styles.postButtonText}>Post</Text>
+              )}
+            </TouchableOpacity>
+            <Text style={styles.postButtonHint}>{postHintText}</Text>
+          </View>
         )}
         
       </KeyboardAvoidingView>
@@ -1102,12 +1773,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  
+
   // Post Button (bottom right when not editing)
   postButton: {
-    position: 'absolute',
-    bottom: 60,
-    right: 20,
     backgroundColor: Colors.accent,
     paddingHorizontal: 24,
     paddingVertical: 12,
@@ -1115,12 +1783,24 @@ const styles = StyleSheet.create({
     minWidth: 80,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 100,
   },
   postButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  postActionCluster: {
+    position: 'absolute',
+    bottom: 40,
+    right: 20,
+    alignItems: 'flex-end',
+    gap: 12,
+    zIndex: 100,
+  },
+  postButtonHint: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    textAlign: 'right',
   },
   
   // Canvas and Text Elements
@@ -1150,8 +1830,6 @@ const styles = StyleSheet.create({
     minWidth: 50, // Much smaller minimum
     maxWidth: screenWidth - 40, // Leave some margin
     minHeight: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   textInput: {
     minWidth: 50,
@@ -1161,6 +1839,12 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
     maxHeight: 200, // Prevent excessive growth
     zIndex: 15,
+  },
+  // Image background style
+  backgroundImage: {
+    width: '100%',
+    height: '100%',
+    position: 'absolute',
   },
   // Repost image draws above background, below text
   repostImage: {
@@ -1215,5 +1899,44 @@ const styles = StyleSheet.create({
     elevation: 6,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.1)',
+  },
+  
+  // Sticker Elements
+  stickerElement: {
+    position: 'absolute',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 8,
+    zIndex: 15,
+  },
+  stickerImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+  },
+  
+  // Trash Can
+  trashCanContainer: {
+    position: 'absolute',
+    bottom: 100,
+    left: screenWidth / 2 - 50,
+    width: 100,
+    height: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  trashCan: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(255,0,0,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
   },
 });

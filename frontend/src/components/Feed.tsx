@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Text,
   Alert,
+  Animated,
 } from 'react-native';
 import Toast from 'react-native-toast-message';
 import { Colors } from '../constants/colors';
@@ -14,6 +15,7 @@ import { Post, FeedResponse } from '../types';
 import { api, endpoints } from '../config/api';
 import PostCard from './PostCard';
 import { screenWidth } from '../constants/layout';
+import websocketService, { WebSocketMessage } from '../services/websocket';
 
 interface Props {
   newPost?: Post | null;
@@ -38,6 +40,9 @@ export default function Feed({
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [showConnectionStatus, setShowConnectionStatus] = useState(false);
+  const [newPostAnimation] = useState(new Animated.Value(0));
 
   const fetchFeed = useCallback(async (isRefresh = false, cursor?: string) => {
     try {
@@ -146,6 +151,75 @@ export default function Feed({
     });
   }, []);
 
+  // WebSocket event handlers
+  const handleNewPost = useCallback((message: WebSocketMessage) => {
+    console.log('📡 New post received via WebSocket:', message);
+    
+    if (message.post_data) {
+      const newPost = message.post_data as Post;
+      
+      setPosts(prev => {
+        // Check if post already exists to prevent duplicates
+        const existingPost = prev.find(p => p.id === newPost.id);
+        if (existingPost) {
+          return prev; // Post already exists, don't add duplicate
+        }
+        
+        // Add new post to the top with animation
+        console.log('✨ Adding new post to feed:', newPost.id);
+        
+        // Trigger animation for new post
+        newPostAnimation.setValue(0);
+        Animated.spring(newPostAnimation, {
+          toValue: 1,
+          useNativeDriver: true,
+          tension: 100,
+          friction: 8,
+        }).start();
+        
+        return [newPost, ...prev];
+      });
+      
+      // Show subtle notification
+      Toast.show({
+        type: 'success',
+        text1: 'New post!',
+        text2: `From @${newPost.author.handle}`,
+        position: 'top',
+        visibilityTime: 2000,
+      });
+    }
+  }, [newPostAnimation]);
+
+  const handleWsConnected = useCallback(() => {
+    console.log('📡 WebSocket connected');
+    setWsConnected(true);
+    websocketService.joinFeed();
+  }, []);
+
+  const handleWsDisconnected = useCallback(() => {
+    console.log('📡 WebSocket disconnected');
+    setWsConnected(false);
+    setShowConnectionStatus(true);
+    
+    // Hide status after 5 seconds
+    setTimeout(() => {
+      setShowConnectionStatus(false);
+    }, 5000);
+  }, []);
+
+  const handleWsError = useCallback((message: WebSocketMessage) => {
+    console.log('📡 WebSocket connection unavailable (feed continues normally):', message);
+    setWsConnected(false);
+    setShowConnectionStatus(true);
+    
+    // Hide status after 3 seconds for errors
+    setTimeout(() => {
+      setShowConnectionStatus(false);
+    }, 3000);
+    // Don't show error toasts - WebSocket is optional
+  }, []);
+
   // Add new post to feed when created
   useEffect(() => {
     if (newPost) {
@@ -161,12 +235,42 @@ export default function Feed({
     }
   }, [newPost, onNewPostDisplayed]);
 
+  // WebSocket connection setup (optional - feed works without it)
+  useEffect(() => {
+    try {
+      // Set up WebSocket event listeners
+      websocketService.on('new_post', handleNewPost);
+      websocketService.on('connected', handleWsConnected);
+      websocketService.on('disconnected', handleWsDisconnected);
+      websocketService.on('error', handleWsError);
+      
+      // Connect to WebSocket (non-blocking)
+      websocketService.connect();
+      
+      // Cleanup on unmount
+      return () => {
+        try {
+          websocketService.off('new_post', handleNewPost);
+          websocketService.off('connected', handleWsConnected);
+          websocketService.off('disconnected', handleWsDisconnected);
+          websocketService.off('error', handleWsError);
+          websocketService.disconnect();
+        } catch (error) {
+          console.log('WebSocket cleanup error (non-critical):', error);
+        }
+      };
+    } catch (error) {
+      console.log('WebSocket setup failed (feed will work without real-time updates):', error);
+      setWsConnected(false);
+    }
+  }, [handleNewPost, handleWsConnected, handleWsDisconnected, handleWsError]);
+
   // Initial load
   useEffect(() => {
     fetchFeed();
   }, [fetchFeed]);
 
-  const renderPost = ({ item }: { item: Post }) => {
+  const renderPost = ({ item, index }: { item: Post; index: number }) => {
     console.log('🎨 Rendering post:', {
       id: item.id,
       hasImage: !!item.rendered_image_url,
@@ -174,14 +278,38 @@ export default function Feed({
       textContent: item.text_content?.substring(0, 20) + '...'
     });
     
+    // Apply animation to the first post (newest)
+    const animatedStyle = index === 0 ? {
+      transform: [
+        {
+          translateY: newPostAnimation.interpolate({
+            inputRange: [0, 1],
+            outputRange: [-50, 0],
+          }),
+        },
+        {
+          scale: newPostAnimation.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0.95, 1],
+          }),
+        },
+      ],
+      opacity: newPostAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, 1],
+      }),
+    } : {};
+    
     return (
-      <PostCard
-        post={item}
-        onReport={(reason, description) => handlePostAction(item.id, 'report', { reason, description })}
-        onMute={() => handlePostAction(item.id, 'mute')}
-        onCopyText={() => handleCopyText(item.text_content)}
-        onRepost={() => handleRepost(item)}
-      />
+      <Animated.View style={animatedStyle}>
+        <PostCard
+          post={item}
+          onReport={(reason, description) => handlePostAction(item.id, 'report', { reason, description })}
+          onMute={() => handlePostAction(item.id, 'mute')}
+          onCopyText={() => handleCopyText(item.text_content)}
+          onRepost={() => handleRepost(item)}
+        />
+      </Animated.View>
     );
   };
 
@@ -223,6 +351,14 @@ export default function Feed({
 
   return (
     <View style={styles.container}>
+      {/* WebSocket connection status indicator - only show briefly */}
+      {!wsConnected && showConnectionStatus && posts.length > 0 && (
+        <View style={styles.connectionStatus}>
+          <View style={styles.connectionDot} />
+          <Text style={styles.connectionText}>Live updates unavailable</Text>
+        </View>
+      )}
+      
       <FlatList
         data={posts}
         renderItem={renderPost}
@@ -297,5 +433,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     lineHeight: 24,
+  },
+  connectionStatus: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    zIndex: 100,
+  },
+  connectionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.accent,
+    marginRight: 6,
+  },
+  connectionText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '500',
   },
  });

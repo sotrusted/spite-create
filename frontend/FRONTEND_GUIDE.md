@@ -1,4 +1,4 @@
-# TBD Frontend Guide - React Native/TypeScript for Beginners
+# Subscript Frontend Guide - React Native/TypeScript for Beginners
 
 This guide explains the frontend architecture for someone with minimal TypeScript/React experience. It's designed to help you understand and modify the code as the app grows.
 
@@ -338,7 +338,7 @@ function MainScreen() {
     <View style={styles.container}>
       {/* Collapsible Header */}
       <Animated.View style={[styles.header, { transform: [{ translateY: headerTranslateY }] }]}>
-        <Text style={styles.appTitle}>TBD</Text>
+        <Text style={styles.appTitle}>Subscript</Text>
         <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
           <Ionicons name="person-circle-outline" size={28} />
         </TouchableOpacity>
@@ -363,7 +363,7 @@ function MainScreen() {
 
 ## 🔄 Repost Feature - Screenshot & Response Canvas
 
-One of TBD's unique features is the **automatic screenshot repost** functionality, similar to quote tweets but more visual.
+One of Subscript's unique features is the **automatic screenshot repost** functionality, similar to quote tweets but more visual.
 
 ### 🎯 How Repost Works
 

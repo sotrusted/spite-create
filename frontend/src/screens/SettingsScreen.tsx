@@ -22,7 +22,7 @@ export default function SettingsScreen() {
   };
 
   const handleContactSupport = () => {
-    Linking.openURL('mailto:support@tbd-app.com?subject=TBD App Support');
+    Linking.openURL('mailto:support@subscript-app.com?subject=Subscript App Support');
   };
 
   const handleViewGuidelines = () => {
@@ -36,7 +36,7 @@ export default function SettingsScreen() {
   const handlePrivacyPolicy = () => {
     Alert.alert(
       'Privacy Policy',
-      'TBD is designed with privacy in mind:\n\n• Semi-anonymous posting with auto-generated handles\n• Minimal data collection\n• No personal information required\n• Device-based identification for rate limiting\n• Posts are public by default\n\nFor detailed privacy information, visit our website.',
+      'Subscript is designed with privacy in mind:\n\n• Semi-anonymous posting with auto-generated handles\n• Minimal data collection\n• No personal information required\n• Device-based identification for rate limiting\n• Posts are public by default\n\nFor detailed privacy information, visit our website.',
       [{ text: 'OK' }]
     );
   };
@@ -44,7 +44,7 @@ export default function SettingsScreen() {
   const handleTermsOfService = () => {
     Alert.alert(
       'Terms of Service',
-      'By using TBD, you agree to:\n\n• Follow community guidelines\n• Use the service responsibly\n• Respect other users\n• Not abuse the platform\n\nTBD reserves the right to moderate content and restrict accounts that violate these terms.',
+      'By using Subscript, you agree to:\n\n• Follow community guidelines\n• Use the service responsibly\n• Respect other users\n• Not abuse the platform\n\nSubscript reserves the right to moderate content and restrict accounts that violate these terms.',
       [{ text: 'OK' }]
     );
   };
@@ -94,14 +94,14 @@ export default function SettingsScreen() {
           </View>
           <View style={styles.aboutItem}>
             <Text style={styles.aboutLabel}>Platform</Text>
-            <Text style={styles.aboutValue}>TBD</Text>
+            <Text style={styles.aboutValue}>Subscript</Text>
           </View>
         </View>
 
         {/* Footer */}
         <View style={styles.footer}>
           <Text style={styles.footerText}>
-            TBD - Semi-Anonymous, Realtime Creative Expression
+            Subscript - Semi-Anonymous, Realtime Creative Expression
           </Text>
           <Text style={styles.footerSubtext}>
             Made with ❤️ for creative minds

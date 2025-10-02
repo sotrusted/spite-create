@@ -1,6 +1,6 @@
 # Components Documentation
 
-This folder contains reusable UI components for the TBD app.
+This folder contains reusable UI components for the Subscript app.
 
 ## 📱 Component Overview
 
@@ -289,4 +289,3 @@ const expensiveValue = useMemo(() => {
 ```
 
 This documentation should help you understand how each component works and how to modify them as your app grows!
-

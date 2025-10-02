@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "TBD",
-    "slug": "tbd-app",
+    "name": "Subscript",
+    "slug": "subscript-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,14 +16,14 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tbd.app"
+      "bundleIdentifier": "com.subscript.app"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#F8F8FF"
       },
-      "package": "com.tbd.app"
+      "package": "com.subscript.app"
     },
     "web": {
       "favicon": "./assets/favicon.png",

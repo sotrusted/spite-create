@@ -25,7 +25,7 @@ class WebSocketService {
   private isConnected = false;
   private eventHandlers: { [key: string]: WebSocketEventHandler[] } = {};
 
-  constructor(baseUrl: string = 'ws://localhost:8000') {
+  constructor(baseUrl: string = 'ws://localhost:8001') {
     this.url = `${baseUrl}/ws/feed/`;
   }
 
@@ -34,7 +34,7 @@ class WebSocketService {
       this.ws = new WebSocket(this.url);
       
       this.ws.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('✅ WebSocket connected - real-time updates enabled');
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this.emit('connected', { type: 'connection_established' });
@@ -45,24 +45,26 @@ class WebSocketService {
           const message: WebSocketMessage = JSON.parse(event.data);
           this.handleMessage(message);
         } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
+          console.log('WebSocket message parsing error (non-critical):', error);
         }
       };
 
       this.ws.onclose = () => {
-        console.log('WebSocket disconnected');
+        console.log('📡 WebSocket disconnected - using polling fallback');
         this.isConnected = false;
         this.emit('disconnected', { type: 'connection_established' });
         this.handleReconnect();
       };
 
       this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
+        console.log('📡 WebSocket unavailable - feed works normally without real-time updates');
+        this.isConnected = false;
         this.emit('error', { type: 'connection_established', message: 'Connection error' });
       };
     } catch (error) {
-      console.error('Error connecting to WebSocket:', error);
-      this.handleReconnect();
+      console.log('WebSocket initialization failed (non-critical):', error);
+      this.isConnected = false;
+      this.emit('error', { type: 'connection_established', message: 'Connection failed' });
     }
   }
 
@@ -143,14 +145,15 @@ class WebSocketService {
   private handleReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+      console.log(`📡 Attempting WebSocket reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) - feed continues normally`);
       
       setTimeout(() => {
         this.connect();
       }, this.reconnectDelay * this.reconnectAttempts);
     } else {
-      console.log('Max reconnection attempts reached');
-      this.emit('max_reconnects_reached', { type: 'connection_established' });
+      console.log('📡 WebSocket reconnection stopped - feed will use refresh for updates');
+      this.isConnected = false;
+      // Don't emit error - just silently fall back to polling
     }
   }
 

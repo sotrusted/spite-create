@@ -78,7 +78,7 @@ export default function ProfileScreen() {
                 ]} 
               />
               <Text style={styles.handle}>@{user.handle}</Text>
-              <Text style={styles.subtitle}>Your TBD Profile</Text>
+              <Text style={styles.subtitle}>Your Subscript Profile</Text>
             </View>
 
             <View style={styles.statsSection}>

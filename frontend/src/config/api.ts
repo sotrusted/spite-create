@@ -26,6 +26,7 @@ export const endpoints = {
   createPost: '/posts/',
   getFeed: '/feed/',
   getPost: (id: string) => `/posts/${id}/`,
+  uploadSticker: '/stickers/upload/',
   
   // Moderation
   reportPost: (id: string) => `/posts/${id}/report/`,

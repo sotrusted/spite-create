@@ -83,7 +83,7 @@ export default function MainScreen() {
         ]}
       >
         <SafeAreaView edges={['top']} style={styles.headerContent}>
-          <Text style={styles.appTitle}>TBD</Text>
+          <Text style={styles.appTitle}>Subscript</Text>
           <TouchableOpacity onPress={openProfile} style={styles.profileButton}>
             <Ionicons name="person-circle-outline" size={28} color={Colors.primary} />
           </TouchableOpacity>
@@ -168,4 +168,3 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
 });
-
