@@ -226,22 +226,25 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   };
 
   const pickImageBackground = async () => {
-    console.log('🎯 pickImageBackground called');
+    console.log('🎯 pickImageBackground called, isPickerOpen:', isPickerOpen);
     
     if (isPickerOpen) {
       console.log('🚫 Picker already open, ignoring request');
       return;
     }
     
+    console.log('🔓 Setting picker open to true');
     setIsPickerOpen(true);
     
     try {
+      console.log('📋 Requesting permissions...');
       const hasPermission = await requestPermissions();
       if (!hasPermission) {
         console.log('❌ No permission granted');
         setIsPickerOpen(false);
         return;
       }
+      console.log('✅ Permission granted');
       console.log('📱 Launching image picker...');
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -492,11 +495,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   }, [localTextContent]);
 
   const handleCanvasTap = (event: any) => {
-    console.log('🎯 Canvas tap detected, isEditingText:', isEditingText);
+    console.log('Canvas tap detected, isEditingText:', isEditingText);
     
     // If we're currently editing, ALWAYS exit editing mode when tapping canvas
     if (isEditingText) {
-      console.log('📝 Exiting edit mode due to canvas tap...');
+      console.log('Exiting edit mode due to canvas tap...');
       const currentElement = getCurrentTextElement();
       if (currentElement) {
         // Check local content (what user actually typed) instead of state content
@@ -505,7 +508,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           : currentElement.content;
         
         if (currentContent.trim() === '') {
-          console.log('🗑️ Removing empty text element');
+          console.log('Removing empty text element');
           setTextElements(prev => prev.filter(el => el.id !== currentElement.id));
           setSelectedTextId('');
           // Clear the local content for this element since we're removing it
@@ -523,17 +526,18 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
 
     // Only create/edit text when NOT currently editing
     const { locationX, locationY } = event.nativeEvent;
-    console.log('📍 Tap coordinates:', { locationX, locationY });
+    console.log('Tap coordinates:', { locationX, locationY });
     
     // Check if tap is on existing text element
     const tappedElement = findElementAtPosition(locationX, locationY);
     
     if (tappedElement) {
-      console.log('✏️ Tapped on existing text element:', tappedElement.id);
+      console.log('Tapped on existing text element:', tappedElement.id);
       setSelectedTextId(tappedElement.id);
+      setSelectedStickerId(''); // Deselect sticker
       startEditingText(tappedElement.id);
     } else {
-      console.log('➕ Creating new text element at:', { locationX, locationY });
+      console.log('Creating new text element at:', { locationX, locationY });
       const newId = Date.now().toString();
       const newElement: TextElement = {
         id: newId,
@@ -1003,7 +1007,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       }
       
       // Check for swipe up (image picker) - prioritize this over element dragging
-      if (state === State.ACTIVE && translationY < -50 && velocityY < -500) {
+      if (state === State.ACTIVE && translationY < -50 && velocityY < -500 && !isPickerOpen) {
         console.log('✅ Swipe up detected, launching image picker');
         pickImageBackground();
         return;
@@ -1028,8 +1032,14 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         }
       }
       
-      // Check if we're dragging the image background (when no elements are selected)
-      if (backgroundImage && state === State.ACTIVE && !selectedStickerId && !selectedTextId) {
+      // Check if we're dragging the image background
+      if (backgroundImage && state === State.ACTIVE && !selectedStickerId) {
+        // Auto-deselect text when dragging background
+        if (selectedTextId && !isEditingText) {
+          setTimeout(() => setSelectedTextId(''), 0);
+        }
+        
+        console.log('Dragging background image:', { translationX, translationY });
         imageTranslateX.value = imageBaseTranslateX.value + translationX;
         imageTranslateY.value = imageBaseTranslateY.value + translationY;
         return;
@@ -1079,8 +1089,14 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         }
       }
       
-      // Check if we're pinching the image background (when no elements are selected)
-      if (backgroundImage && state === State.ACTIVE && !selectedStickerId && !selectedTextId) {
+      // Check if we're pinching the image background
+      if (backgroundImage && state === State.ACTIVE && !selectedStickerId) {
+        // Auto-deselect text when pinching background
+        if (selectedTextId && !isEditingText) {
+          setTimeout(() => setSelectedTextId(''), 0);
+        }
+        
+        console.log('Pinching background image:', scale);
         const newScale = imageBaseScale.value * scale;
         imageScale.value = newScale;
         return;

@@ -1,0 +1,14 @@
+# Cursor Rules for TBD App
+
+## General
+- Do not use emojis in code, logs, comments, or any output
+- Keep logging concise and professional
+
+## Backend (Django/Python)
+- Posts should be full bleed, no padding in between them
+- Follow PEP 8 style guidelines
+
+## Frontend (React Native/TypeScript)
+- Use clear, descriptive variable names
+- Keep components focused and modular
+
