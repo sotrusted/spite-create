@@ -159,6 +159,9 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   // Sticker scaling state (similar to image background)
   const stickerBaseScale = useRef<Record<string, number>>({});
   
+  // Track if we just deleted an element (prevents gesture handler from continuing)
+  const justDeletedRef = useRef(false);
+  
   // Animation values for deletion
   const deletionScale = useSharedValue(1);
   const deletionOpacity = useSharedValue(1);
@@ -259,11 +262,48 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         const imageUri = result.assets[0].uri;
         console.log('✅ Background image selected:', imageUri);
         
-        // Upload the background image to backend first
-        console.log('📤 Uploading background image...');
-        const uploadedUrl = await uploadStickerImage(imageUri); // Reuse the same upload function
+        // Upload the background image to backend using dedicated endpoint
+        console.log('Uploading background image...');
+        const formData = new FormData();
         
-        if (!uploadedUrl) {
+        // Get file info from URI
+        const filename = imageUri.split('/').pop() || 'background.jpg';
+        const match = /\.(\w+)$/.exec(filename);
+        const extension = match ? match[1] : 'jpg';
+        const mimeType = {
+          'jpg': 'image/jpeg',
+          'jpeg': 'image/jpeg',
+          'png': 'image/png',
+          'webp': 'image/webp'
+        }[extension.toLowerCase()] || 'image/jpeg';
+        
+        console.log('Preparing background upload:', { uri: imageUri, filename, mimeType });
+        
+        // Create file object for FormData
+        const file = {
+          uri: imageUri,
+          name: filename,
+          type: mimeType
+        };
+        
+        formData.append('image', file as any);
+        
+        try {
+          const uploadResponse = await api.post(endpoints.uploadBackground, formData, {
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'multipart/form-data'
+            },
+          });
+          
+          console.log('Background uploaded:', uploadResponse.data);
+          const fullUrl = uploadResponse.data.url.startsWith('http') 
+            ? uploadResponse.data.url 
+            : `http://192.168.1.158:8001${uploadResponse.data.url}`;
+            
+          setBackgroundImage(fullUrl);
+        } catch (error) {
+          console.error('Background upload failed:', error);
           Toast.show({
             type: 'error',
             text1: 'Upload failed',
@@ -273,9 +313,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           });
           return;
         }
-        
-        console.log('🔗 Background image uploaded:', uploadedUrl);
-        setBackgroundImage(uploadedUrl); // Use uploaded URL instead of local URI
         
         // Reset image position and scale to center and full width
         resetImageBackground();
@@ -330,29 +367,32 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     try {
       const formData = new FormData();
       
-      // Determine file extension from URI
-      let extension = '.jpg';
-      let mimeType = 'image/jpeg';
-      if (localUri.includes('.png')) {
-        extension = '.png';
-        mimeType = 'image/png';
-      } else if (localUri.includes('.webp')) {
-        extension = '.webp';
-        mimeType = 'image/webp';
-      }
+      // Get file info from URI
+      const filename = localUri.split('/').pop() || 'sticker.jpg';
+      const match = /\.(\w+)$/.exec(filename);
+      const extension = match ? match[1] : 'jpg';
+      const mimeType = {
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'webp': 'image/webp'
+      }[extension.toLowerCase()] || 'image/jpeg';
       
-      console.log('📄 Preparing file upload:', { uri: localUri, extension, mimeType });
+      console.log('Preparing file upload:', { uri: localUri, filename, mimeType });
       
-      // In React Native, append the URI directly with proper metadata
-      formData.append('image', {
+      // Create file object for FormData
+      const file = {
         uri: localUri,
-        type: mimeType,
-        name: `sticker${extension}`,
-      } as any);
+        name: filename,
+        type: mimeType
+      };
+      
+      formData.append('image', file as any);
       
       const uploadResponse = await api.post(endpoints.uploadSticker, formData, {
         headers: {
-          'Content-Type': 'multipart/form-data',
+          'Accept': 'application/json',
+          'Content-Type': 'multipart/form-data'
         },
       });
       
@@ -889,23 +929,127 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const dragStart = useRef<Record<string, { x: number; y: number }>>({});
   const stickerDragStart = useRef<Record<string, { x: number; y: number }>>({});
 
+  // Shared deletion check logic
+  const checkAndHandleDeletion = (absoluteX: number, absoluteY: number, elementId: string, elementType: 'text' | 'sticker'): boolean => {
+    const trashCenterX = screenWidth / 2;
+    const trashCenterY = screenHeight - 100;
+    const trashRadius = 60;
+
+    const distanceToTrash = Math.sqrt(
+      Math.pow(absoluteX - trashCenterX, 2) + 
+      Math.pow(absoluteY - trashCenterY, 2)
+    );
+
+    const isInTrashZone = distanceToTrash < trashRadius;
+    
+    if (isInTrashZone) {
+      console.log(`🗑️ ${elementType} element entered trash zone, DELETING NOW!`, { 
+        elementId,
+        elementType,
+        textElementsCount: textElements.length,
+        stickerElementsCount: stickerElements.length,
+        textElementIds: textElements.map(t => t.id),
+        stickerElementIds: stickerElements.map(s => s.id)
+      });
+      
+      // Mark as deleted immediately
+      justDeletedRef.current = true;
+      
+      // Animate deletion
+      deletionScale.value = withSpring(0, { duration: 300 });
+      deletionOpacity.value = withTiming(0, { duration: 300 });
+      
+      let deletionHappened = false;
+      
+      if (elementType === 'text') {
+        console.log('🗑️ Attempting text deletion:', { 
+          elementId, 
+          currentCount: textElements.length
+        });
+        
+        // Always allow deletion - we'll filter out the element
+        setTextElements(prev => {
+          const filtered = prev.filter(el => el.id !== elementId);
+          console.log('🗑️ Text elements after deletion:', filtered.map(t => t.id));
+          return filtered;
+        });
+        setSelectedTextId('');
+        deletionHappened = true;
+        Toast.show({
+          type: 'success',
+          text1: 'Text element deleted',
+          position: 'top',
+          visibilityTime: 1000,
+        });
+      } else if (elementType === 'sticker') {
+        console.log('🗑️ Attempting sticker deletion:', { elementId });
+        deleteSticker(elementId);
+        setSelectedStickerId(null);
+        deletionHappened = true;
+        Toast.show({
+          type: 'success',
+          text1: 'Sticker deleted',
+          position: 'top',
+          visibilityTime: 1000,
+        });
+      }
+      
+      if (!deletionHappened) {
+        console.log('⚠️ Deletion did not happen!');
+        // Reset animation if deletion didn't happen
+        deletionScale.value = 1;
+        deletionOpacity.value = 1;
+      }
+      
+      // Clean up state
+      setIsDraggingElement(false);
+      
+      // Reset animation values after a delay (only if deletion happened)
+      if (deletionHappened) {
+        setTimeout(() => {
+          deletionScale.value = 1;
+          deletionOpacity.value = 1;
+        }, 300);
+      }
+      
+      return deletionHappened;
+    }
+    
+    return false; // Element was not deleted
+  };
+
   const handlePanStateChange = (event: any, elementId: string) => {
     const { state } = event.nativeEvent;
     if (state === State.BEGAN) {
+      justDeletedRef.current = false;
       const el = textElements.find(e => e.id === elementId);
       if (el) dragStart.current[elementId] = { x: el.x, y: el.y };
+      // Show trash can when starting to drag a text element
+      if (!backgroundImage) {
+        console.log('📝 Text drag BEGAN, showing trash can');
+        setIsDraggingElement(true);
+      }
     }
     if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+      console.log('📝 Text drag END, hiding trash can');
       delete dragStart.current[elementId];
+      setIsDraggingElement(false);
     }
   };
 
   const handlePanGesture = (event: any, elementId: string) => {
-    if (event.nativeEvent.state !== State.ACTIVE || isEditingText) return;
+    if (event.nativeEvent.state !== State.ACTIVE || isEditingText || justDeletedRef.current) return;
     const start = dragStart.current[elementId];
     if (!start) return;
 
-    const { translationX, translationY } = event.nativeEvent;
+    const { translationX, translationY, absoluteX, absoluteY } = event.nativeEvent;
+    
+    // Check for deletion using shared logic
+    if (checkAndHandleDeletion(absoluteX, absoluteY, elementId, 'text')) {
+      return; // Element was deleted, stop processing
+    }
+    
+    // Normal drag behavior
     const newX = start.x + translationX;
     const newY = start.y + translationY;
     
@@ -936,74 +1080,38 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       const { translationY, velocityY, translationX, absoluteX, absoluteY } = event.nativeEvent;
       // Removed excessive logging for better performance
       
-      // Show trash can when dragging elements (but not during swipe up)
-      if (state === State.ACTIVE && (selectedStickerId || selectedTextId) && 
-          Math.abs(translationY) < 50) { // Only show trash can for horizontal/small movements
-        setIsDraggingElement(true);
+      // Handle element dragging states
+      if (state === State.BEGAN) {
+        // Reset deletion flag at start of new gesture
+        justDeletedRef.current = false;
+        console.log('🎬 BEGAN - Reset deletion flag');
+        
+        // Only show trash can if we're starting to drag a selected element (not background)
+        if ((selectedStickerId || selectedTextId) && !backgroundImage) {
+          console.log('🎬 Starting element drag:', { selectedStickerId, selectedTextId, backgroundImage });
+          setIsDraggingElement(true);
+        } else {
+          console.log('🎬 NOT starting element drag:', { selectedStickerId, selectedTextId, backgroundImage });
+        }
+      } else if (state === State.ACTIVE) {
+        if (isDraggingElement && !justDeletedRef.current && (selectedStickerId || selectedTextId)) {
+          // Check for deletion using shared logic
+          const elementId = selectedStickerId || selectedTextId || '';
+          const elementType = selectedStickerId ? 'sticker' : 'text';
+          
+          if (checkAndHandleDeletion(absoluteX, absoluteY, elementId, elementType as 'text' | 'sticker')) {
+            return; // Element was deleted, stop processing
+          }
+        }
+      } else if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+        console.log('🛑 Gesture ended:', { state, isDraggingElement });
+        // Always clean up state on any type of drag end
+        setIsDraggingElement(false);
       }
       
-      // Hide trash can when drag ends
-      if (state === State.END) {
-        setIsDraggingElement(false);
-        
-        // Check if dropped on trash can (bottom center area)
-        const trashZone = {
-          x: screenWidth / 2 - 50,
-          y: screenHeight - 150,
-          width: 100,
-          height: 100,
-        };
-        
-        console.log('🗑️ Checking trash zone:', { 
-          absoluteX, absoluteY, 
-          trashZone, 
-          selectedStickerId, 
-          selectedTextId 
-        });
-        
-        // More lenient trash zone detection
-        const isInTrashZone = absoluteX >= trashZone.x - 20 && 
-                             absoluteX <= trashZone.x + trashZone.width + 20 &&
-                             absoluteY >= trashZone.y - 20 && 
-                             absoluteY <= trashZone.y + trashZone.height + 20;
-        
-        if (isInTrashZone) {
-          console.log('✅ Element dropped in trash zone!');
-          
-          // Animate deletion
-          deletionScale.value = withSpring(0, { duration: 300 });
-          deletionOpacity.value = withTiming(0, { duration: 300 });
-          
-          setTimeout(() => {
-            if (selectedStickerId) {
-              deleteSticker(selectedStickerId);
-              Toast.show({
-                type: 'success',
-                text1: 'Sticker deleted',
-                position: 'top',
-                visibilityTime: 1000,
-              });
-            } else if (selectedTextId && textElements.length > 1) {
-              // Don't delete the last text element
-              setTextElements(prev => prev.filter(el => el.id !== selectedTextId));
-              setSelectedTextId('');
-              Toast.show({
-                type: 'success',
-                text1: 'Text element deleted',
-                position: 'top',
-                visibilityTime: 1000,
-              });
-            }
-            
-            // Reset animation values
-            deletionScale.value = 1;
-            deletionOpacity.value = 1;
-          }, 300);
-          
-          return;
-        } else {
-          console.log('❌ Element not in trash zone');
-        }
+      // Don't process any more pan gestures if we just deleted
+      if (justDeletedRef.current) {
+        return;
       }
       
       // Check for swipe up (image picker) - prioritize this over element dragging
@@ -1296,9 +1404,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             maxPointers={1}
           >
             <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
-              {/* Image background layer (lowest) */}
-              {renderImageBackground()}
-              
               {/* Repost image layer */}
               <RepostImageLayer uri={repostData?.screenshotUri} />
           
@@ -1332,7 +1437,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     }
 
     return (
-      <View style={[styles.fullScreenCanvas, { backgroundColor }]}>
+      <View style={styles.fullScreenCanvas}>
         {canvasChildren}
       </View>
     );
@@ -1589,6 +1694,43 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   return (
     <View style={styles.container}>
       <StatusBar hidden />
+      
+      {/* Background color layer */}
+      <View style={[StyleSheet.absoluteFill, { backgroundColor }]} />
+      
+      {/* Background image layer - outside KeyboardAvoidingView so keyboard doesn't shift it */}
+      {backgroundImage && (
+        <PinchGestureHandler
+          onGestureEvent={(event) => handleUnifiedGesture(event, 'pinch')}
+          onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pinch')}
+          simultaneousHandlers={['pan']}
+        >
+          <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
+            <PanGestureHandler
+              onGestureEvent={(event) => handleUnifiedGesture(event, 'pan')}
+              onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pan')}
+              simultaneousHandlers={['pinch']}
+              shouldCancelWhenOutside={false}
+              minPointers={1}
+              maxPointers={1}
+            >
+              <AnimatedReanimated.View 
+                style={[
+                  StyleSheet.absoluteFill, 
+                  { zIndex: 0 },
+                  imageBackgroundAnimatedStyle
+                ]}
+              >
+                <ExpoImage
+                  source={{ uri: backgroundImage }}
+                  style={StyleSheet.absoluteFill}
+                  contentFit="cover"
+                />
+              </AnimatedReanimated.View>
+            </PanGestureHandler>
+          </AnimatedReanimated.View>
+        </PinchGestureHandler>
+      )}
       
       <KeyboardAvoidingView 
         style={styles.keyboardContainer}
@@ -1958,10 +2100,10 @@ const styles = StyleSheet.create({
   // Trash Can
   trashCanContainer: {
     position: 'absolute',
-    bottom: 100,
-    left: screenWidth / 2 - 50,
-    width: 100,
-    height: 100,
+    bottom: 50,
+    left: screenWidth / 2 - 30,
+    width: 60,
+    height: 60,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 50,
