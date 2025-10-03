@@ -252,10 +252,27 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
 
       console.log('📸 Image picker result:', result);
 
-      if (!result.canceled && result.assets[0]) {
+      if (!result.canceled && result.assets && result.assets.length > 0) {
         const imageUri = result.assets[0].uri;
-        console.log('✅ Image selected:', imageUri);
-        setBackgroundImage(imageUri);
+        console.log('✅ Background image selected:', imageUri);
+        
+        // Upload the background image to backend first
+        console.log('📤 Uploading background image...');
+        const uploadedUrl = await uploadStickerImage(imageUri); // Reuse the same upload function
+        
+        if (!uploadedUrl) {
+          Toast.show({
+            type: 'error',
+            text1: 'Upload failed',
+            text2: 'Could not upload background image',
+            position: 'top',
+            visibilityTime: 2000,
+          });
+          return;
+        }
+        
+        console.log('🔗 Background image uploaded:', uploadedUrl);
+        setBackgroundImage(uploadedUrl); // Use uploaded URL instead of local URI
         
         // Reset image position and scale to center and full width
         resetImageBackground();
@@ -310,18 +327,25 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     try {
       const formData = new FormData();
       
-      // Create file object from URI
-      const response = await fetch(localUri);
-      const blob = await response.blob();
-      
-      // Determine file extension from URI or blob type
+      // Determine file extension from URI
       let extension = '.jpg';
-      if (localUri.includes('.png')) extension = '.png';
-      else if (localUri.includes('.webp')) extension = '.webp';
-      else if (blob.type.includes('png')) extension = '.png';
-      else if (blob.type.includes('webp')) extension = '.webp';
+      let mimeType = 'image/jpeg';
+      if (localUri.includes('.png')) {
+        extension = '.png';
+        mimeType = 'image/png';
+      } else if (localUri.includes('.webp')) {
+        extension = '.webp';
+        mimeType = 'image/webp';
+      }
       
-      formData.append('image', blob as any, `sticker${extension}`);
+      console.log('📄 Preparing file upload:', { uri: localUri, extension, mimeType });
+      
+      // In React Native, append the URI directly with proper metadata
+      formData.append('image', {
+        uri: localUri,
+        type: mimeType,
+        name: `sticker${extension}`,
+      } as any);
       
       const uploadResponse = await api.post(endpoints.uploadSticker, formData, {
         headers: {
@@ -398,11 +422,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           uri: uploadedUrl, // Use the uploaded URL instead of local URI
           x: screenWidth / 2,
           y: screenHeight / 2,
-          width: 120, // Larger default size for image stickers
+          width: 120, // Standard size - user can tap to change shape/crop
           height: 120,
           scale: 1,
           rotation: 0,
-          shape: 'full', // Default to full dimensions (no cropping)
+          shape: 'full', // Default to full dimensions - user can tap to cycle shapes
         };
         
         console.log('📝 Adding sticker to elements:', newSticker);
@@ -906,7 +930,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     
     if (gestureType === 'pan') {
       const { translationY, velocityY, translationX, absoluteX, absoluteY } = event.nativeEvent;
-      console.log('👆 Unified pan gesture:', { state, translationY, velocityY, translationX });
+      // Removed excessive logging for better performance
       
       // Show trash can when dragging elements (but not during swipe up)
       if (state === State.ACTIVE && (selectedStickerId || selectedTextId) && 
@@ -1000,7 +1024,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           const newX = start.x + translationX;
           const newY = start.y + translationY;
           updateStickerElement(selectedStickerId, { x: newX, y: newY });
-          console.log('📍 Sticker drag:', { x: newX, y: newY });
           return;
         }
       }
@@ -1009,7 +1032,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       if (backgroundImage && state === State.ACTIVE && !selectedStickerId && !selectedTextId) {
         imageTranslateX.value = imageBaseTranslateX.value + translationX;
         imageTranslateY.value = imageBaseTranslateY.value + translationY;
-        console.log('📍 Image drag:', { x: imageTranslateX.value, y: imageTranslateY.value });
         return;
       }
       
@@ -1017,18 +1039,19 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       if (backgroundImage && state === State.END && !selectedStickerId && !selectedTextId) {
         imageBaseTranslateX.value = imageTranslateX.value;
         imageBaseTranslateY.value = imageTranslateY.value;
-        setImageBackgroundPosition({
-          x: imageTranslateX.value,
-          y: imageTranslateY.value,
-        });
-        console.log('✅ Image drag ended');
+        // Update state after gesture ends
+        setTimeout(() => {
+          setImageBackgroundPosition({
+            x: imageTranslateX.value,
+            y: imageTranslateY.value,
+          });
+        }, 0);
         return;
       }
     }
     
     if (gestureType === 'pinch') {
       const { scale } = event.nativeEvent;
-      console.log('🤏 Unified pinch gesture:', { state, scale });
       
       // Handle sticker pinch start
       if (selectedStickerId && state === State.BEGAN) {
@@ -1060,15 +1083,16 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       if (backgroundImage && state === State.ACTIVE && !selectedStickerId && !selectedTextId) {
         const newScale = imageBaseScale.value * scale;
         imageScale.value = newScale;
-        console.log('📏 Image pinch:', newScale);
         return;
       }
       
       // Handle pinch end for image background
       if (backgroundImage && state === State.END && !selectedStickerId && !selectedTextId) {
         imageBaseScale.value = imageScale.value;
-        setImageBackgroundScale(imageScale.value);
-        console.log('✅ Image pinch ended');
+        // Update state after gesture ends
+        setTimeout(() => {
+          setImageBackgroundScale(imageScale.value);
+        }, 0);
         return;
       }
     }

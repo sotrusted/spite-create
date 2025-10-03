@@ -324,7 +324,11 @@ export default function PostCard({ post, onReport, onMute, onCopyText, onRepost 
                 </View>
               )}
               <Image 
-                source={{ uri: post.rendered_image_url }}
+                source={{ 
+                  uri: post.rendered_image_url?.startsWith('http') 
+                    ? post.rendered_image_url 
+                    : `http://192.168.1.158:8001${post.rendered_image_url}`
+                }}
                 style={(() => {
                   const canvasWidth = post.image_width && post.image_width > 0 ? post.image_width : null;
                   const canvasHeight = post.image_height && post.image_height > 0 ? post.image_height : null;
