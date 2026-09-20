@@ -33,6 +33,10 @@ export const Colors = {
     '#2F4F4F', // Dark Slate Gray (modern neutral)
   ],
   
+  // Per-character palette for rainbow text. Must match RAINBOW_TEXT_PALETTE
+  // in backend/posts/models.py so preview and render cycle identically.
+  rainbowPalette: ['#FF1A1A', '#FF9500', '#FFD700', '#32CD32', '#00CED1', '#9932CC'],
+
   // Avatar colors (old-web inspired)
   avatarColors: [
     '#FF1A1A', '#0000EE', '#00AA00', '#FF6B00', '#551A8B',
@@ -42,25 +46,60 @@ export const Colors = {
   ],
 };
 
+// Font families loaded in App.tsx from assets/fonts - the exact same TTFs the
+// backend renders with, so the composer preview matches the server output.
+// Loaded font files carry their own weight; synthetic fontWeight must stay
+// 'normal' or iOS substitutes a different face.
+// Bold/italic faces per family. Families without a real face simply do not
+// offer the toggle (no synthetic styling - the face is the truth).
+export const resolveFontFace = (
+  family: keyof typeof FontChoices,
+  bold?: boolean,
+  italic?: boolean,
+): string => {
+  const config = FontChoices[family];
+  const variants = (config as any).variants || {};
+  if (bold && italic && variants.boldItalic) return variants.boldItalic;
+  if (bold && variants.bold) return variants.bold;
+  if (italic && variants.italic) return variants.italic;
+  return config.fontFamily;
+};
+
 export const FontChoices = {
   'arial-black': {
     name: 'Arial Black',
-    fontFamily: 'System',
-    fontWeight: '900' as const,
+    fontFamily: 'ArialBlack',
+    fontWeight: 'normal' as const,
   },
   'crimson-text': {
     name: 'Crimson Text',
-    fontFamily: 'Times',
-    fontWeight: 'bold' as const,
+    fontFamily: 'TimesNewRoman',
+    fontWeight: 'normal' as const,
+    variants: { bold: 'TimesNewRomanBold', italic: 'TimesNewRomanItalic', boldItalic: 'TimesNewRomanBoldItalic' },
   },
   'papyrus': {
+    // Extracted from the macOS .ttc via fontTools; same file both sides
     name: 'Papyrus',
-    fontFamily: 'System',
-    fontWeight: 'bold' as const,
+    fontFamily: 'Papyrus',
+    fontWeight: 'normal' as const,
   },
   'impact': {
     name: 'Impact',
-    fontFamily: 'System',
-    fontWeight: '900' as const,
+    fontFamily: 'Impact',
+    fontWeight: 'normal' as const,
+  },
+  'courier-prime': {
+    // Typewriter register
+    name: 'Courier',
+    fontFamily: 'CourierPrime',
+    fontWeight: 'normal' as const,
+    variants: { bold: 'CourierPrimeBold', italic: 'CourierPrimeItalic', boldItalic: 'CourierPrimeBoldItalic' },
+  },
+  'caveat': {
+    // Handwritten register
+    name: 'Caveat',
+    fontFamily: 'Caveat',
+    fontWeight: 'normal' as const,
+    variants: { bold: 'CaveatBold' },
   },
 };

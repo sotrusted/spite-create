@@ -1,6 +1,6 @@
 # Components Documentation
 
-This folder contains reusable UI components for the Subscript app.
+This folder contains reusable UI components for Creative Mind's Ideas Magazine.
 
 ## 📱 Component Overview
 

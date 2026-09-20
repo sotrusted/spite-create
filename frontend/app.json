@@ -1,37 +1,53 @@
 {
   "expo": {
-    "name": "Subscript",
-    "slug": "subscript-app",
+    "name": "Type Magazine",
+    "slug": "creative-minds-ideas-magazine",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F8F8FF"
+      "image": "./assets/brand/splash.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#0000EE"
     },
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.subscript.app"
+      "bundleIdentifier": "com.cmim.magazine",
+      "buildNumber": "1",
+      "infoPlist": {
+        "CFBundleDisplayName": "Type",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#F8F8FF"
+        "backgroundColor": "#0000EE"
       },
-      "package": "com.subscript.app"
+      "package": "com.cmim.magazine"
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
     "extra": {
-      "apiUrl": "http://192.168.1.158:8001"
+      "eas": {
+        "projectId": "764c896b-b113-4820-a897-68fcbfe4a1ff"
+      }
     },
-    "plugins": []
+    "plugins": [
+      "expo-font"
+    ],
+    "owner": "sotrusted",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/764c896b-b113-4820-a897-68fcbfe4a1ff"
+    }
   }
 }

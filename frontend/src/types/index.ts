@@ -9,7 +9,11 @@ export interface User {
   shadowban_reason?: string;
   default_signed_posts?: boolean;
   preferred_signature_style?: string;
+  signature_font?: string;
+  signature_color?: string;
 }
+
+export type FontChoice = 'arial-black' | 'crimson-text' | 'papyrus' | 'impact' | 'courier-prime' | 'caveat';
 
 export interface Author {
   handle: string;
@@ -20,7 +24,7 @@ export interface Post {
   id: string;
   author: Author;
   text_content: string;
-  font_choice: 'impact' | 'mono' | 'rounded' | 'serif' | 'system';
+  font_choice: FontChoice;
   font_size: number;
   text_color: string;
   background_color: string;
@@ -41,6 +45,33 @@ export interface Post {
   bottom_y?: number;
   is_signed?: boolean;
   signature_style?: string;
+  // Collapsed-repost render + quote chip (reposts only)
+  response_image_url?: string | null;
+  response_top_y?: number | null;
+  response_bottom_y?: number | null;
+  quote?: {
+    hidden: boolean;
+    snippet?: string;
+    background_color?: string;
+    // Quoted strip's rect on the canvas (canvas px) - used for tap
+    // hit-testing and placing the inline collapse chip
+    geometry?: { x: number; y: number; width: number; height: number };
+  } | null;
+  // Full quoted-ancestor chain with rects in THIS post's canvas coords,
+  // enabling per-level collapse
+  quote_chain?: Array<{
+    rect: { x: number; y: number; width: number; height: number };
+    strip: {
+      url: string | null;
+      top_y: number;
+      bottom_y: number;
+      image_width?: number;
+      image_height?: number;
+    };
+    snippet?: string;
+    background_color?: string;
+    hidden: boolean;
+  }>;
 }
 
 export interface TextElement {
@@ -49,9 +80,19 @@ export interface TextElement {
   y: number;
   fontSize: number;
   color: string;
-  fontFamily: 'arial-black' | 'crimson-text' | 'papyrus' | 'impact';
+  fontFamily: FontChoice;
   hasBackground: boolean;
   backgroundColor: string;
+  letterSpacing?: number;
+  glow?: boolean;
+  rainbow?: boolean;
+  align?: 'left' | 'center' | 'right';
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  opacity?: number;
+  blendMode?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference';
+  listStyle?: 'none' | 'bullet' | 'dash' | 'star' | 'number';
 }
 
 export interface StickerElement {
@@ -70,7 +111,7 @@ export interface PostCreate {
   text_content: string;
   text_elements?: TextElement[]; // NEW: Array of positioned text elements
   sticker_elements?: StickerElement[]; // NEW: Array of positioned sticker elements
-  font_choice: 'arial-black' | 'crimson-text' | 'papyrus' | 'impact';
+  font_choice: FontChoice;
   font_size: number;
   text_color: string;
   background_color: string;
@@ -78,6 +119,8 @@ export interface PostCreate {
   background_image?: string; // NEW: Image background URI
   background_image_scale?: number; // NEW: Image background scale
   background_image_position?: { x: number; y: number }; // NEW: Image background position
+  crop_top?: number; // Crop band top in canvas px (from composer crop bars)
+  crop_bottom?: number; // Crop band bottom in canvas px
   has_outline: boolean;
   outline_color: string;
   has_text_background?: boolean;
@@ -87,10 +130,11 @@ export interface PostCreate {
   repost_data?: {
     original_post_id: string;
     screenshot_uri: string;
+    // WYSIWYG quoted-strip placement in canvas px
     repost_geometry?: {
       x: number;
       y: number;
-      scale: number;
+      width: number;
     };
   };
   is_signed?: boolean;

@@ -1,0 +1,42 @@
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "production": {
+      "autoIncrement": true,
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "credentialsSource": "local",
+      "channel": "production"
+    },
+    "preview": {
+      "distribution": "internal",
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "channel": "preview"
+    },
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "channel": "development"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascApiKeyPath": "/Users/basic/.appstoreconnect/AuthKey_V8AQRD66J2.p8",
+        "ascApiKeyId": "V8AQRD66J2",
+        "ascApiKeyIssuerId": "dac5c874-c704-495a-88f8-fa17fec6b101",
+        "appleTeamId": "F5RK8H2Y4T",
+        "ascAppId": "6812371278"
+      }
+    }
+  }
+}

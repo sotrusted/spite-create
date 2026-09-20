@@ -1,0 +1,40 @@
+{
+  "screenWidth": 393,
+  "screenHeight": 852,
+  "textElements": [
+    {
+      "content": "the payload contract",
+      "x": 196.5,
+      "y": 300,
+      "fontSize": 32,
+      "scale": 1.5,
+      "color": "#FF1A1A",
+      "fontFamily": "arial-black",
+      "hasBackground": false,
+      "backgroundColor": "#FFFFFF",
+      "capsLock": true
+    },
+    {
+      "content": "lower line",
+      "x": 196.5,
+      "y": 600,
+      "fontSize": 24,
+      "scale": 1,
+      "color": "#0000EE",
+      "fontFamily": "impact",
+      "hasBackground": true,
+      "backgroundColor": "#FFFFFF",
+      "capsLock": false
+    }
+  ],
+  "stickerElements": [],
+  "backgroundColor": "#FFD700",
+  "backgroundGradient": [],
+  "backgroundImage": null,
+  "imageBackgroundScale": 1,
+  "imageBackgroundPosition": { "x": 0, "y": 0 },
+  "imageCoverScale": 1,
+  "cropTop": 0,
+  "cropBottom": 852,
+  "isSigned": false
+}

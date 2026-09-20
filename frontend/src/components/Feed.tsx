@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   FlatList,
   StyleSheet,
   RefreshControl,
   ActivityIndicator,
+  TouchableOpacity,
   Text,
   Alert,
   Animated,
 } from 'react-native';
 import Toast from 'react-native-toast-message';
+import LoadingScreen from './LoadingScreen';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
 import { api, endpoints } from '../config/api';
@@ -20,6 +22,7 @@ import websocketService, { WebSocketMessage } from '../services/websocket';
 interface Props {
   newPost?: Post | null;
   onNewPostDisplayed?: () => void;
+  onFeedLoaded?: (posts: Post[]) => void;
   onScroll?: any;
   contentInsetAdjustmentBehavior?: 'automatic' | 'scrollableAxes' | 'never' | 'always';
   scrollIndicatorInsets?: { top?: number; left?: number; bottom?: number; right?: number };
@@ -29,12 +32,17 @@ interface Props {
 export default function Feed({ 
   newPost, 
   onNewPostDisplayed, 
+  onFeedLoaded,
   onScroll,
   contentInsetAdjustmentBehavior,
   scrollIndicatorInsets,
   contentInset 
 }: Props) {
   const [posts, setPosts] = useState<Post[]>([]);
+  // Posts arriving over the WS buffer here; a tappable [N NEW POSTS]
+  // banner releases them (Twitter-style) instead of shifting the feed
+  // under the reader
+  const [pendingPosts, setPendingPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -42,7 +50,30 @@ export default function Feed({
   const [error, setError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [showConnectionStatus, setShowConnectionStatus] = useState(false);
-  const [newPostAnimation] = useState(new Animated.Value(0));
+  // Rests at 1 so the first post is visible on initial load; reset to 0 and
+  // sprung back to 1 only when a new post arrives over the WebSocket.
+  const [newPostAnimation] = useState(new Animated.Value(1));
+  const listRef = useRef<FlatList<Post>>(null);
+
+  // Topmost visible post drives the header theme. FlatList needs stable
+  // refs for viewability callbacks.
+  const feedLoadedRef = useRef(onFeedLoaded);
+  feedLoadedRef.current = onFeedLoaded;
+  // Only one swipe rail open at a time across the whole feed
+  const openSwipeableRef = useRef<any>(null);
+  const handleSwipeableOpen = useCallback((ref: any) => {
+    if (openSwipeableRef.current && openSwipeableRef.current !== ref) {
+      openSwipeableRef.current.current?.close?.();
+    }
+    openSwipeableRef.current = ref;
+  }, []);
+
+  // Header clearance is real content padding (contentInset is unreliable on
+  // RN new architecture), so the top of the content is simply offset 0
+  const headerClearance = contentInset?.top ?? 0;
+  const scrollToTop = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
 
   const fetchFeed = useCallback(async (isRefresh = false, cursor?: string) => {
     try {
@@ -55,6 +86,22 @@ export default function Feed({
 
       const response = await api.get<FeedResponse>(endpoints.getFeed, { params });
       const { results, next } = response.data;
+
+      if (__DEV__) {
+        console.log('🪵 Feed fetch results (first 3):',
+          results.slice(0, 3).map((post, index) => ({
+            index,
+            id: post.id,
+            rendered_image_url: post.rendered_image_url,
+            text_content_preview: post.text_content?.slice(0, 40),
+            image_width: post.image_width,
+            image_height: post.image_height,
+            top_y: post.top_y,
+            bottom_y: post.bottom_y,
+            is_signed: post.is_signed,
+          })),
+        );
+      }
 
       if (isRefresh) {
         setPosts(results);
@@ -70,7 +117,11 @@ export default function Feed({
           }
         });
       }
-      
+      // First page in hand: the masthead picks its disguise from these
+      if (!cursor) {
+        feedLoadedRef.current?.(results);
+      }
+
       setNextUrl(next);
     } catch (error: any) {
       console.error('Error fetching feed:', error);
@@ -91,6 +142,7 @@ export default function Feed({
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
+    setPendingPosts([]); // the refetch includes them
     fetchFeed(true);
   }, [fetchFeed]);
 
@@ -104,7 +156,7 @@ export default function Feed({
     }
   }, [nextUrl, loadingMore, fetchFeed]);
 
-  const handlePostAction = useCallback(async (postId: string, action: 'report' | 'mute', data?: any) => {
+  const handlePostAction = useCallback(async (postId: string, action: 'report' | 'mute' | 'block', data?: any) => {
     try {
       switch (action) {
         case 'report':
@@ -115,7 +167,7 @@ export default function Feed({
             text2: 'Thank you for helping keep the community safe',
           });
           break;
-        case 'mute':
+        case 'mute': {
           const post = posts.find(p => p.id === postId);
           if (post) {
             await api.post(endpoints.muteUser(post.author.handle));
@@ -123,10 +175,26 @@ export default function Feed({
             Toast.show({
               type: 'success',
               text1: 'Muted',
-              text2: `You won't see posts from @${post.author.handle} anymore`,
+              text2: 'You will not see their posts anymore',
             });
           }
           break;
+        }
+        case 'block': {
+          const post = posts.find(p => p.id === postId);
+          if (post) {
+            await api.post(endpoints.blockUser(post.author.handle));
+            setPosts(prev => prev.filter(p => p.author.handle !== post.author.handle));
+            // Refetch so quoted strips of the blocked author hide too
+            fetchFeed(true);
+            Toast.show({
+              type: 'success',
+              text1: 'Blocked',
+              text2: 'Their posts are hidden and yours are hidden from them',
+            });
+          }
+          break;
+        }
       }
     } catch (error: any) {
       console.error(`Error ${action}ing post:`, error);
@@ -142,54 +210,42 @@ export default function Feed({
     }
   }, [posts]);
 
-  const handleCopyText = useCallback((text: string) => {
-    // This would use Expo Clipboard in a real implementation
-    Toast.show({
-      type: 'success',
-      text1: 'Copied',
-      text2: 'Text copied to clipboard',
-    });
-  }, []);
-
   // WebSocket event handlers
   const handleNewPost = useCallback((message: WebSocketMessage) => {
-    console.log('📡 New post received via WebSocket:', message);
-    
-    if (message.post_data) {
-      const newPost = message.post_data as Post;
-      
-      setPosts(prev => {
-        // Check if post already exists to prevent duplicates
-        const existingPost = prev.find(p => p.id === newPost.id);
-        if (existingPost) {
-          return prev; // Post already exists, don't add duplicate
-        }
-        
-        // Add new post to the top with animation
-        console.log('✨ Adding new post to feed:', newPost.id);
-        
-        // Trigger animation for new post
-        newPostAnimation.setValue(0);
-        Animated.spring(newPostAnimation, {
-          toValue: 1,
-          useNativeDriver: true,
-          tension: 100,
-          friction: 8,
-        }).start();
-        
-        return [newPost, ...prev];
-      });
-      
-      // Show subtle notification
-      Toast.show({
-        type: 'success',
-        text1: 'New post!',
-        text2: `From @${newPost.author.handle}`,
-        position: 'top',
-        visibilityTime: 2000,
+    // The consumer wraps the broadcast as 'post'; older code sent 'post_data'
+    const payload = message.post ?? message.post_data;
+    if (payload) {
+      const incoming = payload as Post;
+      setPendingPosts(prev => {
+        if (prev.find(p => p.id === incoming.id)) return prev;
+        return [incoming, ...prev];
       });
     }
-  }, [newPostAnimation]);
+  }, []);
+
+  const releasePendingPosts = useCallback(() => {
+    setPendingPosts(pending => {
+      if (pending.length > 0) {
+        setPosts(prev => {
+          const existing = new Set(prev.map(p => p.id));
+          return [...pending.filter(p => !existing.has(p.id)), ...prev];
+        });
+        setTimeout(scrollToTop, 50);
+      }
+      return [];
+    });
+  }, [scrollToTop]);
+
+  const handleRepostNotification = useCallback((message: WebSocketMessage) => {
+    Toast.show({
+      type: 'success',
+      text1: `@${message.actor_handle} reposted you`,
+      text2: message.snippet ? `"${message.snippet}"` : undefined,
+      position: 'top',
+      visibilityTime: 3500,
+    });
+    api.post(endpoints.markNotificationsRead).catch(() => {});
+  }, []);
 
   const handleWsConnected = useCallback(() => {
     console.log('📡 WebSocket connected');
@@ -231,15 +287,48 @@ export default function Feed({
         }
         return [newPost, ...prev];
       });
+      setPendingPosts(prev => prev.filter(p => p.id !== newPost.id));
       onNewPostDisplayed?.();
+      // The user just posted: bring their post into view above the header
+      setTimeout(scrollToTop, 100);
     }
-  }, [newPost, onNewPostDisplayed]);
+  }, [newPost, onNewPostDisplayed, scrollToTop]);
+
+  // Reposts that happened while the app was closed
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get(endpoints.getNotifications);
+        const items = res.data?.results || [];
+        if (items.length === 1) {
+          Toast.show({
+            type: 'success',
+            text1: `@${items[0].actor_handle} reposted you`,
+            text2: items[0].snippet ? `"${items[0].snippet}"` : undefined,
+            position: 'top',
+            visibilityTime: 3500,
+          });
+        } else if (items.length > 1) {
+          Toast.show({
+            type: 'success',
+            text1: `${items.length} reposts while you were away`,
+            position: 'top',
+            visibilityTime: 3500,
+          });
+        }
+        if (items.length > 0) await api.post(endpoints.markNotificationsRead);
+      } catch (error) {
+        console.log('Notification fetch failed (non-critical):', error);
+      }
+    })();
+  }, []);
 
   // WebSocket connection setup (optional - feed works without it)
   useEffect(() => {
     try {
       // Set up WebSocket event listeners
       websocketService.on('new_post', handleNewPost);
+      websocketService.on('repost_notification', handleRepostNotification);
       websocketService.on('connected', handleWsConnected);
       websocketService.on('disconnected', handleWsDisconnected);
       websocketService.on('error', handleWsError);
@@ -251,6 +340,7 @@ export default function Feed({
       return () => {
         try {
           websocketService.off('new_post', handleNewPost);
+          websocketService.off('repost_notification', handleRepostNotification);
           websocketService.off('connected', handleWsConnected);
           websocketService.off('disconnected', handleWsDisconnected);
           websocketService.off('error', handleWsError);
@@ -271,14 +361,17 @@ export default function Feed({
   }, [fetchFeed]);
 
   const renderPost = ({ item, index }: { item: Post; index: number }) => {
+    /*
     console.log('🎨 Rendering post:', {
       id: item.id,
       hasImage: !!item.rendered_image_url,
       imageUrl: item.rendered_image_url,
       textContent: item.text_content?.substring(0, 20) + '...'
     });
+    */
     
-    // Apply animation to the first post (newest)
+    // Animate the first post (newest); the animation value rests at 1, so
+    // this is a no-op except right after a WebSocket new-post arrival.
     const animatedStyle = index === 0 ? {
       transform: [
         {
@@ -299,24 +392,20 @@ export default function Feed({
         outputRange: [0, 1],
       }),
     } : {};
-    
+
     return (
       <Animated.View style={animatedStyle}>
         <PostCard
           post={item}
+          isFirst={index === 0}
           onReport={(reason, description) => handlePostAction(item.id, 'report', { reason, description })}
           onMute={() => handlePostAction(item.id, 'mute')}
-          onCopyText={() => handleCopyText(item.text_content)}
-          onRepost={() => handleRepost(item)}
+          onBlock={() => handlePostAction(item.id, 'block')}
+          onSwipeableOpen={handleSwipeableOpen}
         />
       </Animated.View>
     );
   };
-
-  const handleRepost = useCallback((post: Post) => {
-    // This will be implemented to capture screenshot and open composer
-    console.log('Repost functionality will be implemented', post.id);
-  }, []);
 
   const renderFooter = () => {
     if (!loadingMore) return null;
@@ -341,16 +430,18 @@ export default function Feed({
   };
 
   if (loading && posts.length === 0) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={Colors.accent} />
-        <Text style={styles.loadingText}>Loading feed...</Text>
-      </View>
-    );
+    return <LoadingScreen />;
   }
 
   return (
     <View style={styles.container}>
+      {pendingPosts.length > 0 && (
+        <TouchableOpacity style={[styles.newPostsBanner, { top: headerClearance + 8 }]} onPress={releasePendingPosts}>
+          <Text style={styles.newPostsBannerText}>
+            {pendingPosts.length} new post{pendingPosts.length > 1 ? 's' : ''} ↑
+          </Text>
+        </TouchableOpacity>
+      )}
       {/* WebSocket connection status indicator - only show briefly */}
       {!wsConnected && showConnectionStatus && posts.length > 0 && (
         <View style={styles.connectionStatus}>
@@ -359,8 +450,11 @@ export default function Feed({
         </View>
       )}
       
-      <FlatList
+      <Animated.FlatList
+        ref={listRef as any}
         data={posts}
+        alwaysBounceVertical
+        overScrollMode="always"
         renderItem={renderPost}
         keyExtractor={(item) => item.id}
         refreshControl={
@@ -376,20 +470,41 @@ export default function Feed({
         ListFooterComponent={renderFooter}
         ListEmptyComponent={renderEmpty}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={posts.length === 0 ? styles.emptyContainer : { paddingVertical: 0, paddingHorizontal: 0 }}
+        contentContainerStyle={
+          posts.length === 0
+            ? [styles.emptyContainer, { paddingTop: headerClearance }]
+            : { paddingTop: headerClearance, paddingHorizontal: 0, flexGrow: 1 }
+        }
         ItemSeparatorComponent={null}
         style={{ backgroundColor: Colors.background, margin: 0, padding: 0, flex: 1 }}
         onScroll={onScroll}
         scrollEventThrottle={16}
         contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
         scrollIndicatorInsets={scrollIndicatorInsets}
-        contentInset={contentInset}
+        progressViewOffset={headerClearance}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  newPostsBanner: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 40,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: '#88888A',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  newPostsBannerText: {
+    color: Colors.background,
+    fontSize: 12,
+    fontFamily: 'CourierPrime',
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
   container: {
     flex: 1,
     backgroundColor: Colors.background,
@@ -408,6 +523,7 @@ const styles = StyleSheet.create({
     color: Colors.secondary,
     marginTop: 16,
     fontSize: 16,
+    fontFamily: 'CourierPrime',
   },
   loadingMore: {
     padding: 20,
@@ -421,16 +537,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 32,
+    // header clearance pads the top of the scroll view; lift the centered
+    // block so it sits at true visual center
+    paddingBottom: 185,
   },
   emptyTitle: {
     color: Colors.primary,
     fontSize: 20,
+    fontFamily: 'ArialBlack',
     fontWeight: 'bold',
     marginBottom: 8,
   },
   emptySubtitle: {
     color: Colors.secondary,
     fontSize: 16,
+    fontFamily: 'CourierPrime',
     textAlign: 'center',
     lineHeight: 24,
   },
@@ -443,19 +564,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.7)',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 12,
     zIndex: 100,
   },
   connectionDot: {
     width: 6,
     height: 6,
-    borderRadius: 3,
     backgroundColor: Colors.accent,
     marginRight: 6,
   },
   connectionText: {
     color: 'white',
     fontSize: 11,
+    fontFamily: 'CourierPrime',
     fontWeight: '500',
   },
  });

@@ -19,9 +19,10 @@ import {
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { PanGestureHandler, PinchGestureHandler, State } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
+import * as LegacyFS from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import AnimatedReanimated, {
@@ -31,9 +32,12 @@ import AnimatedReanimated, {
   withTiming,
 } from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
-import { Colors, FontChoices } from '../constants/colors';
-import { PostCreate, RepostData, StickerElement, User } from '../types';
-import { api, endpoints } from '../config/api';
+import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
+import { FEATURES } from '../constants/features';
+import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
+import { api, endpoints, absoluteUrl } from '../config/api';
+import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
+import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const DEFAULT_SIGNATURE_STYLE = 'default';
@@ -60,13 +64,36 @@ interface TextElement {
   originalY: number | null;
   fontSize: number;
   color: string;
-  fontFamily: 'arial-black' | 'crimson-text' | 'papyrus' | 'impact';
+  fontFamily: FontChoice;
   hasBackground: boolean;
   backgroundColor: string;
   backgroundMode: 'off' | 'white' | 'inverted';
   capsLock: boolean;
   scale: number;
+  letterSpacing: number;
+  opacity?: number;
+  blendMode?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference';
+  glow: boolean;
+  rainbow: boolean;
+  align: 'left' | 'center' | 'right';
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  listStyle: 'none' | 'bullet' | 'dash' | 'star' | 'number';
 }
+
+const LIST_STYLES = ['none', 'bullet', 'dash', 'star', 'number'] as const;
+const LIST_MARKERS: Record<string, string> = { bullet: '\u2022 ', dash: '- ', star: '* ' };
+const LAST_FONT_KEY = 'last-font.json';
+
+const TEXT_ALIGNMENTS = ['left', 'center', 'right'] as const;
+
+const LETTER_SPACING_PRESETS = [
+  { label: 'AB', value: 0 },
+  { label: 'A B', value: 3 },
+  { label: 'A  B', value: 8 },
+  { label: 'A   B', value: 15 },
+];
 
 interface Props {
   onPost?: (post: any) => void;
@@ -99,24 +126,47 @@ const buildImageCandidates = (raw?: string) => {
   return candidates;
 };
 
-const RepostImageLayer = ({ uri }: { uri?: string }) => {
+const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
+  const uri = repostData?.screenshotUri;
   if (!uri) return null;
 
-  console.log('🖼️ RepostImageLayer rendering with URI:', uri);
-  
+  // WYSIWYG: this exact rect (via getRepostStripRect) is what the payload
+  // sends and the server bakes - preview and render share one source
+  const original = repostData?.originalPost;
+  const rect = getRepostStripRect(original, screenWidth, screenHeight);
+  if (rect && original) {
+    const scale = rect.width / (original.image_width || 1);
+    const topY = original.top_y || 0;
+    return (
+      <View
+        style={[
+          styles.repostStrip,
+          { top: rect.top, height: rect.height, left: rect.left, width: rect.width },
+        ]}
+        pointerEvents="none"
+      >
+        <Image
+          source={{ uri }}
+          style={{
+            width: rect.width,
+            height: (original.image_height || 0) * scale,
+            transform: [{ translateY: -topY * scale }],
+          }}
+          resizeMode="cover"
+          onError={(error) => console.log('❌ Repost image error:', error)}
+        />
+      </View>
+    );
+  }
+
+  // Fallback when the original has no crop geometry
   return (
-    <View style={styles.repostImage}>
-      <Image 
+    <View style={styles.repostImage} pointerEvents="none">
+      <Image
         source={{ uri }}
-        style={{ 
-          width: '100%', 
-          height: '100%',
-          opacity: 0.95, // Very minimal opacity reduction
-        }}
-        resizeMode="contain" // Use contain to prevent overflow
-        onLoad={() => console.log('✅ Image loaded successfully')}
-        onError={(error) => console.log('❌ Image error:', error)}
-        // Note: Quality compression will be handled in backend
+        style={{ width: '100%', height: '100%' }}
+        resizeMode="contain"
+        onError={(error) => console.log('❌ Repost image error:', error)}
       />
     </View>
   );
@@ -129,7 +179,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       id: '1',
       content: '',
       x: screenWidth / 2,
-      y: screenHeight * 0.3, // Position in upper third of screen
+      y: repostData ? screenHeight * 0.34 : screenHeight / 2, // Center; higher for reposts so caption + strip together sit mid-canvas
       originalX: null,
       originalY: null,
       fontSize: 24,
@@ -138,8 +188,16 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       hasBackground: false,
       backgroundColor: '#FFFFFF',
       backgroundMode: 'off',
-      capsLock: true,
+      capsLock: false,
       scale: 1,
+      letterSpacing: 0,
+      glow: false,
+      rainbow: false,
+      align: 'center',
+      bold: false,
+      italic: false,
+      underline: false,
+      listStyle: 'none',
     }
   ]);
   
@@ -147,6 +205,19 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const [isEditingText, setIsEditingText] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [userProfile, setUserProfile] = useState<User | null>(null);
+
+  // Signature is a visible toggle (top bar) with a live band preview on the
+  // canvas, replacing the old hidden hold-to-sign gesture
+  const [signPost, setSignPost] = useState(false);
+
+  useEffect(() => {
+    api.get(endpoints.getUserProfile)
+      .then(response => {
+        setUserProfile(response.data);
+        setSignPost(!!response.data?.default_signed_posts);
+      })
+      .catch(() => {});
+  }, []);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [currentFontSize, setCurrentFontSize] = useState<number>(24); // Current editing font size (12-48)
 
@@ -161,6 +232,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   
   // Track if we just deleted an element (prevents gesture handler from continuing)
   const justDeletedRef = useRef(false);
+  // Real handler refs: string ids in simultaneousHandlers type-error AND
+  // no-op at runtime; refs make pinch+pan on the background actually
+  // recognize together
+  const bgPinchRef = useRef(null);
+  const bgPanRef = useRef(null);
   
   // Animation values for deletion
   const deletionScale = useSharedValue(1);
@@ -197,6 +273,21 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
   const [imageBackgroundScale, setImageBackgroundScale] = useState(1);
   const [imageBackgroundPosition, setImageBackgroundPosition] = useState({ x: 0, y: 0 });
+  // Natural-size to canvas cover factor. The preview treats scale 1 as
+  // contentFit="cover", while the backend scales the raw image pixels, so
+  // the gesture scale is multiplied by this factor at submit time.
+  const [imageCoverScale, setImageCoverScale] = useState(1);
+
+  // Crop bars for image backgrounds: the band between them is what the feed
+  // shows. Dragging both bars to the screen edges (0 / screenHeight) makes
+  // the post full bleed. The initial positions are inset so the grips are
+  // visible below the status area and above the home indicator.
+  const CROP_MIN_BAND = 120;
+  const CROP_INITIAL_TOP = 90;
+  const CROP_INITIAL_BOTTOM = screenHeight - 110;
+  const [cropTop, setCropTop] = useState(CROP_INITIAL_TOP);
+  const [cropBottom, setCropBottom] = useState(CROP_INITIAL_BOTTOM);
+  const cropDragStart = useRef({ top: 0, bottom: 0 });
   
   // Shared values for image background gestures
   const imageScale = useSharedValue(1);
@@ -207,14 +298,169 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const imageBaseTranslateY = useSharedValue(0);
   
   // UI state - Instagram Create Mode
-  const [activeControlOption, setActiveControlOption] = useState<'font' | 'color' | 'glow' | 'background'>('font');
   const [showControlBar, setShowControlBar] = useState(false);
   const [screenDarkened, setScreenDarkened] = useState(false);
+
+  // Dev-only WYSIWYG check: after posting, overlay the server render on the
+  // live canvas at half opacity so any drift is immediately visible
+  const [parityGhost, setParityGhost] = useState<{ uri: string; post: any } | null>(null);
+
+  // The quoted strip is draggable like a text element; its position is
+  // WYSIWYG (the payload sends whatever rect is showing)
+  const defaultStripRect = getRepostStripRect(repostData?.originalPost, screenWidth, screenHeight);
+  const [stripPosition, setStripPosition] = useState<{ x: number; y: number } | null>(null);
+  const [stripScale, setStripScale] = useState(1);
+  const stripRect = defaultStripRect
+    ? {
+        left: stripPosition ? stripPosition.x : defaultStripRect.left,
+        top: stripPosition ? stripPosition.y : defaultStripRect.top,
+        width: defaultStripRect.width * stripScale,
+        height: defaultStripRect.height * stripScale,
+      }
+    : null;
+  const stripDragStart = useRef({ x: 0, y: 0 });
+  const stripPinchBase = useRef(1);
+
+  // Remember the last font across composer sessions: untouched empty
+  // elements (and all new ones) start in it
+  const lastFontRef = useRef<FontChoice>('arial-black');
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await LegacyFS.readAsStringAsync(LegacyFS.documentDirectory + LAST_FONT_KEY);
+        const saved = JSON.parse(raw)?.font;
+        if (saved && FontChoices[saved as FontChoice]) {
+          lastFontRef.current = saved;
+          setTextElements(prev => prev.map(el =>
+            el.content ? el : { ...el, fontFamily: saved }
+          ));
+        }
+        const savedBg = JSON.parse(raw)?.background;
+        // Reposts pick their color from the parent; plain posts resume the
+        // last background
+        if (savedBg && !repostData && Colors.postColors.includes(savedBg)) {
+          lastBgRef.current = savedBg;
+          setBackgroundColor(savedBg);
+          setCurrentBgIndex(Colors.postColors.indexOf(savedBg));
+          // untouched default ink must stay readable on the restored canvas
+          setTextElements(prev => prev.map(el =>
+            !el.content && el.color === '#FF1A1A'
+              ? { ...el, color: readableDefaultInk(savedBg) }
+              : el
+          ));
+        }
+      } catch {}
+    })();
+  }, []);
+
+  const lastBgRef = useRef<string | null>(null);
+  const persistComposerPrefs = () => {
+    LegacyFS.writeAsStringAsync(
+      LegacyFS.documentDirectory + LAST_FONT_KEY,
+      JSON.stringify({ font: lastFontRef.current, background: lastBgRef.current }),
+    ).catch(() => {});
+  };
+
+  const rememberFont = (font: FontChoice) => {
+    lastFontRef.current = font;
+    persistComposerPrefs();
+  };
+
+  const handleStripPan = (event: any) => {
+    if (!stripRect) return;
+    const { state, translationX, translationY } = event.nativeEvent;
+    if (state === State.BEGAN) {
+      stripDragStart.current = { x: stripRect.left, y: stripRect.top };
+    } else if (state === State.ACTIVE) {
+      setStripPosition({
+        x: Math.max(0, Math.min(screenWidth - stripRect.width, stripDragStart.current.x + translationX)),
+        y: Math.max(0, Math.min(screenHeight - stripRect.height, stripDragStart.current.y + translationY)),
+      });
+    }
+  };
+
+  const handleStripPinch = (event: any) => {
+    if (!stripRect || !defaultStripRect) return;
+    const { state, scale } = event.nativeEvent;
+    if (state === State.BEGAN) {
+      stripPinchBase.current = stripScale;
+    } else if (state === State.ACTIVE) {
+      const maxScale = screenWidth / defaultStripRect.width;
+      const next = Math.max(0.2, Math.min(maxScale, stripPinchBase.current * scale));
+      // Zoom around the strip's center
+      const centerX = stripRect.left + stripRect.width / 2;
+      const centerY = stripRect.top + stripRect.height / 2;
+      const newWidth = defaultStripRect.width * next;
+      const newHeight = defaultStripRect.height * next;
+      setStripScale(next);
+      setStripPosition({
+        x: Math.max(0, Math.min(screenWidth - newWidth, centerX - newWidth / 2)),
+        y: Math.max(0, Math.min(screenHeight - newHeight, centerY - newHeight / 2)),
+      });
+    }
+  };
+
+  const renderRepostLayer = () => {
+    const uri = repostData?.screenshotUri;
+    const original = repostData?.originalPost;
+    if (!uri || !original) return null;
+
+    if (!stripRect) {
+      // Legacy original without crop geometry
+      return (
+        <View style={styles.repostImage} pointerEvents="none">
+          <Image source={{ uri }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
+        </View>
+      );
+    }
+
+    const scale = stripRect.width / (original.image_width || 1);
+    return (
+      <PinchGestureHandler
+        onGestureEvent={handleStripPinch}
+        onHandlerStateChange={handleStripPinch}
+        enabled={!isEditingText}
+      >
+        <AnimatedReanimated.View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <PanGestureHandler
+            onGestureEvent={handleStripPan}
+            onHandlerStateChange={handleStripPan}
+            enabled={!isEditingText}
+          >
+            <AnimatedReanimated.View
+              style={[
+                styles.repostStrip,
+                { top: stripRect.top, height: stripRect.height, left: stripRect.left, width: stripRect.width },
+              ]}
+            >
+              <Image
+                source={{ uri }}
+                style={{
+                  width: stripRect.width,
+                  height: (original.image_height || 0) * scale,
+                  transform: [{ translateY: -(original.top_y || 0) * scale }],
+                }}
+                resizeMode="cover"
+              />
+            </AnimatedReanimated.View>
+          </PanGestureHandler>
+        </AnimatedReanimated.View>
+      </PinchGestureHandler>
+    );
+  };
+
+  // Measured layout of each text element's box so it can be centered on the
+  // element's (x, y) anchor, matching the backend's middle-middle text anchor.
+  // Without this, boxes wider than the 120px minimum drift right/down.
+  const [elementSizes, setElementSizes] = useState<Record<string, { width: number; height: number }>>({});
+
+  // Measured text block sizes (the actual ink, not the padded touch area),
+  // used to project the feed crop bounds for the adaptive guides
+  const [textInkSizes, setTextInkSizes] = useState<Record<string, { width: number; height: number }>>({});
   
   // Animations
   const postButtonScale = useSharedValue(1);
   const postButtonOpacity = useSharedValue(1);
-  const longPressTriggeredRef = useRef(false);
 
   const maxLength = 500;
 
@@ -297,11 +543,22 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           });
           
           console.log('Background uploaded:', uploadResponse.data);
-          const fullUrl = uploadResponse.data.url.startsWith('http') 
-            ? uploadResponse.data.url 
-            : `http://192.168.1.158:8001${uploadResponse.data.url}`;
-            
+          const fullUrl = absoluteUrl(uploadResponse.data.url)!;
+
           setBackgroundImage(fullUrl);
+
+          // Preview renders the image with contentFit="cover" at scale 1.
+          // Record the cover factor (canvas / natural size) so handlePost can
+          // convert the gesture scale into the raw-pixel scale the backend
+          // expects when it composites the image.
+          Image.getSize(imageUri, (imgWidth, imgHeight) => {
+            const scaleToCover = Math.max(screenWidth / imgWidth, screenHeight / imgHeight);
+            console.log(`Image dimensions: ${imgWidth}x${imgHeight}, cover scale: ${scaleToCover}`);
+            setImageCoverScale(scaleToCover);
+          }, (error) => {
+            console.error('Failed to get image size:', error);
+            setImageCoverScale(1);
+          });
         } catch (error) {
           console.error('Background upload failed:', error);
           Toast.show({
@@ -313,10 +570,10 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           });
           return;
         }
-        
+
         // Reset image position and scale to center and full width
         resetImageBackground();
-        
+
         Toast.show({
           type: 'success',
           text1: 'Image background added!',
@@ -345,10 +602,35 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     imageBaseTranslateY.value = 0;
     setImageBackgroundScale(1);
     setImageBackgroundPosition({ x: 0, y: 0 });
+    setCropTop(CROP_INITIAL_TOP);
+    setCropBottom(CROP_INITIAL_BOTTOM);
+  };
+
+  const handleCropBarPan = (event: any, bar: 'top' | 'bottom') => {
+    const { state, translationY } = event.nativeEvent;
+    if (state === State.BEGAN) {
+      cropDragStart.current = { top: cropTop, bottom: cropBottom };
+    } else if (state === State.ACTIVE) {
+      if (bar === 'top') {
+        const next = cropDragStart.current.top + translationY;
+        setCropTop(Math.max(0, Math.min(next, cropBottom - CROP_MIN_BAND)));
+      } else {
+        const next = cropDragStart.current.bottom + translationY;
+        setCropBottom(Math.min(screenHeight, Math.max(next, cropTop + CROP_MIN_BAND)));
+      }
+    }
   };
 
   const getCurrentTextElement = () => {
     return textElements.find(el => el.id === selectedTextId) || textElements[0];
+  };
+
+  // Default ink checked against the live canvas color, so a saved red-ish
+  // background can never spawn red-on-red
+  const readableDefaultInk = (canvas: string) => {
+    const base = '#FF1A1A';
+    if (contrastRatio(hexToRgb(canvas), hexToRgb(base)) >= 3.0) return base;
+    return pickReadableColor(canvas, Colors.postColors, base);
   };
 
   const updateTextElement = (id: string, updates: Partial<TextElement>) => {
@@ -398,9 +680,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       
       console.log('✅ Sticker uploaded:', uploadResponse.data);
       // Convert relative URL to full URL
-      const fullUrl = uploadResponse.data.url.startsWith('http') 
-        ? uploadResponse.data.url 
-        : `http://192.168.1.158:8001${uploadResponse.data.url}`;
+      const fullUrl = absoluteUrl(uploadResponse.data.url)!;
       console.log('🔗 Full sticker URL:', fullUrl);
       return fullUrl;
       
@@ -587,13 +867,21 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         originalX: null,
         originalY: null,
         fontSize: 24,
-        color: '#FF1A1A',
-        fontFamily: 'arial-black',
+        color: readableDefaultInk(backgroundColor),
+        fontFamily: lastFontRef.current,
         hasBackground: false,
         backgroundColor: '#FFFFFF',
         backgroundMode: 'off',
-        capsLock: true,
+        capsLock: false,
         scale: 1,
+        letterSpacing: 0,
+        glow: false,
+        rainbow: false,
+        align: 'center',
+        bold: false,
+        italic: false,
+        underline: false,
+        listStyle: 'none',
       };
       
       setTextElements(prev => [...prev, newElement]);
@@ -658,14 +946,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     return { prefersSigned, style };
   };
 
-  const signaturePrefs = resolveSignaturePreference();
-  const tapPostMode: 'signed' | 'anonymous' = signaturePrefs.prefersSigned ? 'signed' : 'anonymous';
-  const longPressPostMode: 'signed' | 'anonymous' = signaturePrefs.prefersSigned ? 'anonymous' : 'signed';
-  const postHintText = signaturePrefs.prefersSigned
-    ? 'Tap to post with signature · Hold to go anonymous'
-    : 'Tap to post anonymously · Hold to sign';
-
-  const handlePost = async (mode: 'default' | 'signed' | 'anonymous' = 'default') => {
+  const handlePost = async () => {
     if (isPosting) {
       return;
     }
@@ -705,88 +986,51 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     
     setIsPosting(true);
 
-    const { prefersSigned, style: preferredStyle } = resolveSignaturePreference();
-    let shouldSign: boolean;
-    if (mode === 'signed') {
-      shouldSign = true;
-    } else if (mode === 'anonymous') {
-      shouldSign = false;
-    } else {
-      shouldSign = prefersSigned;
-    }
+    // Signing is the visible topbar toggle, previewed on the canvas
+    const shouldSign = FEATURES.signatures && signPost;
+    const signatureStyle = shouldSign ? resolveSignaturePreference().style : undefined;
 
-    const signatureStyle = shouldSign ? preferredStyle : undefined;
-
-    const postData: PostCreate = {
-      text_content: allText,
-      text_elements: currentElements.map(el => ({
-        content: el.content,
-        x: el.x,
-        y: el.y,
-        fontSize: Math.round(el.fontSize * el.scale), // Apply scale factor to get actual visual size
-        color: el.color,
-        fontFamily: el.fontFamily,
-        hasBackground: el.hasBackground,
-        backgroundColor: el.backgroundColor,
-      })),
-      sticker_elements: stickerElements.map(sticker => ({
-        id: sticker.id,
-        uri: sticker.uri,
-        x: sticker.x,
-        y: sticker.y,
-        width: sticker.width,
-        height: sticker.height,
-        scale: sticker.scale,
-        rotation: sticker.rotation,
-        shape: sticker.shape,
-      })),
-      font_choice: currentElements[0]?.fontFamily || 'arial-black',
-      font_size: Math.round((currentElements[0]?.fontSize || 24) * (currentElements[0]?.scale || 1)),
-      text_color: currentElements[0]?.color || '#FF1A1A',
-      background_color: backgroundColor,
-      background_gradient: backgroundGradient.length > 0 ? backgroundGradient : undefined,
-      background_image: backgroundImage || undefined,
-      background_image_scale: backgroundImage ? imageBackgroundScale : undefined,
-      background_image_position: backgroundImage ? imageBackgroundPosition : undefined,
-      has_outline: false,
-      outline_color: '#000000',
-      has_text_background: currentElements[0]?.hasBackground || false,
-      text_background_color: currentElements[0]?.hasBackground ? currentElements[0].backgroundColor : undefined,
-      canvas_width: Math.round(screenWidth),
-      canvas_height: Math.round(screenHeight),
-      repost_data: repostData ? {
-        original_post_id: repostData.originalPost.id,
-        screenshot_uri: repostData.screenshotUri,
-        // Simple repost geometry
-        repost_geometry: {
-          x: 0,  // Position on canvas
-          y: 0,  // Position on canvas
-          scale: 1.0, // Scale factor
-        },
-      } : undefined,
-      is_signed: shouldSign,
-      signature_style: signatureStyle,
-    };
+    // Pure payload construction: maps screen points onto the fixed logical
+    // canvas. Kept in buildPostPayload so the payload contract is testable
+    // from fixtures (npm test in frontend, contract test in backend).
+    const postData: PostCreate = buildPostPayload({
+      screenWidth,
+      screenHeight,
+      textElements: currentElements,
+      stickerElements,
+      backgroundColor,
+      backgroundGradient,
+      backgroundImage,
+      imageBackgroundScale,
+      imageBackgroundPosition,
+      imageCoverScale,
+      cropTop,
+      cropBottom,
+      isSigned: shouldSign,
+      signatureStyle,
+      repostData,
+      repostStripRect: stripRect,
+    });
 
     try {
       const response = await api.post(endpoints.createPost, postData);
-      
+
       // Success animation
       postButtonScale.value = withSpring(1.1, { duration: 200 });
-      
+
+      if (__DEV__ && response.data?.rendered_image_url) {
+        // Hold the composer open under the parity ghost; finishPost runs
+        // when the ghost is dismissed
+        setIsPosting(false);
+        setParityGhost({ uri: response.data.rendered_image_url, post: response.data });
+        return;
+      }
+
       setTimeout(() => {
         setIsPosting(false);
-        onPost?.(response.data);
-        onClose?.();
-        
-        Toast.show({
-          type: 'success',
-          text1: 'Posted!',
-          position: 'bottom',
-          visibilityTime: 2000,
-        });
+        finishPost(response.data);
       }, 300);
-      
+
     } catch (error: any) {
       console.error('Error creating post:', error);
       
@@ -803,14 +1047,52 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     }
   };
 
+  const finishPost = (post: any) => {
+    onPost?.(post);
+    onClose?.();
+    Toast.show({
+      type: 'success',
+      text1: 'Posted!',
+      position: 'bottom',
+      visibilityTime: 2000,
+    });
+  };
+
+  const renderParityGhost = () => {
+    if (!parityGhost) return null;
+    return (
+      <TouchableOpacity
+        style={[StyleSheet.absoluteFill, styles.parityGhostContainer]}
+        activeOpacity={1}
+        onPress={() => {
+          const ghost = parityGhost;
+          setParityGhost(null);
+          finishPost(ghost.post);
+        }}
+      >
+        <ExpoImage
+          source={{ uri: absoluteUrl(parityGhost.uri) }}
+          style={styles.parityGhostImage}
+          contentFit="fill"
+        />
+        <View style={styles.parityGhostBadge}>
+          <Text style={styles.parityGhostBadgeText}>
+            PARITY GHOST: server render at 50% over your canvas. Tap to continue.
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   const startEditingText = (id: string) => {
     console.log('🏁 startEditingText called for id:', id);
     setSelectedTextId(id);
     setIsEditingText(true);
     setScreenDarkened(true);
     setShowControlBar(true);
-    moveTextIntoViewForEditing(id);
-    
+    // Editing happens in a staged input above the controls (renderEditingInput);
+    // the element's canvas position is never moved for editing
+
     // Initialize local text content and font size with current element
     const element = textElements.find(el => el.id === id);
     if (element) {
@@ -821,27 +1103,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     console.log('✅ Edit state set: editing=true, darkened=true, controls=true');
   };
 
-  const moveTextIntoViewForEditing = (id: string) => {
-    const element = textElements.find(el => el.id === id);
-
-    if (element) {
-      element.originalX = element.x;
-      element.originalY = element.y;
-      
-      // Only move text if it's outside the visible area (with some margin)
-      const margin = 100;
-      const isOffScreen = element.x < margin || 
-                         element.x > screenWidth - margin || 
-                         element.y < margin || 
-                         element.y > screenHeight - margin;
-      
-      if (isOffScreen) {
-        element.x = screenWidth * 0.5;
-        element.y = screenHeight * 0.3;
-      }
-      // If text is already on-screen, leave it where it is
-    }
-  };
 
   const stopEditingText = () => {
     console.log('🛑 stopEditingText called');
@@ -863,10 +1124,57 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     console.log('✅ stopEditingText completed');
   };
 
+  // Two-stop vertical gradients (top -> bottom), rendered identically by
+  // the server's legacy gradient path. Long-press the bg button to cycle;
+  // a plain tap returns to solid colors.
+  const GRADIENT_PRESETS: string[][] = [
+    ['#FF1493', '#FFD700'],
+    ['#0000EE', '#00CED1'],
+    ['#9932CC', '#FF1A1A'],
+    ['#000000', '#4169E1'],
+    ['#32CD32', '#FFD700'],
+    ['#FF6347', '#8B008B'],
+  ];
+  const gradientIndexRef = useRef(-1);
+  const cycleGradient = () => {
+    gradientIndexRef.current = (gradientIndexRef.current + 1) % GRADIENT_PRESETS.length;
+    const preset = GRADIENT_PRESETS[gradientIndexRef.current];
+    setBackgroundGradient(preset);
+    // theming, contrast guards, and the repost rule key off the top stop
+    setBackgroundColor(preset[0]);
+    setTextElements(prev => prev.map(el => {
+      if (el.rainbow) return el;
+      if (contrastRatio(hexToRgb(preset[0]), hexToRgb(el.color)) >= 3.0) return el;
+      return { ...el, color: pickReadableColor(preset[0], Colors.postColors, el.color) };
+    }));
+  };
+
   const cycleBackgroundColor = () => {
-    const nextIndex = (currentBgIndex + 1) % backgroundOptions.length;
+    if (backgroundGradient.length > 0) {
+      // leaving gradient mode: fall back to the top stop as a solid
+      setBackgroundGradient([]);
+      gradientIndexRef.current = -1;
+      return;
+    }
+    let nextIndex = (currentBgIndex + 1) % backgroundOptions.length;
+    // Reposts may not reuse their parent's background color: the quote chip
+    // carries that color, so the repost must differ for the chip to read
+    if (repostData?.originalPost?.background_color === backgroundOptions[nextIndex]) {
+      nextIndex = (nextIndex + 1) % backgroundOptions.length;
+    }
+    const nextColor = backgroundOptions[nextIndex];
     setCurrentBgIndex(nextIndex);
-    setBackgroundColor(backgroundOptions[nextIndex]);
+    setBackgroundColor(nextColor);
+    lastBgRef.current = nextColor;
+    persistComposerPrefs();
+
+    // Keep text readable: any element whose color vanishes against the new
+    // background gets bumped to the next palette color that reads clearly
+    setTextElements(prev => prev.map(el => {
+      if (el.rainbow) return el;
+      if (contrastRatio(hexToRgb(nextColor), hexToRgb(el.color)) >= 3.0) return el;
+      return { ...el, color: pickReadableColor(nextColor, Colors.postColors, el.color) };
+    }));
   };
 
   const createNewTextElement = () => {
@@ -879,13 +1187,21 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       originalX: null,
       originalY: null,
       fontSize: 24,
-      color: '#FF1A1A',
-      fontFamily: 'arial-black',
+      color: readableDefaultInk(backgroundColor),
+      fontFamily: lastFontRef.current,
       hasBackground: false,
       backgroundColor: '#FFFFFF',
       backgroundMode: 'off',
-      capsLock: true,
+      capsLock: false,
       scale: 1,
+      letterSpacing: 0,
+      glow: false,
+      rainbow: false,
+      align: 'center',
+      bold: false,
+      italic: false,
+      underline: false,
+      listStyle: 'none',
     };
     setTextElements(prev => [...prev, newElement]);
     setSelectedTextId(newId);
@@ -894,6 +1210,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
 
   const getTextStyle = (element: TextElement) => {
     const fontConfig = FontChoices[element.fontFamily];
+    const fontFace = resolveFontFace(element.fontFamily, element.bold, element.italic);
+    const effectiveAlign = element.listStyle !== 'none' ? 'left' : element.align;
     
     let textColor = element.color;
     let bgColor = 'transparent';
@@ -911,18 +1229,92 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     return {
       fontSize: element.fontSize,
       color: textColor,
-      fontFamily: fontConfig.fontFamily,
+      fontFamily: fontFace,
       fontWeight: fontConfig.fontWeight as any,
-      textAlign: 'center' as const,
-      backgroundColor: bgColor,
-      paddingHorizontal: hasPadding ? 8 : 0,
+      textAlign: effectiveAlign,
+      textDecorationLine: element.underline ? 'underline' as const : 'none' as const,
+      // Chips render per-line via a nested span (staircase), not a block
+      backgroundColor: 'transparent',
+      paddingHorizontal: 0,
       paddingVertical: hasPadding ? 4 : 0,
-      borderRadius: hasPadding ? 4 : 0,
       textTransform: element.capsLock ? 'uppercase' : 'none' as any,
       includeFontPadding: false,
       textAlignVertical: 'center' as const,
+      letterSpacing: element.letterSpacing || 0,
+      // RN letter-spacing trails the last glyph; the server spaces between
+      // glyphs only. Shed the trailing unit so centered = centered ink.
+      marginRight: -(element.letterSpacing || 0),
+      opacity: element.opacity ?? 1,
+      // New-arch blend modes; matches the server's ImageChops compositing
+      ...(element.blendMode && element.blendMode !== 'normal'
+        ? ({ mixBlendMode: element.blendMode } as any)
+        : {}),
+      // Glow previews as a zero-offset text shadow; the server renders a
+      // blurred ink layer with a matching radius
+      ...(element.glow
+        ? {
+            textShadowColor: textColor,
+            textShadowOffset: { width: 0, height: 0 },
+            textShadowRadius: Math.max(2, element.fontSize * 0.12),
+          }
+        : {}),
       transform: [{ scale: element.scale }], // Apply absolute scale transform
     };
+  };
+
+  // Rainbow text renders per-character color spans, cycling the same palette
+  // the server uses (spaces do not advance the cycle)
+  const applyListPrefixes = (text: string, listStyle: TextElement['listStyle']) => {
+    if (listStyle === 'none' || !text) return text;
+    let counter = 0;
+    return text.split('\n').map(line => {
+      if (!line.trim()) return line;
+      if (listStyle === 'number') {
+        counter += 1;
+        return `${counter}. ` + line;
+      }
+      return LIST_MARKERS[listStyle] + line;
+    }).join('\n');
+  };
+
+  const anyElementHasInk = () =>
+    textElements.some(el => (getDisplayText(el) || '').trim().length > 0);
+
+  // Placeholder at half strength, scaled by the element's own opacity so
+  // pre-typing opacity taps give immediate feedback
+  const placeholderNode = (element: TextElement) => {
+    const alpha = Math.round(128 * (element.opacity ?? 1)).toString(16).padStart(2, '0');
+    return <Text style={{ color: (element.color || '#1B1B1B') + alpha }}>Type...</Text>;
+  };
+
+  const renderDisplayContent = (element: TextElement) => {
+    const showPlaceholder = !getDisplayText(element) && element.id === '1' && !isEditingText && !anyElementHasInk();
+    if (showPlaceholder) return placeholderNode(element);
+    const raw = getDisplayText(element) || '';
+    const text = applyListPrefixes(raw, element.listStyle);
+    let content: React.ReactNode = text;
+    if (element.rainbow && text) {
+      let colorIndex = 0;
+      content = text.split('').map((ch, i) => {
+        if (/\s/.test(ch)) return ch;
+        const color = Colors.rainbowPalette[colorIndex++ % Colors.rainbowPalette.length];
+        return (
+          <Text key={i} style={{ color }}>
+            {ch}
+          </Text>
+        );
+      });
+    }
+    // Nested span background highlights each rendered line (staircase),
+    // matching the server's per-line chips
+    const chipColor =
+      element.backgroundMode === 'white' ? '#FFFFFF'
+      : element.backgroundMode === 'inverted' ? element.color
+      : null;
+    if (chipColor && text) {
+      return <Text style={{ backgroundColor: chipColor }}>{content}</Text>;
+    }
+    return content;
   };
 
   // Keep the start positions per element (text and stickers)
@@ -1024,11 +1416,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       justDeletedRef.current = false;
       const el = textElements.find(e => e.id === elementId);
       if (el) dragStart.current[elementId] = { x: el.x, y: el.y };
-      // Show trash can when starting to drag a text element
-      if (!backgroundImage) {
-        console.log('📝 Text drag BEGAN, showing trash can');
-        setIsDraggingElement(true);
-      }
+      // Trash can appears only after real movement (see handlePanGesture)
     }
     if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
       console.log('📝 Text drag END, hiding trash can');
@@ -1043,12 +1431,17 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     if (!start) return;
 
     const { translationX, translationY, absoluteX, absoluteY } = event.nativeEvent;
-    
+
+    // Show the trash can only once this is unambiguously a drag
+    if (!isDraggingElement && Math.hypot(translationX, translationY) > 12) {
+      setIsDraggingElement(true);
+    }
+
     // Check for deletion using shared logic
     if (checkAndHandleDeletion(absoluteX, absoluteY, elementId, 'text')) {
       return; // Element was deleted, stop processing
     }
-    
+
     // Normal drag behavior
     const newX = start.x + translationX;
     const newY = start.y + translationY;
@@ -1059,15 +1452,21 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     });
   };
 
+  // Pinch scale is computed from the scale at gesture start (base), not from
+  // the last frame's value - compounding per-frame caused jitter and stuck
+  // clamping at the extremes
+  const textPinchBase = useRef<Record<string, number>>({});
   const handlePinchGesture = (event: any, elementId: string) => {
-    if (event.nativeEvent.state === State.ACTIVE) {
+    const { state, scale } = event.nativeEvent;
+    if (isEditingText) return;
+    if (state === State.BEGAN) {
       const element = textElements.find(el => el.id === elementId);
-      if (element && !isEditingText) {
-        const newScale = Math.max(0.3, Math.min(5.0, element.scale * event.nativeEvent.scale));
-        updateTextElement(elementId, {
-          scale: newScale, // Use scale instead of fontSize for absolute scaling
-        });
-      }
+      textPinchBase.current[elementId] = element?.scale ?? 1;
+    } else if (state === State.ACTIVE) {
+      const base = textPinchBase.current[elementId] ?? 1;
+      updateTextElement(elementId, {
+        scale: Math.max(0.3, Math.min(5.0, base * scale)),
+      });
     }
   };
 
@@ -1084,16 +1483,16 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       if (state === State.BEGAN) {
         // Reset deletion flag at start of new gesture
         justDeletedRef.current = false;
-        console.log('🎬 BEGAN - Reset deletion flag');
-        
-        // Only show trash can if we're starting to drag a selected element (not background)
-        if ((selectedStickerId || selectedTextId) && !backgroundImage) {
-          console.log('🎬 Starting element drag:', { selectedStickerId, selectedTextId, backgroundImage });
-          setIsDraggingElement(true);
-        } else {
-          console.log('🎬 NOT starting element drag:', { selectedStickerId, selectedTextId, backgroundImage });
-        }
       } else if (state === State.ACTIVE) {
+        // Trash can appears only once a selected element is actually dragged
+        if (
+          !isDraggingElement &&
+          (selectedStickerId || selectedTextId) &&
+          !backgroundImage &&
+          Math.hypot(translationX, translationY) > 12
+        ) {
+          setIsDraggingElement(true);
+        }
         if (isDraggingElement && !justDeletedRef.current && (selectedStickerId || selectedTextId)) {
           // Check for deletion using shared logic
           const elementId = selectedStickerId || selectedTextId || '';
@@ -1115,7 +1514,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       }
       
       // Check for swipe up (image picker) - prioritize this over element dragging
-      if (state === State.ACTIVE && translationY < -50 && velocityY < -500 && !isPickerOpen) {
+      if (FEATURES.imageUploads && state === State.ACTIVE && translationY < -50 && velocityY < -500 && !isPickerOpen) {
         console.log('✅ Swipe up detected, launching image picker');
         pickImageBackground();
         return;
@@ -1270,10 +1669,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           >
             <ExpoImage
               source={{ uri: sticker.uri }}
-              style={[
-                styles.stickerImage,
-                { borderRadius: sticker.shape === 'rounded' ? 12 : sticker.shape === 'square' ? 0 : 8 }
-              ]}
+              style={styles.stickerImage}
               contentFit={sticker.shape === 'full' ? 'contain' : 'cover'}
             />
           </TouchableOpacity>
@@ -1288,17 +1684,33 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         <PinchGestureHandler
           key={`pinch-${element.id}`}
           onGestureEvent={(event) => handlePinchGesture(event, element.id)}
+          onHandlerStateChange={(event) => handlePinchGesture(event, element.id)}
           enabled={!isEditingText}
         >
-          <AnimatedReanimated.View 
+          <AnimatedReanimated.View
             style={[
               styles.textElementTouchArea, // Much larger touch area for pinch
               {
-                left: element.x - 60,
-                top: element.y - 60,
+                // Center the measured box on the (x, y) anchor
+                left: element.x - (elementSizes[element.id]?.width ?? 120) / 2,
+                top: element.y - (elementSizes[element.id]?.height ?? 120) / 2,
               },
               selectedTextId === element.id ? deletionAnimatedStyle : {},
             ]}
+            onLayout={(event) => {
+              // While this element is being edited its display collapses to
+              // the touch-area minimum; recording that stale size made the
+              // text jump sideways on commit. Keep the last real measurement.
+              if (isEditingText && selectedTextId === element.id) return;
+              const { width, height } = event.nativeEvent.layout;
+              setElementSizes(prev => {
+                const current = prev[element.id];
+                if (current && Math.abs(current.width - width) < 1 && Math.abs(current.height - height) < 1) {
+                  return prev;
+                }
+                return { ...prev, [element.id]: { width, height } };
+              });
+            }}
           >
             <PanGestureHandler
               onGestureEvent={(event) => handlePanGesture(event, element.id)}
@@ -1307,37 +1719,31 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             >
               <AnimatedReanimated.View style={styles.textElement}>
                 {isEditingText && selectedTextId === element.id ? (
-                  <TextInput
-                    key={`input-${element.id}-${isEditingText}`} // Stable key for re-rendering
-                    style={[
-                      getTextStyle(element), 
-                      { 
-                        fontSize: currentFontSize, // Use current editing font size
-                        width: screenWidth * 0.9,
-                        maxWidth: screenWidth * 0.9,
-                        position: 'absolute',
-                        left: -(screenWidth * 0.9) / 2,
-                        top: -currentFontSize / 2,
-                        padding: 0, // Remove any default padding
-                        margin: 0, // Remove any default margin
-                        textAlign: 'center', // Ensure centering
-                      }
-                    ]}
-                    value={getDisplayText(element)}
-                    onChangeText={(text) => handleTextInputChange(element.id, text)}
-                    autoFocus
-                    multiline={true} // Enable multiline for wrapping
-                    textAlign="center"
-                    placeholder="TYPE HERE..."
-                    placeholderTextColor="rgba(255,255,255,0.5)"
-                  />
+                  // The editing input is rendered at canvas level (see
+                  // renderEditingInput) so it centers on the element anchor
+                  // without depending on this nested box's geometry
+                  null
                 ) : (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     onPress={() => startEditingText(element.id)}
                     onLongPress={() => deleteTextElement(element.id)}
                   >
-                    <Text style={getTextStyle(element)}>
-                      {getDisplayText(element) || (element.id === '1' ? "TAP TO ADD TEXT" : "")}
+                    <Text
+                      style={getTextStyle(element)}
+                      onLayout={(event) => {
+                        // True text block size (unlike the 120px-min touch
+                        // area), used by the adaptive crop guides
+                        const { width, height } = event.nativeEvent.layout;
+                        setTextInkSizes(prev => {
+                          const current = prev[element.id];
+                          if (current && Math.abs(current.width - width) < 1 && Math.abs(current.height - height) < 1) {
+                            return prev;
+                          }
+                          return { ...prev, [element.id]: { width, height } };
+                        });
+                      }}
+                    >
+                      {renderDisplayContent(element)}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -1347,6 +1753,69 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         </PinchGestureHandler>
       );
     });
+  };
+
+  // Staged editing: centered in the negative space between the top of the
+  // screen and the config row. A styled MIRROR shows exactly what will render
+  // (chip wrapping the text block, rainbow, glow) while an invisible-text
+  // TextInput overlays it to handle typing and the caret. The element's real
+  // canvas (x, y) is untouched; display text returns there on commit.
+  const EDITING_STAGE_BOTTOM = 395; // top edge of the config row area
+  const renderEditingInput = () => {
+    if (!isEditingText || !selectedTextId) return null;
+    const element = textElements.find(el => el.id === selectedTextId);
+    if (!element) return null;
+
+    const inputWidth = screenWidth * 0.9;
+    const content = getDisplayText(element);
+    const textStyle = [
+      getTextStyle(element),
+      { fontSize: currentFontSize, maxWidth: inputWidth },
+    ];
+    const wrapperAlign =
+      element.align === 'left' ? 'flex-start' as const
+      : element.align === 'right' ? 'flex-end' as const
+      : 'center' as const;
+
+    return (
+      <View
+        style={[styles.editingStage, { left: (screenWidth - inputWidth) / 2, width: inputWidth }]}
+        pointerEvents="box-none"
+      >
+        <View style={{ alignItems: wrapperAlign }} pointerEvents="box-none">
+          {/* Styled mirror - the source of visual truth while editing */}
+          <Text
+            style={[
+              textStyle,
+              !content && { color: 'rgba(255,255,255,0.5)' },
+            ]}
+            pointerEvents="none"
+          >
+            {content ? renderDisplayContent(element) : (isEditingText || anyElementHasInk()) ? '' : placeholderNode(element)}
+          </Text>
+          {/* Invisible-text input on top: caret and typing only */}
+          <TextInput
+            key={`editing-${element.id}`}
+            style={[
+              textStyle,
+              StyleSheet.absoluteFillObject,
+              {
+                width: inputWidth,
+                color: 'transparent',
+                backgroundColor: 'transparent',
+                textShadowColor: 'transparent',
+              },
+            ]}
+            selectionColor={element.rainbow ? Colors.accent : element.color}
+            value={content}
+            onChangeText={(text) => handleTextInputChange(element.id, text)}
+            autoFocus
+            multiline={true}
+            textAlign={element.align}
+          />
+        </View>
+      </View>
+    );
   };
 
   // Image background animated style
@@ -1372,6 +1841,100 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           contentFit="cover"
         />
       </AnimatedReanimated.View>
+    );
+  };
+
+  // Crop bars for image backgrounds. Rendered outside the canvas gesture
+  // tree so their pans never compete with the background drag/pinch.
+  const renderCropBars = () => {
+    if (!backgroundImage || isEditingText) return null;
+
+    return (
+      <>
+        {/* Dimmed regions outside the band = cropped away in the feed */}
+        {cropTop > 0 && (
+          <View
+            pointerEvents="none"
+            style={[styles.cropDim, { top: 0, height: cropTop }]}
+          />
+        )}
+        {cropBottom < screenHeight && (
+          <View
+            pointerEvents="none"
+            style={[styles.cropDim, { top: cropBottom, height: screenHeight - cropBottom }]}
+          />
+        )}
+
+        <PanGestureHandler
+          onGestureEvent={(event) => handleCropBarPan(event, 'top')}
+          onHandlerStateChange={(event) => handleCropBarPan(event, 'top')}
+        >
+          <AnimatedReanimated.View style={[styles.cropBarHitArea, { top: cropTop - 22 }]}>
+            <View style={styles.cropBarLine} />
+            <View style={styles.cropBarGrip} />
+          </AnimatedReanimated.View>
+        </PanGestureHandler>
+
+        <PanGestureHandler
+          onGestureEvent={(event) => handleCropBarPan(event, 'bottom')}
+          onHandlerStateChange={(event) => handleCropBarPan(event, 'bottom')}
+        >
+          <AnimatedReanimated.View style={[styles.cropBarHitArea, { top: cropBottom - 22 }]}>
+            <View style={styles.cropBarLine} />
+            <View style={styles.cropBarGrip} />
+          </AnimatedReanimated.View>
+        </PanGestureHandler>
+      </>
+    );
+  };
+
+  // Projected feed crop for the current canvas, mirroring the backend's
+  // bounds math: content extent + margin, capped at the max post aspect
+  // (5:4 portrait) centered on the content
+  const MAX_POST_ASPECT = 1.25; // height <= 1.25 x width
+  const getProjectedCropBounds = () => {
+    const measured = textElements.filter(
+      el => el.content.trim() && textInkSizes[el.id]
+    );
+    if (measured.length === 0) return null;
+
+    let top = Infinity;
+    let bottom = -Infinity;
+    measured.forEach(el => {
+      const height = textInkSizes[el.id].height * el.scale;
+      top = Math.min(top, el.y - height / 2);
+      bottom = Math.max(bottom, el.y + height / 2);
+    });
+
+    const margin = (40 * screenWidth) / CANVAS_WIDTH; // backend margin in points
+    top = Math.max(0, top - margin);
+    bottom = Math.min(screenHeight, bottom + margin);
+
+    const maxHeight = screenWidth * MAX_POST_ASPECT;
+    if (bottom - top > maxHeight) {
+      const center = (top + bottom) / 2;
+      top = Math.max(0, center - maxHeight / 2);
+      bottom = Math.min(screenHeight, top + maxHeight);
+    }
+
+    return { top, bottom };
+  };
+
+  // Adaptive crop guides: hairlines showing where the feed will crop
+  const renderCropGuides = () => {
+    if (isEditingText || backgroundImage) return null;
+    const bounds = getProjectedCropBounds();
+    if (!bounds) return null;
+    if (bounds.top <= 0 && bounds.bottom >= screenHeight) return null;
+
+    return (
+      <>
+        {/* Dim what the feed will crop away */}
+        <View pointerEvents="none" style={[styles.cropOutsideDim, { top: 0, height: bounds.top }]} />
+        <View pointerEvents="none" style={[styles.cropOutsideDim, { top: bounds.bottom, bottom: 0 }]} />
+        <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.top }]} />
+        <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.bottom }]} />
+      </>
     );
   };
 
@@ -1405,7 +1968,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           >
             <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
               {/* Repost image layer */}
-              <RepostImageLayer uri={repostData?.screenshotUri} />
           
               {/* Dim overlay lives ABOVE the image but BELOW text */}
               {screenDarkened && <View style={styles.screenOverlay} pointerEvents="none" />}
@@ -1416,6 +1978,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
                 onPress={handleCanvasTap}
                 activeOpacity={1}
               >
+                {renderRepostLayer()}
                 {renderEditableText()}
                 {renderStickers()}
               </TouchableOpacity>
@@ -1455,16 +2018,44 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         
         {/* Right - Controls */}
         <View style={styles.topMenuRight}>
-          {/* Sticker Button */}
-          <TouchableOpacity style={styles.topMenuButton} onPress={pickImageSticker}>
-            <Ionicons name="images" size={20} color="white" />
+          {FEATURES.imageUploads && (
+            <>
+              {/* Image Background Button (also reachable via swipe up) */}
+              <TouchableOpacity style={styles.topMenuButton} onPress={pickImageBackground}>
+                <Ionicons name="image" size={20} color="white" />
+              </TouchableOpacity>
+
+              {/* Sticker Button */}
+              <TouchableOpacity style={styles.topMenuButton} onPress={pickImageSticker}>
+                <Ionicons name="images" size={20} color="white" />
+              </TouchableOpacity>
+            </>
+          )}
+
+          {/* Background: tap cycles solids, long-press cycles gradients */}
+          <TouchableOpacity
+            style={styles.topMenuButton}
+            onPress={cycleBackgroundColor}
+            onLongPress={cycleGradient}
+            delayLongPress={350}
+          >
+            {backgroundGradient.length > 0 ? (
+              <LinearGradient colors={backgroundGradient as [string, string]} style={styles.backgroundPreview} />
+            ) : (
+              <View style={[styles.backgroundPreview, { backgroundColor }]} />
+            )}
           </TouchableOpacity>
-          
-          {/* Background Color Cycle */}
-          <TouchableOpacity style={styles.topMenuButton} onPress={cycleBackgroundColor}>
-            <View style={[styles.backgroundPreview, { backgroundColor }]} />
-          </TouchableOpacity>
-          
+
+          {/* Signature toggle: previews as a band on the canvas */}
+          {FEATURES.signatures && (
+            <TouchableOpacity
+              style={[styles.topMenuButton, signPost && styles.topMenuButtonActive]}
+              onPress={() => setSignPost(v => !v)}
+            >
+              <Ionicons name="create" size={20} color={signPost ? Colors.accent : 'white'} />
+            </TouchableOpacity>
+          )}
+
           {/* Text Button */}
           <TouchableOpacity style={styles.topMenuButton} onPress={createNewTextElement}>
             <Text style={styles.topMenuText}>Text</Text>
@@ -1474,114 +2065,260 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     );
   };
 
+  // Single config row: every button changes the value in place (cycle or
+  // toggle) - no selector rows
   const renderBottomControlBar = () => {
     if (!showControlBar) return null;
-    
+    const el = getCurrentTextElement();
+    if (!el) return null;
+
+    const fontKeys = Object.keys(FontChoices) as FontChoice[];
+    const fontConfig = FontChoices[el.fontFamily];
+
+    const cycleFont = () => {
+      const next = fontKeys[(fontKeys.indexOf(el.fontFamily) + 1) % fontKeys.length];
+      updateTextElement(el.id, { fontFamily: next });
+      rememberFont(next);
+    };
+
+    const cycleColor = () => {
+      // Palette colors in order, then rainbow, then back to the start
+      if (el.rainbow) {
+        updateTextElement(el.id, { rainbow: false, color: Colors.postColors[1] });
+        return;
+      }
+      const index = Colors.postColors.indexOf(el.color);
+      if (index === Colors.postColors.length - 1 || index === -1) {
+        updateTextElement(el.id, { rainbow: true });
+      } else {
+        updateTextElement(el.id, { color: Colors.postColors[index + 1] });
+      }
+    };
+
+    const cycleAlign = () => {
+      const next = TEXT_ALIGNMENTS[(TEXT_ALIGNMENTS.indexOf(el.align) + 1) % TEXT_ALIGNMENTS.length];
+      updateTextElement(el.id, { align: next });
+    };
+
+    const cycleSpacing = () => {
+      const values = LETTER_SPACING_PRESETS.map(p => p.value);
+      const next = values[(values.indexOf(el.letterSpacing || 0) + 1) % values.length];
+      updateTextElement(el.id, { letterSpacing: next });
+    };
+
+    const cycleOpacity = () => {
+      const steps = [1, 0.7, 0.45, 0.25];
+      const current = el.opacity ?? 1;
+      const idx = steps.findIndex(v => Math.abs(v - current) < 0.01);
+      updateTextElement(el.id, { opacity: steps[(idx + 1) % steps.length] });
+    };
+
+    const cycleBlend = () => {
+      const modes = ['normal', 'multiply', 'screen', 'overlay', 'difference'] as const;
+      const idx = modes.indexOf(el.blendMode || 'normal');
+      updateTextElement(el.id, { blendMode: modes[(idx + 1) % modes.length] });
+    };
+
+    const cycleChip = () => {
+      const nextMode = el.backgroundMode === 'off' ? 'white'
+        : el.backgroundMode === 'white' ? 'inverted' : 'off';
+      updateTextElement(el.id, { backgroundMode: nextMode });
+    };
+
+    const variants = (FontChoices[el.fontFamily] as any).variants || {};
+    const canBold = !!(variants.bold || variants.boldItalic);
+    const canItalic = !!(variants.italic || variants.boldItalic);
+
+    const cycleList = () => {
+      const next = LIST_STYLES[(LIST_STYLES.indexOf(el.listStyle) + 1) % LIST_STYLES.length];
+      updateTextElement(el.id, { listStyle: next });
+    };
+
     return (
       <View style={styles.bottomControlContainer}>
-        {/* Floating Selection Menu */}
-        {renderFloatingSelectionMenu()}
-        
-        {/* Control Bar */}
-        <View style={styles.bottomControlBar}>
-          <TouchableOpacity 
-            style={[styles.controlOption, activeControlOption === 'font' && styles.controlOptionActive]}
-            onPress={() => {
-              console.log('🔤 Font control pressed, current option:', activeControlOption);
-              setActiveControlOption('font');
-            }}
-          >
-            <Ionicons name="text" size={20} color={activeControlOption === 'font' ? Colors.accent : 'white'} />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={[styles.bottomControlBar, { flexGrow: 1, justifyContent: 'center' }]}
+          keyboardShouldPersistTaps="always"
+        >
+          {/* Font: shows and cycles the typeface */}
+          <TouchableOpacity style={styles.controlOption} onPress={cycleFont}>
+            <Text
+              style={[styles.controlFontLabel, {
+                fontFamily: fontConfig.fontFamily,
+                fontWeight: fontConfig.fontWeight as any,
+              }]}
+            >
+              Aa
+            </Text>
           </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.controlOption, activeControlOption === 'color' && styles.controlOptionActive]}
-            onPress={() => {
-              console.log('🎨 Color control pressed, current option:', activeControlOption);
-              setActiveControlOption('color');
-            }}
-          >
-            <Ionicons name="color-palette" size={20} color={activeControlOption === 'color' ? Colors.accent : 'white'} />
+
+          {/* Color: swatch shows current, tap cycles palette then rainbow */}
+          <TouchableOpacity style={styles.controlOption} onPress={cycleColor}>
+            {el.rainbow ? (
+              <LinearGradient
+                colors={Colors.rainbowPalette as [string, string, ...string[]]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.controlColorSwatch}
+              />
+            ) : (
+              <View style={[styles.controlColorSwatch, { backgroundColor: el.color }]} />
+            )}
           </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.controlOption, getCurrentTextElement()?.capsLock && styles.controlOptionActive]}
-            onPress={() => {
-              const current = getCurrentTextElement();
-              if (current) updateTextElement(current.id, { capsLock: !current.capsLock });
-            }}
-          >
-            <Ionicons name="text-outline" size={20} color={getCurrentTextElement()?.capsLock ? Colors.accent : 'white'} />
+
+          {/* Justification cycle */}
+          <TouchableOpacity style={styles.controlOption} onPress={cycleAlign}>
+            <MaterialIcons
+              name={el.align === 'left' ? 'format-align-left' : el.align === 'right' ? 'format-align-right' : 'format-align-center'}
+              size={20}
+              color="white"
+            />
           </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.controlOption, getCurrentTextElement()?.backgroundMode !== 'off' && styles.controlOptionActive]}
-            onPress={() => {
-              const current = getCurrentTextElement();
-              if (current) {
-                const nextMode = current.backgroundMode === 'off' ? 'white' : 
-                               current.backgroundMode === 'white' ? 'inverted' : 'off';
-                updateTextElement(current.id, { backgroundMode: nextMode });
-              }
-            }}
+
+          {/* Text chip background cycle: off / white / inverted */}
+          <TouchableOpacity
+            style={[styles.controlOption, el.backgroundMode !== 'off' && styles.controlOptionActive]}
+            onPress={cycleChip}
           >
-            <Ionicons name="color-fill" size={20} color={getCurrentTextElement()?.backgroundMode !== 'off' ? Colors.accent : 'white'} />
+            <Ionicons name="color-fill" size={20} color={el.backgroundMode !== 'off' ? Colors.accent : 'white'} />
           </TouchableOpacity>
-        </View>
+
+          {/* Glow toggle */}
+          <TouchableOpacity
+            style={[styles.controlOption, el.glow && styles.controlOptionActive]}
+            onPress={() => updateTextElement(el.id, { glow: !el.glow })}
+          >
+            <Ionicons name="sunny" size={20} color={el.glow ? Colors.accent : 'white'} />
+          </TouchableOpacity>
+
+          {/* Letter spacing cycle */}
+          <TouchableOpacity
+            style={[styles.controlOption, (el.letterSpacing || 0) > 0 && styles.controlOptionActive]}
+            onPress={cycleSpacing}
+          >
+            <Text
+              style={[styles.controlSpacingLabel, {
+                color: (el.letterSpacing || 0) > 0 ? Colors.accent : 'white',
+                letterSpacing: Math.min(el.letterSpacing || 0, 4),
+                marginRight: -Math.min(el.letterSpacing || 0, 4),
+              }]}
+            >
+              AB
+            </Text>
+          </TouchableOpacity>
+
+          {/* Opacity: cycles 100 / 70 / 45 / 25 percent */}
+          <TouchableOpacity
+            style={[styles.controlOption, (el.opacity ?? 1) < 1 && styles.controlOptionActive]}
+            onPress={cycleOpacity}
+          >
+            <MaterialIcons
+              name="opacity"
+              size={24}
+              color={(el.opacity ?? 1) < 1 ? Colors.accent : 'white'}
+            />
+          </TouchableOpacity>
+
+          {/* Blend mode: normal / multiply / screen / difference */}
+          <TouchableOpacity
+            style={[styles.controlOption, (el.blendMode || 'normal') !== 'normal' && styles.controlOptionActive]}
+            onPress={cycleBlend}
+          >
+            <MaterialIcons
+              name="layers"
+              size={24}
+              color={(el.blendMode || 'normal') !== 'normal' ? Colors.accent : 'white'}
+            />
+          </TouchableOpacity>
+
+          {/* Bold/italic appear only for families with the real face */}
+          {canBold && (
+            <TouchableOpacity
+              style={[styles.controlOption, el.bold && styles.controlOptionActive]}
+              onPress={() => updateTextElement(el.id, { bold: !el.bold })}
+            >
+              <Text style={[styles.controlFormatLabel, { color: el.bold ? Colors.accent : 'white' }]}>B</Text>
+            </TouchableOpacity>
+          )}
+
+          {canItalic && (
+            <TouchableOpacity
+              style={[styles.controlOption, el.italic && styles.controlOptionActive]}
+              onPress={() => updateTextElement(el.id, { italic: !el.italic })}
+            >
+              <Text style={[styles.controlFormatLabel, styles.controlItalicLabel, { color: el.italic ? Colors.accent : 'white' }]}>I</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Underline */}
+          <TouchableOpacity
+            style={[styles.controlOption, el.underline && styles.controlOptionActive]}
+            onPress={() => updateTextElement(el.id, { underline: !el.underline })}
+          >
+            <Text style={[styles.controlFormatLabel, {
+              color: el.underline ? Colors.accent : 'white',
+              textDecorationLine: 'underline',
+            }]}>U</Text>
+          </TouchableOpacity>
+
+          {/* List cycle: none, bullet, dash, star, numbered */}
+          <TouchableOpacity
+            style={[styles.controlOption, el.listStyle !== 'none' && styles.controlOptionActive]}
+            onPress={cycleList}
+          >
+            {el.listStyle === 'dash' || el.listStyle === 'star' ? (
+              <Text style={[styles.controlFormatLabel, { color: Colors.accent }]}>
+                {el.listStyle === 'dash' ? '-' : '*'}
+              </Text>
+            ) : (
+              <MaterialIcons
+                name={el.listStyle === 'number' ? 'format-list-numbered' : 'format-list-bulleted'}
+                size={20}
+                color={el.listStyle !== 'none' ? Colors.accent : 'white'}
+              />
+            )}
+          </TouchableOpacity>
+        </ScrollView>
       </View>
     );
   };
 
+  const SLIDER_MIN_FONT = 8;
+  const SLIDER_MAX_FONT = 72;
+  const SLIDER_HEIGHT = 200;
+  const sliderBaseFont = useRef(24);
+
   const renderScaleSlider = () => {
     if (!isEditingText) return null;
-    
+
+    const fraction = (currentFontSize - SLIDER_MIN_FONT) / (SLIDER_MAX_FONT - SLIDER_MIN_FONT);
+
     return (
       <View style={styles.scaleSliderContainer}>
-        {/* Instagram-style tapered slider */}
-        <View style={styles.scaleSliderTrack}>
-          {/* Create the cone/taper effect with multiple segments */}
-          {Array.from({ length: 20 }, (_, index) => {
-            const progress = index / 19; // 0 to 1
-            const width = 2 + (progress * 8); // 2px to 10px width (taper effect)
-            const opacity = 0.3 + (progress * 0.4); // Fade effect
-            const isActive = ((currentFontSize - 8) / (72 - 8)) >= progress;
-            
-            return (
-              <View
-                key={index}
-                style={[
-                  styles.scaleSliderSegment,
-                  {
-                    width: width,
-                    backgroundColor: isActive 
-                      ? `rgba(255, 255, 255, ${opacity + 0.4})` 
-                      : `rgba(255, 255, 255, ${opacity})`,
-                  }
-                ]}
-              />
-            );
-          })}
-        </View>
-        
-        {/* Draggable slider handle with larger touch area */}
+        {/* Smooth wedge, wide at the top (big text up) */}
+        <View style={styles.scaleSliderWedge} pointerEvents="none" />
+
         <PanGestureHandler
           onGestureEvent={(event) => {
-            const { translationY } = event.nativeEvent;
-            const sliderHeight = 200; // Height of the slider
-            const minFontSize = 8;  // Much wider range
-            const maxFontSize = 72; // Much wider range
-            const progress = Math.max(0, Math.min(1, 1 - (translationY / sliderHeight)));
-            const newFontSize = minFontSize + (progress * (maxFontSize - minFontSize));
-            setCurrentFontSize(newFontSize);
+            // Relative to the size at gesture start - no jumping, no jitter,
+            // and the handle always moves off the extremes
+            const delta = (-event.nativeEvent.translationY / SLIDER_HEIGHT) * (SLIDER_MAX_FONT - SLIDER_MIN_FONT);
+            const next = sliderBaseFont.current + delta;
+            setCurrentFontSize(Math.max(SLIDER_MIN_FONT, Math.min(SLIDER_MAX_FONT, next)));
+          }}
+          onHandlerStateChange={(event) => {
+            if (event.nativeEvent.state === State.BEGAN) {
+              sliderBaseFont.current = currentFontSize;
+            }
           }}
         >
           <View style={styles.scaleSliderTouchArea}>
-            <View 
+            <View
               style={[
                 styles.scaleSliderHandle,
-                { 
-                  bottom: `${((currentFontSize - 8) / (72 - 8)) * 85}%` // Convert 8-72 range to 0-85% position
-                }
+                { top: `${(1 - fraction) * 85}%` },
               ]}
             />
           </View>
@@ -1590,106 +2327,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     );
   };
 
-  const renderFloatingSelectionMenu = () => {
-    const currentElement = getCurrentTextElement();
-    console.log('🎛️ renderFloatingSelectionMenu called:', { 
-      currentElement: currentElement?.id, 
-      activeControlOption,
-      showControlBar 
-    });
-    
-    if (!currentElement) {
-      console.log('❌ No current element found');
-      return null;
-    }
-
-    return (
-      <View style={styles.floatingSelectionMenu}>
-        {activeControlOption === 'font' && (
-          <>
-            {console.log('🔤 Rendering font selection')}
-            {renderFontSelection(currentElement)}
-          </>
-        )}
-        {activeControlOption === 'color' && (
-          <>
-            {console.log('🎨 Rendering color selection')}
-            {renderColorSelection(currentElement)}
-          </>
-        )}
-      </View>
-    );
-  };
-
-  const renderFontSelection = (element: TextElement) => (
-    <ScrollView 
-      horizontal 
-      showsHorizontalScrollIndicator={false} 
-      style={styles.fontScrollView}
-      keyboardShouldPersistTaps="always"
-    >
-      {Object.entries(FontChoices).map(([key, font]) => (
-        <TouchableOpacity
-          key={key}
-          style={[styles.fontOption, element.fontFamily === key && styles.fontOptionActive]}
-          onPress={() => {
-            console.log('🔤 Font selected:', key, 'for element:', element.id);
-            updateTextElement(element.id, { fontFamily: key as 'arial-black' | 'crimson-text' | 'papyrus' | 'impact' });
-          }}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.fontOptionText, { fontFamily: font.fontFamily, fontWeight: font.fontWeight as any }]}>
-            {font.name || key}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
-  );
-
-  const renderColorSelection = (element: TextElement) => (
-    <ScrollView 
-      horizontal 
-      showsHorizontalScrollIndicator={false} 
-      style={styles.colorScrollView}
-      keyboardShouldPersistTaps="always"
-    >
-      {Colors.postColors.map((color, index) => (
-        <TouchableOpacity
-          key={index}
-          style={[styles.colorSwatch, { backgroundColor: color }, element.color === color && styles.colorSwatchActive]}
-          onPress={() => {
-            console.log('🎨 Color selected:', color, 'for element:', element.id);
-            updateTextElement(element.id, { color });
-          }}
-          activeOpacity={0.8}
-        />
-      ))}
-    </ScrollView>
-  );
-
-  const renderGlowSelection = (element: TextElement) => (
-    <View style={styles.toggleContainer}>
-      <Text style={styles.toggleText}>Glow Effect</Text>
-      <TouchableOpacity 
-        style={[styles.toggleButton, element.hasBackground && styles.toggleButtonActive]}
-        onPress={() => updateTextElement(element.id, { hasBackground: !element.hasBackground })}
-      >
-        <Text style={styles.toggleButtonText}>{element.hasBackground ? 'ON' : 'OFF'}</Text>
-      </TouchableOpacity>
-    </View>
-  );
-
-  const renderBackgroundSelection = (element: TextElement) => (
-    <View style={styles.toggleContainer}>
-      <Text style={styles.toggleText}>Text Background</Text>
-      <TouchableOpacity 
-        style={[styles.toggleButton, element.hasBackground && styles.toggleButtonActive]}
-        onPress={() => updateTextElement(element.id, { hasBackground: !element.hasBackground })}
-      >
-        <Text style={styles.toggleButtonText}>{element.hasBackground ? 'ON' : 'OFF'}</Text>
-      </TouchableOpacity>
-    </View>
-  );
 
   return (
     <View style={styles.container}>
@@ -1701,15 +2338,17 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       {/* Background image layer - outside KeyboardAvoidingView so keyboard doesn't shift it */}
       {backgroundImage && (
         <PinchGestureHandler
+          ref={bgPinchRef}
           onGestureEvent={(event) => handleUnifiedGesture(event, 'pinch')}
           onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pinch')}
-          simultaneousHandlers={['pan']}
+          simultaneousHandlers={bgPanRef}
         >
           <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
             <PanGestureHandler
+              ref={bgPanRef}
               onGestureEvent={(event) => handleUnifiedGesture(event, 'pan')}
               onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pan')}
-              simultaneousHandlers={['pinch']}
+              simultaneousHandlers={bgPinchRef}
               shouldCancelWhenOutside={false}
               minPointers={1}
               maxPointers={1}
@@ -1741,12 +2380,37 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         <View style={styles.canvasContainer}>
           {renderCanvas()}
         </View>
-      
-      {/* Top Menu (when not editing) */}
-      {renderTopMenu()}
+
+      {/* Crop bars for image backgrounds */}
+      {renderCropBars()}
+
+      {/* Adaptive crop guides for text posts */}
+      {renderCropGuides()}
+
+      {/* Signature band preview at the projected top edge of the post -
+          where the feed will draw it. Hidden while the parity ghost is up
+          (the band is a feed overlay, not part of the rendered PNG). */}
+      {FEATURES.signatures && signPost && !parityGhost && !isEditingText && (() => {
+        const bounds = getProjectedCropBounds();
+        if (!bounds) return null;
+        return (
+          <View style={[styles.signaturePreviewBand, { top: bounds.top }]} pointerEvents="none">
+            <Text style={styles.signaturePreviewText} numberOfLines={1}>
+              @{(userProfile?.handle || 'you').toUpperCase()}
+            </Text>
+          </View>
+        );
+      })()}
+
+      {/* Top Menu (hidden while editing text) */}
+      {!isEditingText && renderTopMenu()}
       
       {/* Bottom Control Bar (when editing) */}
       {renderBottomControlBar()}
+
+      {/* Staged editing input: screen-fixed just above the config row, like
+          the row itself, so keyboard state cannot reorder them */}
+      {renderEditingInput()}
       
       {/* Scale Slider (when editing text) */}
       {renderScaleSlider()}
@@ -1758,26 +2422,9 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         {/* Post Button */}
         {!isEditingText && (
           <View style={styles.postActionCluster}>
-            <TouchableOpacity 
-              style={styles.postButton} 
-              onPress={() => {
-                if (longPressTriggeredRef.current) {
-                  longPressTriggeredRef.current = false;
-                  return;
-                }
-                handlePost(tapPostMode);
-              }}
-              onLongPress={() => {
-                if (isPosting) {
-                  return;
-                }
-                longPressTriggeredRef.current = true;
-                handlePost(longPressPostMode);
-              }}
-              onPressOut={() => {
-                longPressTriggeredRef.current = false;
-              }}
-              delayLongPress={600}
+            <TouchableOpacity
+              style={styles.postButton}
+              onPress={() => handlePost()}
               disabled={isPosting}
             >
               {isPosting ? (
@@ -1786,11 +2433,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
                 <Text style={styles.postButtonText}>Post</Text>
               )}
             </TouchableOpacity>
-            <Text style={styles.postButtonHint}>{postHintText}</Text>
           </View>
         )}
-        
+
       </KeyboardAvoidingView>
+      {renderParityGhost()}
     </View>
   );
 }
@@ -1799,6 +2446,28 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  parityGhostContainer: {
+    zIndex: 1000,
+  },
+  parityGhostImage: {
+    flex: 1,
+    opacity: 0.5,
+  },
+  parityGhostBadge: {
+    position: 'absolute',
+    top: 60,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    maxWidth: '85%',
+  },
+  parityGhostBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   keyboardContainer: {
     flex: 1,
@@ -1834,7 +2503,6 @@ const styles = StyleSheet.create({
   topMenuButton: {
     width: 44,
     height: 44,
-    borderRadius: 22,
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1847,7 +2515,6 @@ const styles = StyleSheet.create({
   backgroundPreview: {
     width: 24,
     height: 24,
-    borderRadius: 12,
     borderWidth: 2,
     borderColor: 'white',
   },
@@ -1871,9 +2538,8 @@ const styles = StyleSheet.create({
     zIndex: 150, // Above overlay and text elements
   },
   controlOption: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 38,
+    height: 38,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.6)',
@@ -1898,7 +2564,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     marginRight: 15,
-    borderRadius: 20,
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1919,7 +2584,6 @@ const styles = StyleSheet.create({
   colorSwatch: {
     width: 40,
     height: 40,
-    borderRadius: 20,
     marginRight: 15,
     borderWidth: 2,
     borderColor: 'transparent',
@@ -1944,7 +2608,6 @@ const styles = StyleSheet.create({
   toggleButton: {
     paddingHorizontal: 20,
     paddingVertical: 8,
-    borderRadius: 15,
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
   toggleButtonActive: {
@@ -1961,7 +2624,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.accent,
     paddingHorizontal: 24,
     paddingVertical: 12,
-    borderRadius: 25,
     minWidth: 80,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1980,9 +2642,14 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   postButtonHint: {
-    color: 'rgba(255,255,255,0.6)',
+    // Dark chip so the hint reads on any canvas background color
+    color: '#FFFFFF',
     fontSize: 12,
-    textAlign: 'right',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    overflow: 'hidden',
   },
   
   // Canvas and Text Elements
@@ -2036,29 +2703,144 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  // Cropped strip of the original post, stacked above the caption area
+  repostStrip: {
+    position: 'absolute',
+    overflow: 'hidden',
+    zIndex: 12,
+    borderWidth: 1,
+    borderColor: '#88888A',
+  },
+  // Single config row controls
+  controlFontLabel: {
+    color: 'white',
+    fontSize: 22,
+  },
+  controlColorSwatch: {
+    width: 28,
+    height: 22,
+    borderWidth: 2,
+    borderColor: 'white',
+    overflow: 'hidden',
+  },
+  controlOptionDisabled: {
+    opacity: 0.3,
+  },
+  controlFormatLabel: {
+    fontSize: 16,
+    fontFamily: 'CourierPrimeBold',
+    color: 'white',
+  },
+  controlItalicLabel: {
+    fontFamily: 'CourierPrimeItalic',
+  },
+  controlSpacingLabel: {
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  topMenuButtonActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  // Signature band preview (mirrors the feed's band, slimmed down)
+  signaturePreviewBand: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 22,
+    backgroundColor: 'rgba(5, 5, 5, 0.92)',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    zIndex: 23,
+  },
+  signaturePreviewText: {
+    color: '#F5F5F5',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+  // Staged editing area: centered in the free space above the config row
+  editingStage: {
+    position: 'absolute',
+    top: 90,
+    bottom: 395,
+    justifyContent: 'center',
+    zIndex: 30,
+  },
+  cropOutsideDim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.12)',
+    zIndex: 21,
+  },
+  // Adaptive crop guide hairlines for text posts
+  cropGuideLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
+    zIndex: 22,
+  },
+  // Crop bars for image backgrounds
+  cropDim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    zIndex: 24,
+  },
+  cropBarHitArea: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 25,
+  },
+  cropBarLine: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    height: 3,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.4,
+    shadowRadius: 2,
+  },
+  cropBarGrip: {
+    width: 44,
+    height: 8,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.4,
+    shadowRadius: 2,
+  },
   
   // Scale Slider (Instagram-style)
   scaleSliderContainer: {
     position: 'absolute',
-    left: -5, // Almost off screen like Instagram  
-    top: '25%',
-    height: '50%',
+    left: -5, // Almost off screen like Instagram
+    top: 150,
+    height: 340,
     width: 60, // Wider for easier touch
     zIndex: 30, // Above everything
     justifyContent: 'center',
     alignItems: 'center',
   },
-  scaleSliderTrack: {
-    height: 200,
-    width: 20, // Wide enough for the taper
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-  },
-  scaleSliderSegment: {
-    height: 8, // Height of each segment
-    borderRadius: 1,
-    marginVertical: 1,
+  // Smooth wedge, wide at the top: drag up = bigger text
+  scaleSliderWedge: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderTopWidth: 200,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: 'rgba(255, 255, 255, 0.55)',
   },
   scaleSliderTouchArea: {
     position: 'absolute',
@@ -2073,7 +2855,6 @@ const styles = StyleSheet.create({
     width: 24, // Slightly larger handle
     height: 24,
     backgroundColor: 'white',
-    borderRadius: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.4,
@@ -2088,13 +2869,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 8,
     zIndex: 15,
   },
   stickerImage: {
     width: '100%',
     height: '100%',
-    borderRadius: 8,
   },
   
   // Trash Can
@@ -2111,7 +2890,6 @@ const styles = StyleSheet.create({
   trashCan: {
     width: 60,
     height: 60,
-    borderRadius: 30,
     backgroundColor: 'rgba(255,0,0,0.8)',
     justifyContent: 'center',
     alignItems: 'center',

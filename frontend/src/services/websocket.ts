@@ -1,7 +1,8 @@
+import { WS_BASE_URL, ensureDeviceId } from '../config/api';
 import { Post } from '../types';
 
 export interface WebSocketMessage {
-  type: 'new_post' | 'post_updated' | 'post_removed' | 'user_banned' | 'connection_established' | 'pong';
+  type: 'new_post' | 'post_updated' | 'post_removed' | 'user_banned' | 'connection_established' | 'pong' | 'repost_notification';
   post?: Post;
   post_data?: Post;
   count?: number;
@@ -12,6 +13,9 @@ export interface WebSocketMessage {
   post_ids?: string[];
   message?: string;
   timestamp?: string;
+  notification_id?: number;
+  actor_handle?: string;
+  snippet?: string;
 }
 
 export type WebSocketEventHandler = (message: WebSocketMessage) => void;
@@ -25,13 +29,15 @@ class WebSocketService {
   private isConnected = false;
   private eventHandlers: { [key: string]: WebSocketEventHandler[] } = {};
 
-  constructor(baseUrl: string = 'ws://localhost:8001') {
+  constructor(baseUrl: string = WS_BASE_URL) {
     this.url = `${baseUrl}/ws/feed/`;
   }
 
-  connect() {
+  async connect() {
     try {
-      this.ws = new WebSocket(this.url);
+      // The device id identifies this client for targeted notifications
+      const deviceId = await ensureDeviceId();
+      this.ws = new WebSocket(`${this.url}?device=${encodeURIComponent(deviceId)}`);
       
       this.ws.onopen = () => {
         console.log('✅ WebSocket connected - real-time updates enabled');
@@ -115,6 +121,9 @@ class WebSocketService {
     switch (message.type) {
       case 'new_post':
         this.emit('new_post', message);
+        break;
+      case 'repost_notification':
+        this.emit('repost_notification', message);
         break;
       case 'post_updated':
         this.emit('post_updated', message);

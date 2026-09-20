@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -10,21 +10,22 @@ import {
   Modal,
   TouchableWithoutFeedback,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
 import { Colors } from '../constants/colors';
 import { Post } from '../types';
+import { absoluteUrl } from '../config/api';
+import { contrastRatio, hexToRgb } from '../utils/contrast';
 
 const { width: screenWidth } = Dimensions.get('window');
-const SIGNATURE_BAND_HEIGHT = Math.max(28, Math.round(screenWidth * 0.06));
 
 interface Props {
+  isFirst?: boolean;
+  onSwipeableOpen?: (ref: React.RefObject<Swipeable | null>) => void;
   post: Post;
   onReport: (reason: string, description: string) => void;
   onMute: () => void;
-  onCopyText: () => void;
-  onRepost: () => void;
+  onBlock: () => void;
 }
 
 const REPORT_REASONS = [
@@ -35,202 +36,359 @@ const REPORT_REASONS = [
   { value: 'other', label: 'Other' },
 ];
 
-const SIGNATURE_BASE_STYLES: Record<string, { background: string; text: string }> = {
-  default: { background: '#050505', text: '#F5F5F5' },
-  pulse: { background: '#FF1A1A', text: '#FFFFFF' },
-  noir: { background: '#161616', text: '#F2F2F2' },
+const chipTextColor = (background: string) => {
+  const bg = hexToRgb(background);
+  return contrastRatio(bg, [255, 255, 255]) >= contrastRatio(bg, [0, 0, 0])
+    ? '#FFFFFF'
+    : '#000000';
 };
 
-const hexToRgb = (hex: string) => {
-  const normalized = hex.replace('#', '');
-  if (normalized.length !== 6) {
-    return [0, 0, 0];
-  }
-  return [0, 2, 4].map((index) => parseInt(normalized.slice(index, index + 2), 16));
-};
-
-const contrastRatio = (rgb1: number[], rgb2: number[]) => {
-  const luminance = (rgb: number[]) => {
-    const toLinear = (channel: number) => {
-      const c = channel / 255;
-      if (c <= 0.03928) return c / 12.92;
-      return Math.pow((c + 0.055) / 1.055, 2.4);
-    };
-    const [r, g, b] = rgb;
-    return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
-  };
-
-  const lum1 = luminance(rgb1);
-  const lum2 = luminance(rgb2);
-  const lighter = Math.max(lum1, lum2);
-  const darker = Math.min(lum1, lum2);
-  return (lighter + 0.05) / (darker + 0.05);
-};
-
-const resolveSignatureTheme = (styleKey?: string) => {
-  const base = SIGNATURE_BASE_STYLES[styleKey?.toLowerCase() || 'default'] || SIGNATURE_BASE_STYLES.default;
-  const bandRgb = hexToRgb(base.background);
-  const textRgb = hexToRgb(base.text);
-  const contrast = contrastRatio(bandRgb, textRgb);
-
-  if (contrast >= 3.0) {
-    return base;
-  }
-
-  const whiteContrast = contrastRatio(bandRgb, [255, 255, 255]);
-  const blackContrast = contrastRatio(bandRgb, [0, 0, 0]);
-
-  return {
-    background: base.background,
-    text: whiteContrast >= blackContrast ? '#FFFFFF' : '#000000',
-  };
-};
-
-export default function PostCard({ post, onReport, onMute, onCopyText, onRepost }: Props) {
+export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableOpen, isFirst }: Props) {
+  const swipeableRef = React.useRef<Swipeable | null>(null);
   const navigation = useNavigation();
-  const postRef = useRef<View>(null);
-  const [showActions, setShowActions] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [imageAspectRatio, setImageAspectRatio] = useState<number>(1);
-  const [imageLoaded, setImageLoaded] = useState<boolean>(false);
+  // Recursive compression. collapsedAt: null = fully expanded; 0 = the
+  // whole card is a chip; k >= 1 = ancestors from level k down are hidden
+  // behind a chip (level 1 = direct parent). Blocked ancestors lock the
+  // deepest allowed expansion.
+  const chain = post.quote_chain || [];
+  const hiddenIndex = chain.findIndex(level => level.hidden);
+  const lockLevel = hiddenIndex >= 0 ? hiddenIndex + 1 : null;
+  const [collapsedAt, setCollapsedAt] = useState<number | null>(lockLevel);
 
-  const signatureTheme = useMemo(() => resolveSignatureTheme(post.signature_style), [post.signature_style]);
+  // Prefetch the renders that collapse states need, so toggling is instant
+  useEffect(() => {
+    const urls = [post.response_image_url, ...chain.map(level => level.strip.url)]
+      .filter(Boolean)
+      .map(u => absoluteUrl(u as string)!);
+    urls.forEach(u => Image.prefetch(u).catch(() => {}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.id]);
 
-  const formatTimeAgo = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    
-    const minutes = Math.floor(diff / (1000 * 60));
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    
-    if (minutes < 1) return 'now';
-    if (minutes < 60) return `${minutes}m`;
-    if (hours < 24) return `${hours}h`;
-    return `${days}d`;
-  };
+  if (__DEV__ && !post.rendered_image_url) {
+    console.log('Post missing rendered image; falling back to placeholder.', {
+      id: post.id,
+      text_length: post.text_content?.length || 0,
+    });
+  }
 
-  const handleLongPress = () => {
-    setShowActions(true);
-  };
+  const hasResponseRender = !!post.response_image_url;
+  const levelCollapsed = collapsedAt !== null && collapsedAt >= 1 && hasResponseRender;
+  const displayUri = post.rendered_image_url;
+  const displayTopY = post.top_y;
+  const displayBottomY = post.bottom_y;
 
-  const handleCopyText = async () => {
-    try {
-      await Clipboard.setStringAsync(post.text_content);
-      onCopyText();
-    } catch (error) {
-      console.error('Error copying text:', error);
+  const handleRepost = () => {
+    const imageUri = post.rendered_image_url;
+    if (!imageUri) {
+      Alert.alert('Error', 'This post cannot be reposted (no image available)');
+      return;
     }
-    setShowActions(false);
+    (navigation as any).navigate('PostComposer', {
+      repostData: {
+        originalPost: post,
+        screenshotUri: imageUri,
+      },
+    });
   };
 
-  const handleReport = (reason: string) => {
-    setShowReportModal(false);
-    setShowActions(false);
-    onReport(reason, '');
-  };
-
-  const handleRepost = async () => {
-    try {
-      setShowActions(false);
-      
-      // Use the existing rendered image URL instead of capturing
-      const imageUri = post.rendered_image_url;
-      
-      if (!imageUri) {
-        Alert.alert('Error', 'This post cannot be reposted (no image available)');
+  // Captured at onPressIn: locationX/Y are unreliable in onPress events
+  const pressLocation = { current: { x: 0, y: 0 } } as { current: { x: number; y: number } };
+  const handleBodyPress = () => {
+    // locationX/Y are relative to the touched child - the full-canvas Image -
+    // so dividing by scale yields CANVAS coordinates directly
+    const { x: locationX, y: locationY } = pressLocation.current;
+    const canvasWidth = post.image_width || 0;
+    if (collapsedAt === null && chain.length > 0 && canvasWidth > 0) {
+      const scale = screenWidth / canvasWidth;
+      const canvasX = locationX / scale;
+      const canvasY = locationY / scale;
+      // Deepest level whose rect contains the tap wins
+      let hit: number | null = null;
+      chain.forEach((level, index) => {
+        const r = level.rect;
+        if (
+          canvasY >= r.y && canvasY <= r.y + r.height &&
+          canvasX >= r.x && canvasX <= r.x + r.width
+        ) {
+          hit = index + 1;
+        }
+      });
+      if (hit !== null) {
+        setCollapsedAt(hit);
         return;
       }
-      
-      console.log('🖼️ Using post image URI:', imageUri);
-      
-      // Navigate to PostComposer with repost data
-      (navigation as any).navigate('PostComposer', {
-        repostData: {
-          originalPost: post,
-          screenshotUri: imageUri,
-        },
-      });
-      
-    } catch (error) {
-      console.error('Error setting up repost:', error);
-      Alert.alert('Error', 'Failed to set up repost');
     }
+    setCollapsedAt(0);
   };
 
-  const handleMute = () => {
+  const openDetail = () => {
+    (navigation as any).navigate('PostDetail', { postId: post.id });
+  };
+
+  const confirmMute = () => {
     Alert.alert(
       'Mute User',
-      `Are you sure you want to mute @${post.author.handle}? You won't see their posts anymore.`,
+      "You won't see their posts anymore.",
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Mute', 
-          style: 'destructive',
-          onPress: () => {
-            onMute();
-            setShowActions(false);
-          }
-        },
+        { text: 'Mute', style: 'destructive', onPress: onMute },
       ]
     );
   };
 
-  const renderActionSheet = () => (
-    <Modal
-      visible={showActions}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setShowActions(false)}
-    >
-      <TouchableWithoutFeedback onPress={() => setShowActions(false)}>
-        <View style={styles.modalOverlay}>
-          <TouchableWithoutFeedback>
-            <View style={styles.actionSheet}>
-              <TouchableOpacity style={styles.actionItem} onPress={handleCopyText}>
-                <Ionicons name="copy-outline" size={20} color={Colors.primary} />
-                <Text style={styles.actionText}>Copy Text</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.actionItem} 
-                onPress={handleRepost}
-              >
-                <Ionicons name="repeat-outline" size={20} color={Colors.accent} />
-                <Text style={[styles.actionText, { color: Colors.accent }]}>Repost</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.actionItem} 
-                onPress={() => {
-                  setShowActions(false);
-                  setShowReportModal(true);
-                }}
-              >
-                <Ionicons name="flag-outline" size={20} color={Colors.error} />
-                <Text style={[styles.actionText, { color: Colors.error }]}>Report</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.actionItem} onPress={handleMute}>
-                <Ionicons name="volume-mute-outline" size={20} color={Colors.warning} />
-                <Text style={[styles.actionText, { color: Colors.warning }]}>
-                  Mute @{post.author.handle}
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.actionItem, styles.cancelAction]} 
-                onPress={() => setShowActions(false)}
-              >
-                <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-    </Modal>
+  const confirmBlock = () => {
+    Alert.alert(
+      'Block User',
+      'Their posts disappear for you, your posts disappear for them, and their quoted posts are hidden.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Block', style: 'destructive', onPress: onBlock },
+      ]
+    );
+  };
+
+  const handleReport = (reason: string) => {
+    setShowReportModal(false);
+    onReport(reason, '');
+  };
+
+  // Left-edge rail (swipe right): the bad stuff
+  const renderModerationRail = () => (
+    <View style={styles.rail}>
+      <TouchableOpacity
+        style={[styles.railButton, { backgroundColor: Colors.warning }]}
+        onPress={() => setShowReportModal(true)}
+      >
+        <Text style={styles.railText}>Report</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.railButton, { backgroundColor: Colors.secondary }]}
+        onPress={confirmMute}
+      >
+        <Text style={styles.railText}>Mute</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.railButton, { backgroundColor: Colors.error }]}
+        onPress={confirmBlock}
+      >
+        <Text style={styles.railText}>Block</Text>
+      </TouchableOpacity>
+    </View>
   );
+
+  // Collapsed-at-level view: stacked segments with dead space squeezed.
+  // Own reply (tight crop) + each still-visible ancestor's reply strip +
+  // a chip band in the post's own background color.
+  const renderChipContents = (background: string, snippet: string, expandTo: number | null) => {
+    const textColor = chipTextColor(background);
+    return (
+      <TouchableOpacity
+        style={[styles.collapsedChip, { backgroundColor: background, marginVertical: 0 }]}
+        onPress={() => setCollapsedAt(expandTo)}
+        activeOpacity={0.85}
+      >
+        <Text style={[styles.collapsedChipText, { color: textColor }]} numberOfLines={1}>
+          {snippet.trim() || '...'}
+        </Text>
+        <Text style={[styles.collapsedChipToggle, { color: textColor }]}>+</Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderSqueezedStack = () => {
+    const level = collapsedAt as number; // >= 1
+    const rootScale = screenWidth / (post.image_width || 1080);
+    const chipLevel = chain[level - 1];
+    const MARGIN = 8;
+
+    const chipNode = chipLevel?.hidden ? (
+      <View style={[styles.collapsedChip, styles.inlineChipHidden]}>
+        <Text style={styles.inlineChipHiddenText}>hidden</Text>
+      </View>
+    ) : (
+      renderChipContents(
+        chipLevel?.background_color || Colors.surface,
+        chipLevel?.snippet || '',
+        lockLevel !== null && lockLevel <= level ? lockLevel : null,
+      )
+    );
+
+    // A crop of `source` (full-canvas render) covering source rows
+    // [fromY, toY), displayed at displayScale
+    const cropSegment = (
+      key: string,
+      url: string,
+      imageHeight: number,
+      fromY: number,
+      toY: number,
+      displayScale: number,
+    ) => {
+      const height = (toY - fromY) * displayScale;
+      if (height < 3) return null;
+      return (
+        <View key={key} style={{ width: '100%', height, overflow: 'hidden' }}>
+          <Image
+            source={{ uri: absoluteUrl(url) }}
+            style={{
+              width: '100%',
+              height: imageHeight * displayScale,
+              transform: [{ translateY: -fromY * displayScale }],
+            }}
+            resizeMode="cover"
+          />
+        </View>
+      );
+    };
+
+    // Recursive: content of ancestor level `i`, splitting its strip around
+    // its own child (the next ancestor's rect, or the chip when i+1 is the
+    // collapsed level). Rects are all in root-canvas px, so relative
+    // geometry falls out of subtraction.
+    const buildChild = (i: number): React.ReactNode => {
+      if (i >= level - 1) {
+        return <View style={styles.chipWrap}>{chipNode}</View>;
+      }
+      const ancestor = chain[i];
+      const strip = ancestor.strip;
+      if (!strip.url || !strip.image_width) {
+        return <View style={styles.chipWrap}>{chipNode}</View>;
+      }
+      const displayWidth = ancestor.rect.width * rootScale;
+      const stripScale = displayWidth / strip.image_width;
+      const child = chain[i + 1];
+
+      // Child rect relative to this ancestor's strip, in source rows of the
+      // ancestor's own canvas
+      const childTopSrc = strip.top_y + (child.rect.y - ancestor.rect.y) / (ancestor.rect.height / Math.max(strip.bottom_y - strip.top_y, 1));
+      const childHeightSrc = child.rect.height / (ancestor.rect.height / Math.max(strip.bottom_y - strip.top_y, 1));
+      const childWidth = child.rect.width * rootScale;
+      const childLeft = Math.max(0, Math.min(displayWidth - childWidth, (child.rect.x - ancestor.rect.x) * rootScale));
+
+      return (
+        <View
+          style={{
+            width: displayWidth,
+            borderWidth: 1,
+            borderColor: '#88888A',
+            overflow: 'hidden',
+            backgroundColor: ancestor.background_color || Colors.surface,
+          }}
+        >
+          {cropSegment(`a${i}-top`, strip.url, strip.image_height || 0,
+            strip.top_y, Math.max(strip.top_y, childTopSrc - MARGIN / stripScale), stripScale)}
+          <View style={{ width: childWidth, marginLeft: childLeft, marginVertical: 6 }}>
+            {buildChild(i + 1)}
+          </View>
+          {cropSegment(`a${i}-bottom`, strip.url, strip.image_height || 0,
+            Math.min(strip.bottom_y, childTopSrc + childHeightSrc + MARGIN / stripScale), strip.bottom_y, stripScale)}
+        </View>
+      );
+    };
+
+    // Root level: split the reply render around level 1's rect, preserving
+    // where content sits relative to the (now hidden or shrunken) quote
+    const rootRect = chain[0].rect;
+    const responseTop = typeof post.response_top_y === 'number' ? post.response_top_y : rootRect.y;
+    const responseBottom = typeof post.response_bottom_y === 'number' ? post.response_bottom_y : rootRect.y + rootRect.height;
+    const canvasHeight = post.image_height || 0;
+    const marginSrc = MARGIN / rootScale;
+    const childWidth = rootRect.width * rootScale;
+    const childLeft = Math.max(0, Math.min(screenWidth - childWidth, rootRect.x * rootScale));
+    const rectBottom = rootRect.y + rootRect.height;
+
+    // Side-by-side detection: when reply content overlaps the strip's
+    // vertical range, splitting would cut it - keep the band and overlay
+    // the collapsed chain at the strip's true position instead (relative
+    // geometry honored, no squeeze for this case)
+    const overlap = Math.max(0, Math.min(responseBottom, rectBottom) - Math.max(responseTop, rootRect.y));
+    const sideBySide = overlap > rootRect.height * 0.2;
+
+    if (sideBySide && post.response_image_url) {
+      const bandTop = Math.min(rootRect.y, responseTop);
+      const bandBottom = Math.max(rectBottom, responseBottom);
+      return (
+        <View style={{ width: '100%', backgroundColor: post.background_color || Colors.surface }}>
+          {cropSegment('band', post.response_image_url, canvasHeight, bandTop, bandBottom, rootScale)}
+          <View
+            style={{
+              position: 'absolute',
+              left: childLeft,
+              top: (rootRect.y - bandTop) * rootScale,
+              width: childWidth,
+              height: rootRect.height * rootScale,
+              justifyContent: 'center',
+            }}
+          >
+            {buildChild(0)}
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <View style={{ width: '100%', backgroundColor: post.background_color || Colors.surface }}>
+        {post.response_image_url && cropSegment('root-top', post.response_image_url, canvasHeight,
+          responseTop, rootRect.y - marginSrc, rootScale)}
+        <View style={{ width: childWidth, marginLeft: childLeft, marginVertical: 6 }}>
+          {buildChild(0)}
+        </View>
+        {post.response_image_url && cropSegment('root-bottom', post.response_image_url, canvasHeight,
+          rootRect.y + rootRect.height + marginSrc, responseBottom, rootScale)}
+      </View>
+    );
+  };
+
+  const renderImage = () => {
+    if (levelCollapsed) {
+      return renderSqueezedStack();
+    }
+    if (!displayUri) {
+      return (
+        <View style={styles.placeholderImage}>
+          <Text style={styles.placeholderText}>{post.text_content}</Text>
+        </View>
+      );
+    }
+
+    const canvasWidth = post.image_width && post.image_width > 0 ? post.image_width : null;
+    const canvasHeight = post.image_height && post.image_height > 0 ? post.image_height : null;
+    const topY = typeof displayTopY === 'number' ? displayTopY : null;
+    const bottomY = typeof displayBottomY === 'number' ? displayBottomY : null;
+
+    if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
+      const scale = screenWidth / canvasWidth;
+      const croppedHeight = Math.max(bottomY - topY, 1);
+      return (
+        <View style={[styles.postImageWrapper, { height: croppedHeight * scale }]}>
+          <Image
+            source={{ uri: absoluteUrl(displayUri) }}
+            style={[styles.postImage, {
+              height: canvasHeight * scale,
+              transform: [{ translateY: -topY * scale }],
+            }]}
+            resizeMode="cover"
+            onError={(error) => console.log('Post image error:', error.nativeEvent)}
+          />
+        </View>
+      );
+    }
+
+    return (
+      <View style={[styles.postImageWrapper, { aspectRatio: imageAspectRatio, maxHeight: screenWidth * 1.5 }]}>
+        <Image
+          source={{ uri: absoluteUrl(displayUri) }}
+          style={[styles.postImage, { aspectRatio: imageAspectRatio }]}
+          resizeMode="cover"
+          onLoad={(event) => {
+            const { width, height } = event.nativeEvent.source;
+            setImageAspectRatio(width / height);
+          }}
+        />
+      </View>
+    );
+  };
 
   const renderReportModal = () => (
     <Modal
@@ -244,10 +402,7 @@ export default function PostCard({ post, onReport, onMute, onCopyText, onRepost 
           <TouchableWithoutFeedback>
             <View style={styles.reportModal}>
               <Text style={styles.modalTitle}>Report Post</Text>
-              <Text style={styles.modalSubtitle}>
-                Why are you reporting this post?
-              </Text>
-              
+              <Text style={styles.modalSubtitle}>Why are you reporting this post?</Text>
               {REPORT_REASONS.map((reason) => (
                 <TouchableOpacity
                   key={reason.value}
@@ -257,8 +412,7 @@ export default function PostCard({ post, onReport, onMute, onCopyText, onRepost 
                   <Text style={styles.reportReasonText}>{reason.label}</Text>
                 </TouchableOpacity>
               ))}
-              
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.cancelButton}
                 onPress={() => setShowReportModal(false)}
               >
@@ -271,115 +425,81 @@ export default function PostCard({ post, onReport, onMute, onCopyText, onRepost 
     </Modal>
   );
 
-  return (
-    <View style={styles.container}>
-      <View ref={postRef} style={styles.captureContainer}>
-        {/* Post Content - Full Bleed */}
-        <TouchableOpacity 
-          style={styles.postContent}
-          onLongPress={handleLongPress}
-          delayLongPress={500}
-          activeOpacity={0.95}
-        >
-          {post.rendered_image_url ? (
-            <View
-              style={(() => {
-                const canvasWidth = post.image_width && post.image_width > 0 ? post.image_width : null;
-                const canvasHeight = post.image_height && post.image_height > 0 ? post.image_height : null;
-                const topY = typeof post.top_y === 'number' ? post.top_y : null;
-                const bottomY = typeof post.bottom_y === 'number' ? post.bottom_y : null;
-                const signatureOffset = post.is_signed ? SIGNATURE_BAND_HEIGHT : 0;
-                if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
-                  const scale = screenWidth / canvasWidth;
-                  const croppedHeight = Math.max(bottomY - topY, 1);
-                  return [
-                    styles.postImageWrapper,
-                    {
-                      height: croppedHeight * scale + signatureOffset,
-                      paddingTop: signatureOffset,
-                    },
-                  ];
-                }
-                return [
-                  styles.postImageWrapper,
-                  {
-                    aspectRatio: imageAspectRatio,
-                    maxHeight: screenWidth * 1.5 + signatureOffset,
-                    paddingTop: signatureOffset,
-                  },
-                ];
-              })()}
-            >
-              {post.is_signed && (
-                <View
-                  pointerEvents="none"
-                  style={[styles.signatureBand, { backgroundColor: signatureTheme.background }]}
-                >
-                  <Text
-                    style={[styles.signatureText, { color: signatureTheme.text }]}
-                    numberOfLines={1}
-                  >
-                    @{(post.author.handle || '').toUpperCase()}
-                  </Text>
-                </View>
-              )}
-              <Image 
-                source={{ 
-                  uri: post.rendered_image_url?.startsWith('http') 
-                    ? post.rendered_image_url 
-                    : `http://192.168.1.158:8001${post.rendered_image_url}`
-                }}
-                style={(() => {
-                  const canvasWidth = post.image_width && post.image_width > 0 ? post.image_width : null;
-                  const canvasHeight = post.image_height && post.image_height > 0 ? post.image_height : null;
-                  const topY = typeof post.top_y === 'number' ? post.top_y : null;
-                  const bottomY = typeof post.bottom_y === 'number' ? post.bottom_y : null;
-                  const signatureOffset = post.is_signed ? SIGNATURE_BAND_HEIGHT : 0;
-                  if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
-                    const scale = screenWidth / canvasWidth;
-                    return [
-                      styles.postImage,
-                      {
-                        height: canvasHeight * scale,
-                        transform: [{ translateY: -topY * scale + signatureOffset }],
-                      },
-                    ];
-                  }
-                  return [
-                    styles.postImage,
-                    {
-                      aspectRatio: imageAspectRatio,
-                      maxHeight: screenWidth * 1.5,
-                      marginTop: -signatureOffset,
-                    }
-                  ];
-                })()}
-                resizeMode="cover"
-                onLoad={(event) => {
-                  const { width, height } = event.nativeEvent.source;
-                  const aspectRatio = width / height;
-                  setImageAspectRatio(aspectRatio);
-                  console.log('📐 Image dimensions:', { width, height, aspectRatio });
-                }}
-                onError={(error) => {
-                  console.error('Error loading post image:', error);
-                  console.log('Failed image URL:', post.rendered_image_url);
-                }}
-              />
-            </View>
-          ) : (
-            <View style={styles.placeholderImage}>
-              <Text style={styles.placeholderText}>
-                {post.text_content}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {renderActionSheet()}
-      {renderReportModal()}
+  // Right-edge rail (swipe left): actions on the post - the growth slot
+  // (like/follow will live here someday)
+  const renderActionsRail = () => (
+    <View style={styles.rail}>
+      <TouchableOpacity
+        style={[styles.railButton, { backgroundColor: Colors.link }]}
+        onPress={openDetail}
+      >
+        <Text style={styles.railText}>Open</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.railButton, { backgroundColor: Colors.surface }]}
+        onPress={handleRepost}
+      >
+        <Text style={styles.railText}>Quote</Text>
+      </TouchableOpacity>
     </View>
+  );
+
+  return (
+    <Swipeable
+      ref={swipeableRef}
+      renderLeftActions={renderModerationRail}
+      renderRightActions={renderActionsRail}
+      overshootRight={false}
+      overshootLeft={false}
+      onSwipeableOpenStartDrag={() => onSwipeableOpen?.(swipeableRef)}
+      onSwipeableWillOpen={() => onSwipeableOpen?.(swipeableRef)}
+    >
+      <View style={[styles.container, isFirst && { paddingTop: 16, backgroundColor: post.background_color || Colors.background }]}>
+        {/* Tap opens detail (selectable text); long-press stages a repost */}
+        {collapsedAt === 0 ? (
+          <TouchableOpacity
+            style={styles.collapsedRow}
+            onPress={() => setCollapsedAt(lockLevel)}
+            activeOpacity={0.7}
+          >
+          <TouchableOpacity
+            style={[styles.collapsedChip, { backgroundColor: post.background_color || Colors.surface }]}
+            onPress={() => setCollapsedAt(lockLevel)}
+            onLongPress={handleRepost}
+            delayLongPress={400}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={[styles.collapsedChipText, { color: chipTextColor(post.background_color || '#1B1B1B') }]}
+              numberOfLines={1}
+            >
+              {(post.text_content || '').trim().slice(0, 24) || '...'}
+            </Text>
+            <Text style={[styles.collapsedChipToggle, { color: chipTextColor(post.background_color || '#1B1B1B') }]}>
+              +
+            </Text>
+          </TouchableOpacity>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.postContent}
+            onPressIn={(event) => {
+              pressLocation.current = {
+                x: event.nativeEvent.locationX,
+                y: event.nativeEvent.locationY,
+              };
+            }}
+            onPress={handleBodyPress}
+            onLongPress={handleRepost}
+            delayLongPress={400}
+            activeOpacity={0.95}
+          >
+            {renderImage()}
+          </TouchableOpacity>
+        )}
+        {renderReportModal()}
+      </View>
+    </Swipeable>
   );
 }
 
@@ -389,69 +509,13 @@ const styles = StyleSheet.create({
     marginBottom: 0, // no gap between posts
     width: '100%',
   },
-  captureContainer: {
-    backgroundColor: Colors.background,
-    width: '100%',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  authorInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    marginRight: 8,
-  },
-  handle: {
-    color: Colors.primary,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  metadata: {
-    alignItems: 'flex-end',
-  },
-  timeAgo: {
-    color: Colors.secondary,
-    fontSize: 12,
-  },
-  viewCount: {
-    color: Colors.secondary,
-    fontSize: 10,
-    marginTop: 2,
-  },
   postContent: {
     width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   postImageWrapper: {
     width: '100%',
     overflow: 'hidden',
     backgroundColor: Colors.surface,
-    position: 'relative',
-  },
-  signatureBand: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: SIGNATURE_BAND_HEIGHT,
-    paddingHorizontal: 16,
-    zIndex: 5,
-    justifyContent: 'center',
-  },
-  signatureText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.6,
   },
   postImage: {
     width: '100%',
@@ -469,52 +533,82 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     textAlign: 'center',
     fontSize: 16,
+    fontFamily: 'CourierPrime',
   },
-  textContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+  // Collapsed post: the whole post compressed into a chip
+  collapsedChip: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: 14,
+    marginBottom: 10,
+    maxWidth: '80%',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.18)',
   },
-  postText: {
-    color: Colors.secondary,
+  collapsedRow: {
+    width: '100%',
+    alignItems: 'center',
+  },
+  chipWrap: {
+    width: '100%',
+    alignItems: 'center',
+  },
+  collapsedChipText: {
     fontSize: 14,
-    lineHeight: 20,
+    fontFamily: 'CourierPrime',
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    flexShrink: 1,
+  },
+  collapsedChipToggle: {
+    fontSize: 16,
+    fontFamily: 'CourierPrime',
+    fontWeight: '800',
+  },
+  // Chip band: a slim margin-colored row holding the collapse chip
+  chipBand: {
+    width: '100%',
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  inlineChipHidden: {
+    backgroundColor: '#3A3A3C',
+    marginVertical: 0,
+  },
+  inlineChipHiddenText: {
+    color: '#9A9A9E',
+    fontSize: 12,
+    fontFamily: 'CourierPrime',
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  // Swipe rail
+  rail: {
+    flexDirection: 'row',
+  },
+  railButton: {
+    width: 72,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  railText: {
+    color: 'white',
+    fontSize: 12,
+    fontFamily: 'CourierPrime',
+    fontWeight: '700',
   },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'flex-end',
   },
-  actionSheet: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    paddingTop: 12,
-  },
-  actionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    gap: 12,
-  },
-  actionText: {
-    color: Colors.primary,
-    fontSize: 16,
-  },
-  cancelAction: {
-    borderTopWidth: 1,
-    borderTopColor: Colors.background,
-    marginTop: 8,
-  },
-  cancelText: {
-    color: Colors.secondary,
-    fontSize: 16,
-    textAlign: 'center',
-  },
   reportModal: {
     backgroundColor: Colors.surface,
     marginHorizontal: 32,
-    borderRadius: 16,
     padding: 24,
     alignSelf: 'center',
     maxWidth: 300,
@@ -523,6 +617,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     color: Colors.primary,
     fontSize: 18,
+    fontFamily: 'ArialBlack',
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 8,
@@ -530,6 +625,7 @@ const styles = StyleSheet.create({
   modalSubtitle: {
     color: Colors.secondary,
     fontSize: 14,
+    fontFamily: 'CourierPrime',
     textAlign: 'center',
     marginBottom: 24,
   },
@@ -541,9 +637,16 @@ const styles = StyleSheet.create({
   reportReasonText: {
     color: Colors.primary,
     fontSize: 16,
+    fontFamily: 'CourierPrime',
   },
   cancelButton: {
     marginTop: 16,
     paddingVertical: 12,
+  },
+  cancelText: {
+    color: Colors.secondary,
+    fontSize: 16,
+    fontFamily: 'CourierPrime',
+    textAlign: 'center',
   },
 });

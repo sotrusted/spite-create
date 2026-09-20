@@ -93,3 +93,20 @@ Thumbs.db
 *.bak
 
 frontend/node_modules/
+tools/
+
+# Apple signing materials - never commit
+frontend/credentials/
+frontend/credentials.json
+
+# ---- backend runtime (monorepo conversion 2026-09-20) ----
+backend/venv/
+backend/.env
+backend/db.sqlite3*
+backend/media/
+backend/logs/
+backend/staticfiles/
+__pycache__/
+*.pyc
+*.actual.png
+dump.rdb
