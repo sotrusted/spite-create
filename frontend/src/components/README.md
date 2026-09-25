@@ -1,6 +1,6 @@
 # Components Documentation
 
-This folder contains reusable UI components for Creative Mind's Ideas Magazine.
+This folder contains reusable UI components for Type.
 
 ## 📱 Component Overview
 

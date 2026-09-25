@@ -1,7 +1,7 @@
 # App Store metadata (draft — paste into App Store Connect)
 
 ## Name (30 chars max)
-Typing Magazine
+Type Magazine
 
 ## Subtitle (30 chars max)
 Creative Mind's Ideas

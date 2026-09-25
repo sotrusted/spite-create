@@ -24,7 +24,7 @@ export default function SettingsScreen() {
   };
 
   const handleContactSupport = () => {
-    Linking.openURL('mailto:support@creativemindsideasmagazine.com?subject=Creative Mind%27s Ideas Magazine Support');
+    Linking.openURL('mailto:support@creativemindsideasmagazine.com?subject=Type Support');
   };
 
   const handleViewGuidelines = () => {

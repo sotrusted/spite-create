@@ -328,7 +328,7 @@ export default function MainScreen() {
             adjustsFontSizeToFit
             minimumFontScale={0.5}
           >
-            Creative Mind's Ideas
+            Type
           </Text>
           </View>
           <TouchableOpacity onPress={openProfile} style={styles.profileButton}>

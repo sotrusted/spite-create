@@ -30,6 +30,9 @@ class User(AbstractUser):
     
     # Moderation fields
     is_shadowbanned = models.BooleanField(default=False)
+    # Enough reports to need a human look. Reports alone never ban: a few
+    # accounts could otherwise silence anyone.
+    needs_review = models.BooleanField(default=False, db_index=True)
     shadowban_reason = models.TextField(blank=True)
     report_count = models.PositiveIntegerField(default=0)
     
@@ -89,13 +92,13 @@ class User(AbstractUser):
         return True
     
     def increment_report_count(self):
-        """Increment report count and check for shadowban threshold"""
+        """Count a report; at REVIEW_THRESHOLD queue the user for review.
+        Banning is a moderator's decision (admin action), never automatic."""
         from django.conf import settings
         self.report_count += 1
-        if self.report_count >= getattr(settings, 'SHADOWBAN_THRESHOLD', 3):
-            self.is_shadowbanned = True
-            self.shadowban_reason = f"Auto-shadowbanned after {self.report_count} reports"
-        self.save()
+        if self.report_count >= settings.REVIEW_THRESHOLD and not self.is_shadowbanned:
+            self.needs_review = True
+        self.save(update_fields=['report_count', 'needs_review'])
     
     def __str__(self):
         return self.handle

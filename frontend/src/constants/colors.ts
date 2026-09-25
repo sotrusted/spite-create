@@ -108,3 +108,23 @@ export const FontChoices = {
     variants: { bold: 'CaveatBold' },
   },
 };
+
+// A rainbow letter whose colour sits this close (RGB distance) to a solid
+// background vanishes into it, so those colours are skipped for that post.
+// Across the palette every pairing is either <= 74 or >= 106; the cut sits in
+// the gap. Mirrors RAINBOW_MIN_DISTANCE / Post._rainbow_palette on the server.
+export const RAINBOW_MIN_DISTANCE = 90;
+
+// background: the post's solid colour, or null for gradients and images,
+// which vary under each letter and keep the whole rainbow.
+export const rainbowFor = (background: string | null): string[] => {
+  const full = Colors.rainbowPalette;
+  if (!background || !/^#[0-9a-f]{6}$/i.test(background)) return full;
+  const rgb = (h: string) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const bg = rgb(background);
+  const visible = full.filter(c => {
+    const [r, g, b] = rgb(c);
+    return Math.hypot(r - bg[0], g - bg[1], b - bg[2]) >= RAINBOW_MIN_DISTANCE;
+  });
+  return visible.length >= 2 ? visible : full;
+};

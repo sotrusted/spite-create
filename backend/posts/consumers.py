@@ -43,7 +43,7 @@ class FeedConsumer(AsyncWebsocketConsumer):
         # Send welcome message
         await self.send(text_data=json.dumps({
             'type': 'connection_established',
-            'message': 'Connected to the Typing Magazine feed'
+            'message': 'Connected to the Type feed'
         }))
 
     async def disconnect(self, close_code):

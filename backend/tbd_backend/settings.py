@@ -295,7 +295,7 @@ REPORT_DIGEST_EMAIL = config('REPORT_DIGEST_EMAIL', default='tsargentmoore@gmail
 # Feature gate: image posts (backgrounds + stickers) are banked for a
 # post-launch release. Matches FEATURES.imageUploads on the frontend.
 ALLOW_IMAGE_POSTS = config('ALLOW_IMAGE_POSTS', default=False, cast=bool)
-SHADOWBAN_THRESHOLD = 3  # Number of reports before shadowban
+REVIEW_THRESHOLD = 3  # reports before a user is queued for moderator review (never an automatic ban)
 
 LOGGING = {
     'version': 1,

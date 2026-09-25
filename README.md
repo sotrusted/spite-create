@@ -1,4 +1,4 @@
-# Subscript — Semi-Anonymous, Realtime "Create Mode" Feed
+# Type — Semi-Anonymous, Realtime "Create Mode" Feed
 
 A lightweight, modern meme/posting app with Snapchat/Instagram Create Mode energy and Spite-style realtime feed. Semi-anonymous, chronological, bold typography, edge-to-edge posts.
 

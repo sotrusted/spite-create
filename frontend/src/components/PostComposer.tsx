@@ -34,7 +34,7 @@ import AnimatedReanimated, {
   withTiming,
 } from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
-import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
+import { Colors, FontChoices, resolveFontFace, rainbowFor } from '../constants/colors';
 import { FEATURES } from '../constants/features';
 import { SPACE, CHROME } from '../constants/space';
 import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
@@ -1404,7 +1404,9 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   // Mirrors Post._normalize_alternate_colors on the server.
   const cycleColorsFor = (element: TextElement): string[] | null => {
     if (element.alternateColors?.length === 2) return element.alternateColors;
-    if (element.rainbow) return Colors.rainbowPalette;
+    if (element.rainbow) {
+      return rainbowFor(backgroundGradient.length > 0 || backgroundImage ? null : backgroundColor);
+    }
     return null;
   };
 

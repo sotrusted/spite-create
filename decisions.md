@@ -3,6 +3,23 @@
 Product and design decisions, newest first. One line of context each so we
 remember why, not just what.
 
+## 2026-09-25 - Final name: Type. Reports queue for review, never ban
+
+- **The app is Type.** Masthead, loading screen, icon label, legal copy, WS
+  greeting and digest subject all say Type. App Store: name "Type Magazine"
+  (searchability), subtitle "Creative Mind's Ideas", so the listing reads as
+  "Type Magazine: Creative Mind's Ideas" (a single 36-char name would exceed
+  the 30-char cap). Supersedes "Typing" (2026-09-16).
+- Masthead metrics re-measured for "Type": the shared baseline comes from
+  the baseline-sitting glyphs (T, e), so y/p descenders hang below it; widths
+  from "TYPE", the widest costume.
+- **Reports never ban.** 3 reports on a user set needs_review; a moderator
+  bans or dismisses in admin, and the daily digest lists the queue. Auto-ban
+  let a few accounts silence anyone. Posts were already flag-only.
+- **Rainbow text skips colours that match a solid background** (RGB distance
+  < 90; the palette has a clean gap between 74 and 106). Red letters on a red
+  post read as holes in the word.
+
 ## 2026-09-22 - Masthead baseline by arithmetic, quotes stop shrinking
 
 - **A randomized masthead CAN hold one baseline.** First attempt froze the

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
 import { pickReadableColor, contrastRatio, hexToRgb } from '../utils/contrast';
 import { SPACE, CHROME } from '../constants/space';
+import { metricsFor } from '../constants/fontMetrics';
 
 // The loading screen is a composer demo reel: the magazine's name in a chip,
 // cycling through the same fonts / colors / formattings a post can use.
@@ -10,7 +11,7 @@ import { SPACE, CHROME } from '../constants/space';
 // with zero allocation, so this is safe to mount anywhere as the generic
 // loading state.
 
-const TITLE = "Creative Mind's Ideas";
+const TITLE = "Type";
 // PHOTOSENSITIVITY FLOOR: keep >= 170ms. WCAG 2.3.1 allows max 3 opposing
 // luminance pairs/sec on a full field; at 240ms we max out at ~2.1. Below
 // ~167ms the worst-case sequence crosses into seizure-trigger territory.
@@ -53,9 +54,9 @@ const FORMATS = [
   { bold: true, italic: true, underline: false },
 ];
 
-// Floor of 18: below that the long title turned into unreadable grey mush
-// in the chip. Ceiling keeps it inside the narrow shapes.
-const SIZES = [18, 24, 30, 21, 34, 19, 27, 22];
+// One short word, so it can be set big: sizes swing wide for the strobe while
+// the ceiling still fits "Type" inside the narrowest shape.
+const SIZES = [40, 56, 72, 48, 84, 44, 64, 52];
 
 // Chip geometries, strictly alternating wide/narrow (including the
 // wraparound) so adjacent shapes never read as near-duplicates. Narrow
@@ -75,6 +76,20 @@ const SHAPES: { padH: number; padV: number; maxWidth: `${number}%` }[] = [
 // every 4 ticks: color color color+shape color color+shape+type...
 const P = { chip: 1, textSeed: 1, screen: 1, font: 4, size: 2, shape: 2 };
 const SHAPE_PHASE = 1;
+
+// A size is a wish: capped to what fits the frame's chip, so the one word
+// never breaks mid-letter in a narrow shape. widthPerPt is measured on "TYPE",
+// wider than "Type", so this errs small.
+const fitSize = (
+  size: number,
+  fontFamily: string,
+  letterSpacing: number,
+  shape: { padH: number; maxWidth: `${number}%` },
+) => {
+  const chipWidth = (Dimensions.get('window').width * parseFloat(shape.maxWidth)) / 100;
+  const inner = chipWidth - 2 * shape.padH - 2 - letterSpacing * TITLE.length; // 2 = hairline
+  return Math.min(size, Math.floor(inner / metricsFor(fontFamily).widthPerPt));
+};
 
 const buildFrames = (): Frame[] => {
   const frames: Frame[] = [];
@@ -110,15 +125,17 @@ const buildFrames = (): Frame[] => {
     prevChip = chip;
     const textSeed = PALETTE[(Math.floor(i / P.textSeed) * 5) % PALETTE.length];
     const shape = SHAPES[Math.floor((i + SHAPE_PHASE) / P.shape) % SHAPES.length];
+    const fontFamily = resolveFontFace(fontKey, format.bold, format.italic);
+    const letterSpacing = Math.floor(i / P.font) % 3 === 2 ? 2 : 0;
     frames.push({
       screen,
       chip,
       text: pickReadableColor(chip, PALETTE, textSeed),
-      fontFamily: resolveFontFace(fontKey, format.bold, format.italic),
+      fontFamily,
       fontWeight: FontChoices[fontKey].fontWeight as 'normal' | 'bold',
       underline: format.underline,
-      letterSpacing: Math.floor(i / P.font) % 3 === 2 ? 2 : 0,
-      fontSize: SIZES[Math.floor(i / P.size) % SIZES.length],
+      letterSpacing,
+      fontSize: fitSize(SIZES[Math.floor(i / P.size) % SIZES.length], fontFamily, letterSpacing, shape),
       ...shape,
     });
   }

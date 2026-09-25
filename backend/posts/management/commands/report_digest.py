@@ -13,6 +13,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from posts.models import PostReport
+from users.models import User
 
 
 class Command(BaseCommand):
@@ -28,8 +29,9 @@ class Command(BaseCommand):
             .select_related('post', 'post__author', 'reporter')
             .order_by('post_id', 'created_at')
         )
-        if not reports:
-            self.stdout.write('No new reports; no digest sent.')
+        awaiting = list(User.objects.filter(needs_review=True).order_by('-report_count'))
+        if not reports and not awaiting:
+            self.stdout.write('No new reports and no one awaiting review; no digest sent.')
             return
 
         lines = []
@@ -44,13 +46,15 @@ class Command(BaseCommand):
                 + f"\n  text: {(r.post.text_content or '')[:120]!r}"
             )
 
-        body = (
-            f"{reports.count()} report(s) in the last {options['hours']}h:\n\n"
-            + '\n\n'.join(lines)
-            + f"\n\nReview in admin: /admin/posts/postreport/"
-        )
+        body = f"{reports.count()} report(s) in the last {options['hours']}h:\n\n" + '\n\n'.join(lines)
+        if awaiting:
+            # Reports never ban on their own; these users need a decision
+            body += f"\n\n{len(awaiting)} user(s) awaiting review (ban or dismiss in admin):\n" + '\n'.join(
+                f"- @{u.handle}: {u.report_count} reports" for u in awaiting
+            ) + "\n/admin/users/user/?needs_review__exact=1"
+        body += "\n\nReview posts in admin: /admin/posts/postreport/"
         send_mail(
-            subject=f"[Typing] {reports.count()} new report(s)",
+            subject=f"[Type] {reports.count()} new report(s), {len(awaiting)} awaiting review",
             message=body,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[settings.REPORT_DIGEST_EMAIL],

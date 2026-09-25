@@ -3,6 +3,7 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 from PIL import Image, ImageDraw, ImageMath, ImageFilter, ImageFont, features
 import io
+import math
 import os
 import re
 import unicodedata
@@ -55,6 +56,13 @@ def _sanitize_glyphs(text):
 
 # Per-character palette for rainbow text. Must match rainbowPalette in
 # frontend/src/constants/colors.ts so the preview cycles identically.
+# A rainbow letter whose colour sits this close (RGB distance) to a solid
+# background vanishes into it - red letters on a red post read as gaps
+# ("Ne York C ty"). Those colours are skipped for that post. Across the palette
+# every pairing is either <= 74 (identical or near: gold on neon yellow) or
+# >= 106, so the cut sits in the gap. Mirrors rainbowFor in the composer.
+RAINBOW_MIN_DISTANCE = 90
+
 # Minimum height (canvas px) a background gradient is fitted to. Cards pad a
 # short post out to a chrome floor of 148pt at display time, which on the
 # narrowest supported width (320pt) is ~500 canvas px; a band at least that
@@ -833,6 +841,22 @@ class Post(models.Model):
             return None
         return colors
 
+    def _rainbow_palette(self):
+        """The rainbow minus colours that would vanish into a solid
+        background. Gradients and images vary under each letter, so they keep
+        the full rainbow."""
+        if self.background_gradient or self.background_image:
+            return RAINBOW_TEXT_PALETTE
+        try:
+            bg = tuple(int(self.background_color[i:i + 2], 16) for i in (1, 3, 5))
+        except (TypeError, ValueError):
+            return RAINBOW_TEXT_PALETTE
+        visible = [
+            c for c in RAINBOW_TEXT_PALETTE
+            if math.dist(bg, tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))) >= RAINBOW_MIN_DISTANCE
+        ]
+        return visible if len(visible) >= 2 else RAINBOW_TEXT_PALETTE
+
     def _is_styled_text(self, element):
         """Styled text (rainbow, letter-spaced, underlined, or chipped)
         needs the per-line layout path instead of PIL's multiline_text."""
@@ -939,7 +963,7 @@ class Post(models.Model):
         # rainbow so a duo choice is never silently overridden.
         cycle_palette = element.get('alternateColors') or None
         if not cycle_palette and element.get('rainbow'):
-            cycle_palette = RAINBOW_TEXT_PALETTE
+            cycle_palette = self._rainbow_palette()
         lines, line_height, gap, total_height = self._styled_text_layout(element, font)
         top = element['y'] - total_height / 2
         max_width = max(width for _text, width in lines)

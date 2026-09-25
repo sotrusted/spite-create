@@ -978,3 +978,62 @@ class RequestIdentityTests(RenderTestCase):
             self.assertEqual(self.client.get(f'/api/posts/{post.id}/').status_code, 200)
         post.refresh_from_db()
         self.assertEqual(post.view_count, 3)
+
+
+class RainbowVisibilityTests(RenderTestCase):
+    """Rainbow letters in the background's own colour vanished ("Ne York C ty"
+    on a red post). Colours that match a solid background are skipped."""
+
+    def _colours_in(self, post):
+        return {p for p in self.open_render(post).getdata()}
+
+    def test_every_letter_is_visible_on_a_matching_background(self):
+        post = self.make_post([text_element('ABCDEFGHIJKL', fontSize=80, color='#000000', rainbow=True)],
+                              background_color='#FF1A1A')
+        palette = post._rainbow_palette()
+        self.assertNotIn('#FF1A1A', palette)
+        self.assertEqual(len(palette), 5)
+        # the remaining five all reach the pixels
+        colours = self._colours_in(post)
+        for hex_colour in palette:
+            rgb = tuple(int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+            self.assertIn(rgb, colours, f'{hex_colour} missing from the render')
+
+    def test_near_matches_are_skipped_too(self):
+        post = self.make_post([text_element('ABC', color='#000000', rainbow=True)],
+                              background_color='#F0FF00')  # neon yellow vs rainbow gold
+        self.assertNotIn('#FFD700', post._rainbow_palette())
+
+    def test_unrelated_backgrounds_keep_the_whole_rainbow(self):
+        post = self.make_post([text_element('ABC', color='#FFFFFF', rainbow=True)],
+                              background_color='#000000')
+        self.assertEqual(len(post._rainbow_palette()), 6)
+
+
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend',
+                   REPORT_DIGEST_EMAIL='mod@example.com')
+class ReviewNotAutoBanTests(RenderTestCase):
+    """Reports queue a user for review; only a moderator bans."""
+
+    def _report(self, target, reporter_device):
+        return self.client.post(f'/api/users/{target.handle}/report/',
+                                {'reason': 'harassment'}, content_type='application/json',
+                                HTTP_X_DEVICE_ID=reporter_device)
+
+    def test_reports_queue_for_review_without_banning(self):
+        target = User.objects.create(device_id='reported-device')
+        for i in range(3):
+            self.assertEqual(self._report(target, f'reporter-{i}').status_code, 200)
+        target.refresh_from_db()
+        self.assertEqual(target.report_count, 3)
+        self.assertTrue(target.needs_review)
+        self.assertFalse(target.is_shadowbanned, 'reports alone must never ban')
+
+    def test_digest_lists_users_awaiting_review(self):
+        from django.core import mail
+        from django.core.management import call_command
+        User.objects.create(device_id='queued-device', needs_review=True, report_count=4)
+        call_command('report_digest', stdout=open(os.devnull, 'w'))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('awaiting review', mail.outbox[0].body)
+        self.assertIn('4 reports', mail.outbox[0].body)
