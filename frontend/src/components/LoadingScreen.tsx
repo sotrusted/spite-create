@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
 import { pickReadableColor, contrastRatio, hexToRgb } from '../utils/contrast';
+import { SPACE, CHROME } from '../constants/space';
 
 // The loading screen is a composer demo reel: the magazine's name in a chip,
 // cycling through the same fonts / colors / formattings a post can use.
@@ -178,6 +179,6 @@ const styles = StyleSheet.create({
   },
   chip: {
     borderWidth: 1,
-    borderColor: '#88888A',
+    borderColor: CHROME.hairline,
   },
 });

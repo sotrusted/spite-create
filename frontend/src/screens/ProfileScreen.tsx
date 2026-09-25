@@ -16,6 +16,7 @@ import LoadingScreen from '../components/LoadingScreen';
 import { Colors, FontChoices } from '../constants/colors';
 import { FontChoice, User } from '../types';
 import { api, endpoints } from '../config/api';
+import { SPACE, CHROME } from '../constants/space';
 
 // Signature customization: signing renders your handle under the post in
 // this font and color. Empty color means auto-contrast.
@@ -243,27 +244,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: Colors.secondary,
-    marginTop: 16,
-    fontSize: 16,
-  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: CHROME.inset,
+    paddingVertical: SPACE.md,
     borderBottomWidth: 1,
     borderBottomColor: Colors.surface,
   },
   closeButton: {
-    padding: 8,
+    padding: SPACE.sm,
   },
   headerTitle: {
     fontSize: 18,
@@ -271,19 +262,19 @@ const styles = StyleSheet.create({
     color: Colors.primary,
   },
   settingsButton: {
-    padding: 8,
+    padding: SPACE.sm,
   },
   content: {
     flex: 1,
   },
   profileSection: {
     alignItems: 'center',
-    padding: 32,
+    padding: SPACE.xl,
   },
   avatar: {
     width: 80,
     height: 80,
-    marginBottom: 16,
+    marginBottom: SPACE.lg,
     borderWidth: 2,
     borderColor: Colors.primary,
   },
@@ -292,7 +283,7 @@ const styles = StyleSheet.create({
     fontFamily: 'ArialBlack',
     fontWeight: 'bold',
     color: Colors.primary,
-    marginBottom: 8,
+    marginBottom: SPACE.sm,
   },
   subtitle: {
     fontSize: 14,
@@ -305,29 +296,14 @@ const styles = StyleSheet.create({
   statsSection: {
     flexDirection: 'row',
     justifyContent: 'center',
-    paddingHorizontal: 32,
-    paddingVertical: 24,
+    paddingHorizontal: SPACE.xl,
+    paddingVertical: SPACE.xl,
     borderTopWidth: 1,
     borderBottomWidth: 1,
     borderColor: Colors.surface,
   },
-  statItem: {
-    alignItems: 'center',
-    marginHorizontal: 32,
-  },
-  statNumber: {
-    fontSize: 24,
-    fontFamily: 'ArialBlack',
-    fontWeight: 'bold',
-    color: Colors.primary,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: Colors.secondary,
-    marginTop: 4,
-  },
   infoSection: {
-    padding: 24,
+    padding: SPACE.xl,
   },
   sectionTitle: {
     fontSize: 13,
@@ -335,13 +311,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     letterSpacing: 1,
     color: Colors.primary,
-    marginBottom: 4,
+    marginBottom: SPACE.xs,
   },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 14,
+    paddingVertical: SPACE.lg,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
@@ -350,12 +326,8 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     flex: 1,
   },
-  infoValue: {
-    fontSize: 16,
-    color: Colors.secondary,
-  },
   actionSection: {
-    padding: 24,
+    padding: SPACE.xl,
   },
   handleEditRow: {
     flexDirection: 'row',
@@ -368,25 +340,25 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   handleSave: {
-    marginLeft: 10,
-    padding: 4,
+    marginLeft: SPACE.sm,
+    padding: SPACE.xs,
   },
   signatureHint: {
     fontSize: 14,
     color: Colors.secondary,
-    marginBottom: 12,
+    marginBottom: SPACE.md,
   },
   signaturePreview: {
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: SPACE.md,
     backgroundColor: 'rgba(0, 0, 0, 0.04)',
-    marginBottom: 12,
+    marginBottom: SPACE.md,
   },
   signatureRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 12,
+    gap: SPACE.sm,
+    marginBottom: SPACE.md,
   },
   signatureOption: {
     width: 42,
@@ -419,8 +391,8 @@ const styles = StyleSheet.create({
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 14,
+    gap: SPACE.md,
+    paddingVertical: SPACE.lg,
     borderTopWidth: 1,
     borderBottomWidth: 1,
     borderColor: Colors.border,

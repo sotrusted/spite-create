@@ -25,6 +25,7 @@ import { metricsFor, inkBaselineFor } from '../constants/fontMetrics';
 import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
 import { contrastRatio, hexToRgb } from '../utils/contrast';
 import { FontChoice, Post } from '../types';
+import { SPACE, CHROME } from '../constants/space';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -410,8 +411,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 12,
+    paddingHorizontal: CHROME.inset,
+    paddingBottom: SPACE.md,
   },
   // The slot has a fixed height and bottom-aligns its text, so every
   // randomized costume - whatever font or size it draws - sits on the same
@@ -419,7 +420,7 @@ const styles = StyleSheet.create({
   appTitleSlot: {
     flex: 1,
     height: 38,
-    marginRight: 12,
+    marginRight: SPACE.md,
   },
   appTitle: {
     position: 'absolute',
@@ -433,7 +434,8 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   profileButton: {
-    padding: 4,
+    padding: SPACE.xs,
+    marginRight: -SPACE.xs,
   },
   feedContainer: {
     flex: 1,
@@ -442,51 +444,51 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    paddingHorizontal: SPACE.xxl,
   },
   onboardCard: {
     backgroundColor: Colors.background,
-    padding: 24,
+    padding: SPACE.xl,
   },
   onboardTitle: {
     fontSize: 20,
     fontFamily: 'ArialBlack',
     fontWeight: 'bold',
     color: Colors.primary,
-    marginBottom: 8,
+    marginBottom: SPACE.sm,
   },
   onboardInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
     borderColor: Colors.border,
-    paddingHorizontal: 12,
-    marginBottom: 20,
+    paddingHorizontal: SPACE.md,
+    marginBottom: SPACE.xl,
   },
   onboardAt: {
     fontSize: 18,
     fontFamily: 'CourierPrime',
     color: Colors.secondary,
-    marginRight: 4,
+    marginRight: SPACE.xs,
   },
   onboardInput: {
     flex: 1,
     fontSize: 18,
     fontFamily: 'CourierPrime',
     color: Colors.primary,
-    paddingVertical: 12,
+    paddingVertical: SPACE.md,
   },
   onboardCheckRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: SPACE.md,
   },
   onboardCheckbox: {
     width: 18,
     height: 18,
     borderWidth: 2,
     borderColor: Colors.primary,
-    marginRight: 10,
+    marginRight: SPACE.sm,
   },
   onboardCheckboxChecked: {
     backgroundColor: Colors.primary,
@@ -502,7 +504,7 @@ const styles = StyleSheet.create({
   },
   onboardButton: {
     backgroundColor: Colors.accent,
-    paddingVertical: 12,
+    paddingVertical: SPACE.md,
     alignItems: 'center',
   },
   onboardButtonDisabled: {
@@ -516,10 +518,10 @@ const styles = StyleSheet.create({
   },
   floatingButton: {
     position: 'absolute',
-    bottom: 44,
-    right: 30,
+    bottom: CHROME.bottomInset,
+    right: CHROME.inset,
     borderWidth: 1,
-    borderColor: '#88888A',
+    borderColor: CHROME.hairline,
     width: 56,
     height: 56,
     backgroundColor: Colors.accent,

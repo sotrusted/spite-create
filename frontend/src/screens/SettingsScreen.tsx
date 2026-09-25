@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import { Colors } from '../constants/colors';
 import { GUIDELINES_TEXT, TERMS_TEXT, PRIVACY_TEXT } from '../constants/legal';
+import { SPACE, CHROME } from '../constants/space';
 
 export default function SettingsScreen() {
   const handleExportData = () => {
@@ -94,11 +95,11 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    padding: 24,
-    paddingTop: 12,
+    padding: SPACE.xl,
+    paddingTop: SPACE.md,
   },
   section: {
-    marginBottom: 28,
+    marginBottom: SPACE.xl,
   },
   sectionTitle: {
     color: Colors.primary,
@@ -106,13 +107,13 @@ const styles = StyleSheet.create({
     fontFamily: 'ArialBlack',
     fontWeight: 'bold',
     letterSpacing: 1,
-    marginBottom: 4,
+    marginBottom: SPACE.xs,
   },
   settingItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    gap: 12,
+    paddingVertical: SPACE.lg,
+    gap: SPACE.md,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
@@ -125,7 +126,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: SPACE.lg,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },

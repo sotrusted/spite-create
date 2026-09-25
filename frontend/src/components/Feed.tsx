@@ -18,6 +18,7 @@ import { api, endpoints } from '../config/api';
 import PostCard from './PostCard';
 import { screenWidth } from '../constants/layout';
 import websocketService, { WebSocketMessage } from '../services/websocket';
+import { SPACE, CHROME } from '../constants/space';
 
 interface Props {
   newPost?: Post | null;
@@ -516,9 +517,9 @@ const styles = StyleSheet.create({
     zIndex: 40,
     backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: '#88888A',
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    borderColor: CHROME.hairline,
+    paddingHorizontal: SPACE.md,
+    paddingVertical: SPACE.sm,
   },
   newPostsBannerText: {
     color: Colors.background,
@@ -535,20 +536,8 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'stretch',
   },
-  loading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.background,
-  },
-  loadingText: {
-    color: Colors.secondary,
-    marginTop: 16,
-    fontSize: 16,
-    fontFamily: 'CourierPrime',
-  },
   loadingMore: {
-    padding: 20,
+    padding: SPACE.xl,
     alignItems: 'center',
   },
   emptyContainer: {
@@ -558,7 +547,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 32,
+    paddingHorizontal: SPACE.xxl,
     // header clearance pads the top of the scroll view; lift the centered
     // block so it sits at true visual center
     paddingBottom: 185,
@@ -568,7 +557,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontFamily: 'ArialBlack',
     fontWeight: 'bold',
-    marginBottom: 8,
+    marginBottom: SPACE.sm,
   },
   emptySubtitle: {
     color: Colors.secondary,

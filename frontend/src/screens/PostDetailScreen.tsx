@@ -151,11 +151,11 @@ export default function PostDetailScreen() {
           <View style={styles.stage}>{renderImage()}</View>
 
           <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
-            <Ionicons name="close" size={26} color={chrome} />
+            <Ionicons name="close" size={CHROME.iconSize} color={chrome} />
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.downloadButton} onPress={handleDownload}>
-            <Ionicons name="download-outline" size={24} color={chrome} />
+            <Ionicons name="download-outline" size={CHROME.iconSize} color={chrome} />
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -200,8 +200,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: CHROME.topInset,
     left: CHROME.inset,
-    width: 44,
-    height: 44,
+    width: CHROME.iconButton,
+    height: CHROME.iconButton,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
@@ -210,8 +210,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: CHROME.topInset,
     right: CHROME.inset,
-    width: 44,
-    height: 44,
+    width: CHROME.iconButton,
+    height: CHROME.iconButton,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,

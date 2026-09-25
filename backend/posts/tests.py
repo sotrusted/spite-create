@@ -283,15 +283,27 @@ class GlyphSanitizerTests(RenderTestCase):
 
 
 class GradientTests(RenderTestCase):
-    def test_vertical_gradient_spans_top_to_bottom(self):
+    def test_gradient_runs_corner_to_corner(self):
         post = self.make_post([text_element('GRAD', fontSize=110, color='#F8F8FF')],
                               background_color='#FF1493',
                               background_gradient=['#FF1493', '#F0FF00'])
         im = self.open_render(post).convert('RGB')
-        top = im.getpixel((10, 5))
-        bottom = im.getpixel((10, im.height - 5))
-        self.assertGreater(top[2], bottom[2] + 40)
-        self.assertGreater(bottom[1], top[1] + 40)
+        w, h = im.size
+        top_left = im.getpixel((2, 2))
+        bottom_right = im.getpixel((w - 3, h - 3))
+        self.assertGreater(top_left[2], bottom_right[2] + 40)
+        self.assertGreater(bottom_right[1], top_left[1] + 40)
+        # Isolines are perpendicular to the canvas diagonal (how iOS draws
+        # start 0,0 -> end 1,1), so two points either side of the centre
+        # along that perpendicular share a colour. Offset clears the text.
+        norm = (w * w + h * h) ** 0.5
+        dx, dy = 300 * h / norm, -300 * w / norm
+        p1 = im.getpixel((int(w / 2 + dx), int(h / 2 + dy)))
+        p2 = im.getpixel((int(w / 2 - dx), int(h / 2 - dy)))
+        for a, b in zip(p1, p2):
+            self.assertLessEqual(abs(a - b), 3, f'{p1} vs {p2}')
+        top_right = im.getpixel((w - 3, 2))
+        self.assertGreater(abs(top_right[1] - top_left[1]), 20, 'still vertical')
         self.assert_matches_golden(post, 'gradient_bg')
 
     def test_gradient_post_keeps_the_whole_canvas(self):
@@ -309,7 +321,11 @@ class GradientTests(RenderTestCase):
                               background_color='#FF1A1A',
                               background_gradient=['#FF1A1A', '#32CD32', '#0000EE'])
         im = self.open_render(post).convert('RGB')
-        mid = im.getpixel((10, im.height // 2))
+        # the t=0.5 isoline passes through the centre; step along it to clear
+        # the centred text
+        w, h = im.size
+        norm = (w * w + h * h) ** 0.5
+        mid = im.getpixel((int(w / 2 + 300 * h / norm), int(h / 2 - 300 * w / norm)))
         # the middle stop must actually appear - a two-stop lerp would put
         # a red/blue blend here, not green
         self.assertGreater(mid[1], mid[0], f'middle stop missing, got {mid}')

@@ -36,12 +36,23 @@ import AnimatedReanimated, {
 import Toast from 'react-native-toast-message';
 import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
 import { FEATURES } from '../constants/features';
+import { SPACE, CHROME } from '../constants/space';
 import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { captureRef } from 'react-native-view-shot';
 import { emitPostCreated } from '../utils/postEvents';
 import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
+
+
+// Every gradient runs top-left to bottom-right. iOS projects each point onto
+// the real diagonal, t = (x*w + y*h) / (w^2 + h^2); Post._diagonal_gradient
+// renders the same projection, so the preview and the post agree.
+const DIAGONAL = { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } } as const;
+
+// Gap between a caption's centre line and the top of the quote below it:
+// half the placeholder's line plus a gutter, so the two never touch.
+const CAPTION_CLEARANCE = SPACE.lg + SPACE.lg;
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -196,13 +207,24 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const initialBackground = repostData?.originalPost?.background_color
     ? getNextBackgroundColor(repostData.originalPost.background_color)
     : Colors.postColors[0];
+  // Where the first text element starts. Alone, it is centred. Quoting, it
+  // sits a little above centre so caption + strip read as one block - but a
+  // big quote's strip rises past that spot, so the caption is lifted to clear
+  // the strip's top edge instead of starting buried inside it.
+  const initialCaptionY = (() => {
+    if (!repostData) return screenHeight / 2;
+    const strip = getRepostStripRect(repostData.originalPost, screenWidth, screenHeight);
+    const preferred = screenHeight * 0.34;
+    if (!strip) return preferred;
+    return Math.min(preferred, strip.top - CAPTION_CLEARANCE);
+  })();
   // Text elements state
   const [textElements, setTextElements] = useState<TextElement[]>([
     {
       id: '1',
       content: '',
       x: screenWidth / 2,
-      y: repostData ? screenHeight * 0.34 : screenHeight / 2, // Center; higher for reposts so caption + strip together sit mid-canvas
+      y: initialCaptionY,
       originalX: null,
       originalY: null,
       fontSize: 24,
@@ -2111,7 +2133,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
 
     if (backgroundGradient.length > 0) {
       return (
-        <LinearGradient 
+        <LinearGradient
+          {...DIAGONAL}
           colors={backgroundGradient as [string, string, ...string[]]}
           style={styles.fullScreenCanvas}
         >
@@ -2250,6 +2273,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
                         onPress={() => { applyBackground(preset[0], preset); closeColorGrid(); }}
                       >
                         <LinearGradient
+                          {...DIAGONAL}
                           colors={preset as [string, string, ...string[]]}
                           style={[styles.colorCell, active && styles.colorCellActive]}
                         />
@@ -2264,6 +2288,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
                 <View style={styles.colorGrid}>
                   <TouchableOpacity onPress={() => { setSelectedElementRainbow(); closeColorGrid(); }}>
                     <LinearGradient
+                      {...DIAGONAL}
                       colors={Colors.rainbowPalette as [string, string, ...string[]]}
                       style={[styles.colorCell, !!el?.rainbow && styles.colorCellActive]}
                     />
@@ -2290,7 +2315,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       <View style={styles.topMenu}>
         {/* Left - Close Button */}
         <TouchableOpacity style={styles.topMenuButton} onPress={onClose}>
-          <Ionicons name="close" size={24} color="white" />
+          <Ionicons name="close" size={CHROME.iconSize} color="white" />
         </TouchableOpacity>
         
         {/* Right - Controls */}
@@ -2317,7 +2342,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             delayLongPress={350}
           >
             {backgroundGradient.length > 0 ? (
-              <LinearGradient colors={backgroundGradient as [string, string]} style={styles.backgroundPreview} />
+              <LinearGradient {...DIAGONAL} colors={backgroundGradient as [string, string]} style={styles.backgroundPreview} />
             ) : (
               <View style={[styles.backgroundPreview, { backgroundColor }]} />
             )}
@@ -2336,7 +2361,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           {/* Export the canvas as an image */}
           {!isEditingText && (
             <TouchableOpacity style={styles.topMenuButton} onPress={handleDownload}>
-              <Ionicons name="download-outline" size={22} color="white" />
+              <Ionicons name="download-outline" size={CHROME.iconSize} color="white" />
             </TouchableOpacity>
           )}
 
@@ -2481,9 +2506,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               </View>
             ) : el.rainbow ? (
               <LinearGradient
+                {...DIAGONAL}
                 colors={Colors.rainbowPalette as [string, string, ...string[]]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
                 style={styles.controlColorSwatch}
               />
             ) : (
@@ -2765,7 +2789,7 @@ const styles = StyleSheet.create({
   colorGridCard: {
     backgroundColor: '#1B1B1B',
     borderWidth: 1,
-    borderColor: '#88888A',
+    borderColor: CHROME.hairline,
     padding: 14,
   },
   colorGrid: {
@@ -2778,7 +2802,7 @@ const styles = StyleSheet.create({
     height: 44,
     margin: 2,
     borderWidth: 1,
-    borderColor: '#88888A',
+    borderColor: CHROME.hairline,
   },
   colorCellActive: {
     borderWidth: 3,
@@ -2792,13 +2816,13 @@ const styles = StyleSheet.create({
     fontFamily: 'CourierPrime',
     fontSize: 11,
     letterSpacing: 1,
-    marginBottom: 8,
+    marginBottom: SPACE.sm,
   },
   topMenu: {
     position: 'absolute',
-    top: 60,
-    left: 20,
-    right: 20,
+    top: CHROME.topInset,
+    left: CHROME.inset,
+    right: CHROME.inset,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -2807,19 +2831,14 @@ const styles = StyleSheet.create({
   topMenuRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 15,
+    gap: SPACE.md,
   },
   topMenuButton: {
-    width: 44,
-    height: 44,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    width: CHROME.iconButton,
+    height: CHROME.iconButton,
+    backgroundColor: CHROME.scrim,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  topMenuText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
   },
   backgroundPreview: {
     width: 24,
@@ -2841,8 +2860,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-around',
     alignItems: 'center',
     backgroundColor: 'rgba(128,128,128,0.9)',
-    paddingVertical: 8,
-    paddingHorizontal: 15,
+    paddingVertical: SPACE.sm,
+    paddingHorizontal: SPACE.lg,
     marginBottom: 180,
     zIndex: 150, // Above overlay and text elements
   },
@@ -2851,88 +2870,25 @@ const styles = StyleSheet.create({
     height: 38,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: CHROME.scrim,
   },
   controlOptionActive: {
     backgroundColor: 'rgba(255,26,26,0.2)',
   },
   
-  // Floating Selection Menu (above control bar)
-  floatingSelectionMenu: {
-    backgroundColor: 'transparent',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    marginBottom: 5,
-  },
   
-  // Font Selection
-  fontScrollView: {
-    maxHeight: 60,
-  },
-  fontOption: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    marginRight: 15,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fontOptionActive: {
-    backgroundColor: Colors.accent,
-  },
-  fontOptionText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '500',
-  },
   
-  // Color Selection
-  colorScrollView: {
-    maxHeight: 60,
-  },
-  colorSwatch: {
-    width: 40,
-    height: 40,
-    marginRight: 15,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  colorSwatchActive: {
-    borderColor: 'white',
-    borderWidth: 3,
-  },
   
-  // Toggle Controls (Glow/Background)
-  toggleContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  toggleText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  toggleButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  toggleButtonActive: {
-    backgroundColor: Colors.accent,
-  },
-  toggleButtonText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-  },
 
   // Post Button (bottom right when not editing)
   postButton: {
     backgroundColor: Colors.accent,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    // Same hairline as the feed's FAB: on a red canvas an unbordered accent
+    // button disappears and only its label shows
+    borderWidth: 1,
+    borderColor: CHROME.hairline,
+    paddingHorizontal: SPACE.xl,
+    paddingVertical: SPACE.md,
     minWidth: 80,
     justifyContent: 'center',
     alignItems: 'center',
@@ -2944,21 +2900,11 @@ const styles = StyleSheet.create({
   },
   postActionCluster: {
     position: 'absolute',
-    bottom: 40,
-    right: 20,
+    bottom: CHROME.bottomInset,
+    right: CHROME.inset,
     alignItems: 'flex-end',
-    gap: 12,
+    gap: SPACE.md,
     zIndex: 100,
-  },
-  postButtonHint: {
-    // Dark chip so the hint reads on any canvas background color
-    color: '#FFFFFF',
-    fontSize: 12,
-    textAlign: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    overflow: 'hidden',
   },
   
   // Canvas and Text Elements
@@ -2988,15 +2934,6 @@ const styles = StyleSheet.create({
     minWidth: 50, // Much smaller minimum
     maxWidth: screenWidth - 40, // Leave some margin
     minHeight: 50,
-  },
-  textInput: {
-    minWidth: 50,
-    maxWidth: screenWidth - 40,
-    textAlign: 'center',
-    textAlignVertical: 'center',
-    includeFontPadding: false,
-    maxHeight: 200, // Prevent excessive growth
-    zIndex: 15,
   },
   // Image background style
   backgroundImage: {
@@ -3034,9 +2971,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'white',
     overflow: 'hidden',
-  },
-  controlOptionDisabled: {
-    opacity: 0.3,
   },
   controlFormatLabel: {
     fontSize: 22,

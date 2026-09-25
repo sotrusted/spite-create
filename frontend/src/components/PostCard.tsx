@@ -14,7 +14,7 @@ import {
 import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
 import { FEATURES } from '../constants/features';
-import { CHROME } from '../constants/layout';
+import { SPACE, CHROME } from '../constants/layout';
 import { Colors } from '../constants/colors';
 import { Post } from '../types';
 import { absoluteUrl } from '../config/api';
@@ -620,7 +620,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: SPACE.xl,
   },
   placeholderText: {
     color: Colors.primary,
@@ -633,11 +633,11 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
+    gap: SPACE.sm,
+    paddingHorizontal: SPACE.md,
     paddingVertical: 6,
-    marginTop: 14,
-    marginBottom: 10,
+    marginTop: SPACE.md,
+    marginBottom: SPACE.md,
     maxWidth: '80%',
     borderWidth: 1,
     borderColor: 'rgba(0, 0, 0, 0.18)',
@@ -661,12 +661,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'CourierPrime',
     fontWeight: '800',
-  },
-  // Chip band: a slim margin-colored row holding the collapse chip
-  chipBand: {
-    width: '100%',
-    paddingVertical: 8,
-    alignItems: 'center',
   },
   inlineChipHidden: {
     backgroundColor: '#3A3A3C',
@@ -701,8 +695,8 @@ const styles = StyleSheet.create({
   },
   reportModal: {
     backgroundColor: Colors.surface,
-    marginHorizontal: 32,
-    padding: 24,
+    marginHorizontal: SPACE.xxl,
+    padding: SPACE.xl,
     alignSelf: 'center',
     maxWidth: 300,
     width: '100%',
@@ -713,17 +707,17 @@ const styles = StyleSheet.create({
     fontFamily: 'ArialBlack',
     fontWeight: 'bold',
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: SPACE.sm,
   },
   modalSubtitle: {
     color: Colors.secondary,
     fontSize: 14,
     fontFamily: 'CourierPrime',
     textAlign: 'center',
-    marginBottom: 24,
+    marginBottom: SPACE.xl,
   },
   reportReason: {
-    paddingVertical: 12,
+    paddingVertical: SPACE.md,
     borderBottomWidth: 1,
     borderBottomColor: Colors.background,
   },
@@ -733,8 +727,8 @@ const styles = StyleSheet.create({
     fontFamily: 'CourierPrime',
   },
   cancelButton: {
-    marginTop: 16,
-    paddingVertical: 12,
+    marginTop: SPACE.lg,
+    paddingVertical: SPACE.md,
   },
   cancelText: {
     color: Colors.secondary,
