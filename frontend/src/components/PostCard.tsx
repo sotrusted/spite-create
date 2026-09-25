@@ -16,8 +16,9 @@ import { useNavigation } from '@react-navigation/native';
 import { FEATURES } from '../constants/features';
 import { SPACE, CHROME } from '../constants/layout';
 import { Colors } from '../constants/colors';
-import { Post } from '../types';
-import { absoluteUrl } from '../config/api';
+import { Post, RepostData } from '../types';
+import { absoluteUrl, api, endpoints } from '../config/api';
+import { CanvasState } from '../types/canvas';
 import { contrastRatio, hexToRgb } from '../utils/contrast';
 import { displayCropBounds } from '../utils/displayCrop';
 
@@ -405,7 +406,7 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
 
     if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
       const scale = screenWidth / canvasWidth;
-      const crop = displayCropBounds(topY, bottomY, canvasWidth, canvasHeight, screenWidth);
+      const crop = displayCropBounds(topY, bottomY, canvasWidth, canvasHeight, screenWidth, post.content_boxes);
       const croppedHeight = Math.max(crop.bottomY - crop.topY, 1);
       return (
         <View style={[styles.postImageWrapper, { height: croppedHeight * scale }]}>
@@ -472,6 +473,28 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
     </Modal>
   );
 
+  // "Edit again": reopen the composer with the exact canvas this post was
+  // made from. The saved state only comes back to its author, from the detail
+  // endpoint; a quote is re-fetched because the state references it by id.
+  // Posting from there makes a new post - the original stays as it was.
+  const handleEditAgain = async () => {
+    swipeableRef.current?.close();
+    try {
+      const { data: full } = await api.get(endpoints.getPost(post.id));
+      const state = full.canvas_state as CanvasState | undefined;
+      if (!state) throw new Error('no saved canvas');
+      let repostData: RepostData | undefined;
+      if (state.repost) {
+        const { data: original } = await api.get(endpoints.getPost(state.repost.originalPostId));
+        repostData = { originalPost: original, screenshotUri: original.rendered_image_url };
+      }
+      (navigation as any).navigate('PostComposer', { restoreState: state, repostData });
+    } catch (error) {
+      console.log('Edit again failed:', error);
+      Alert.alert('Could not reopen this post', 'Try again in a moment.');
+    }
+  };
+
   // Right-edge rail (swipe left): actions on the post - the growth slot
   // (like/follow will live here someday)
   const renderActionsRail = () => (
@@ -488,6 +511,14 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
       >
         <Text style={styles.railText}>Quote</Text>
       </TouchableOpacity>
+      {post.editable && (
+        <TouchableOpacity
+          style={[styles.railButton, { backgroundColor: Colors.accent }]}
+          onPress={handleEditAgain}
+        >
+          <Text style={styles.railText}>Edit</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 

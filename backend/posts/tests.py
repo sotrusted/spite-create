@@ -393,8 +393,11 @@ class FormattingTests(RenderTestCase):
                 self.assertTrue(line.startswith(marker), f'{style}: {line!r}')
 
 
-class PerLineChipTests(RenderTestCase):
-    def test_chips_wrap_each_line_not_the_block(self):
+class HighlightBlockTests(RenderTestCase):
+    """The highlighter is one rectangle spanning the text block edge to edge,
+    not a staircase hugging each line's words."""
+
+    def test_highlight_spans_the_block_not_each_line(self):
         post = self.make_post(
             [text_element('WIDE LINE OF TEXT HERE\nTINY', fontSize=72,
                           hasBackground=True, backgroundColor='#FFFFFF',
@@ -404,20 +407,18 @@ class PerLineChipTests(RenderTestCase):
         img = self.open_render(post)
         px = img.load()
 
-        def white_width(y):
-            xs = [x for x in range(0, CANVAS_WIDTH, 2)
-                  if px[x, y] == (255, 255, 255)]
-            return (max(xs) - min(xs)) if xs else 0
+        def white_span(y):
+            xs = [x for x in range(0, CANVAS_WIDTH, 2) if px[x, y] == (255, 255, 255)]
+            return (min(xs), max(xs)) if xs else None
 
-        # Find the two chip bands (rows containing white)
-        rows = [y for y in range(post.top_y, post.bottom_y, 2) if white_width(y) > 40]
-        self.assertTrue(rows, 'no chips rendered')
-        # Adjacent line chips touch vertically (continuous staircase), so
-        # compare widths near the top (wide line) vs bottom (tiny line)
-        wide = white_width(rows[len(rows) // 4])
-        tiny = white_width(rows[-max(2, len(rows) // 8)])
-        self.assertGreater(wide, tiny * 2,
-                           f'chips are not per-line (widths {wide} vs {tiny})')
+        rows = [y for y in range(post.top_y, post.bottom_y, 2) if white_span(y)]
+        self.assertTrue(rows, 'no highlight rendered')
+        wide = white_span(rows[len(rows) // 4])       # beside the long line
+        tiny = white_span(rows[-max(2, len(rows) // 8)])  # beside "TINY"
+        self.assertEqual(wide, tiny, f'highlight is per-line, not a block ({wide} vs {tiny})')
+        # and it is one solid block: no background-coloured gap between lines
+        for y in range(rows[0], rows[-1], 2):
+            self.assertIsNotNone(white_span(y), f'gap in the highlight at y={y}')
 
 
 class TextSizeInvariantTests(RenderTestCase):
@@ -1052,3 +1053,72 @@ class DiagnosticsUnlinkedTests(TestCase):
         flat = json.dumps(event, default=lambda o: getattr(o, 'value', repr(o)))
         self.assertNotIn('d-123', flat)
         self.assertEqual(event['request']['headers']['User-Agent'], 'Type/1')
+
+
+class ContentBoxTests(RenderTestCase):
+    """content_boxes are the true rectangles of what a post contains, so the
+    client can keep overlay chrome off them."""
+
+    def test_text_and_quote_strip_boxes(self):
+        parent = self.make_post([text_element('PARENT', color='#000000')])
+        repost = self.make_post([text_element('REPLY', y=500, color='#000000')],
+                                is_repost=True, original_post=parent,
+                                repost_geometry={'x': 200, 'y': 900, 'width': 600})
+        boxes = repost.content_boxes
+        self.assertEqual(len(boxes), 2)
+        reply_box = min(boxes, key=lambda b: b[1])
+        strip_box = max(boxes, key=lambda b: b[1])
+        self.assertLess(reply_box[0], CANVAS_WIDTH / 2)          # centred text straddles the middle
+        self.assertGreater(reply_box[2], CANVAS_WIDTH / 2)
+        # the strip is its real rect, not the full canvas width
+        self.assertEqual((strip_box[0], strip_box[2]), (200, 800))
+
+    def test_backfill_matches_render(self):
+        from django.core.management import call_command
+        # stored the way the API stores them (make_post alone only sets the
+        # in-memory copy, which a reload loses)
+        elements = [text_element('BOX', color='#000000')]
+        post = self.make_post(elements, text_elements=elements)
+        rendered = post.content_boxes
+        Post.objects.filter(pk=post.pk).update(content_boxes=None)
+        call_command('refresh_content_boxes', stdout=open(os.devnull, 'w'))
+        post.refresh_from_db()
+        self.assertEqual(post.content_boxes, rendered)
+
+
+class CanvasStateTests(RenderTestCase):
+    """The composer's typed state is stored with the post and handed back only
+    to its author, whose "Edit again" restores it."""
+
+    STATE = {'version': 1, 'screenWidth': 402, 'screenHeight': 874,
+             'textElements': [{'id': '1', 'content': 'THE PAYLOAD CONTRACT', 'x': 201, 'y': 437}],
+             'backgroundColor': '#FFD700', 'repost': None}
+
+    def _create(self, state, device='author-device'):
+        with open(os.path.join(FIXTURES_DIR, 'post-payload.json')) as f:
+            payload = json.load(f)
+        payload['canvas_state'] = state
+        return self.client.post('/api/posts/', payload, content_type='application/json',
+                                HTTP_X_DEVICE_ID=device)
+
+    def test_author_gets_the_state_back_and_others_do_not(self):
+        created = self._create(self.STATE)
+        self.assertEqual(created.status_code, 201, created.content)
+        post_id = created.json()['id']
+        mine = self.client.get(f'/api/posts/{post_id}/', HTTP_X_DEVICE_ID='author-device').json()
+        self.assertEqual(mine['canvas_state'], self.STATE)
+        self.assertTrue(mine['editable'])
+        theirs = self.client.get(f'/api/posts/{post_id}/', HTTP_X_DEVICE_ID='someone-else').json()
+        self.assertNotIn('canvas_state', theirs)
+        self.assertFalse(theirs['editable'])
+
+    def test_feed_marks_only_your_own_posts_editable(self):
+        self._create(self.STATE)
+        feed = lambda device: self.client.get('/api/feed/', HTTP_X_DEVICE_ID=device).json()['results']
+        self.assertTrue(feed('author-device')[0]['editable'])
+        self.assertFalse(feed('someone-else')[0]['editable'])
+        self.assertNotIn('canvas_state', feed('author-device')[0])  # list stays light
+
+    def test_malformed_state_is_rejected(self):
+        self.assertEqual(self._create({'no': 'version'}).status_code, 400)
+        self.assertEqual(self._create({'version': 1, 'blob': 'x' * 200_000}).status_code, 400)

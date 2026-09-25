@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { displayCropBounds } from './displayCrop';
-import { MIN_CARD_HEIGHT } from '../constants/space';
+import { MIN_CARD_HEIGHT, CHROME, SPACE } from '../constants/space';
 
 const CANVAS_W = 1080;
 const CANVAS_H = 2340;
@@ -51,4 +51,36 @@ test('the floor actually clears the quote button', () => {
   const c = crop(1100, 1250);
   const cardHeightPt = (c.bottomY - c.topY) * (SCREEN_W / CANVAS_W);
   assert.ok(cardHeightPt >= MIN_CARD_HEIGHT - 1e-6);
+});
+
+// --- [Aa] clearance -------------------------------------------------------
+const K = CANVAS_W / SCREEN_W;
+const buttonBlock = (CHROME.buttonHeight + CHROME.inset) * K;
+const gutter = SPACE.sm * K;
+
+test('content in the button column pushes the bottom down just enough', () => {
+  // a wide line whose right end sits where the [Aa] would be
+  const box: [number, number, number, number] = [100, 1100, 1060, 1500];
+  const c = displayCropBounds(1060, 1540, CANVAS_W, CANVAS_H, SCREEN_W, [box]);
+  assert.ok(Math.abs(c.bottomY - (1500 + gutter + buttonBlock)) < 1e-6);
+  assert.equal(c.topY, 1060); // only the bottom moves
+});
+
+test('content clear of the button column leaves the crop alone', () => {
+  const box: [number, number, number, number] = [400, 1100, 680, 1500]; // centred, narrow
+  const c = displayCropBounds(1060, 1540, CANVAS_W, CANVAS_H, SCREEN_W, [box]);
+  assert.deepEqual(c, { topY: 1060, bottomY: 1540 });
+});
+
+test('clearance is idempotent', () => {
+  const boxes = [[100, 1100, 1060, 1500]];
+  const once = displayCropBounds(1060, 1540, CANVAS_W, CANVAS_H, SCREEN_W, boxes);
+  const twice = displayCropBounds(once.topY, once.bottomY, CANVAS_W, CANVAS_H, SCREEN_W, boxes);
+  assert.deepEqual(twice, once);
+});
+
+test('a capped post whose content runs past the edge is left alone', () => {
+  const box: [number, number, number, number] = [0, 200, 1080, 2300];
+  const c = displayCropBounds(500, 1850, CANVAS_W, CANVAS_H, SCREEN_W, [box]);
+  assert.deepEqual(c, { topY: 500, bottomY: 1850 });
 });

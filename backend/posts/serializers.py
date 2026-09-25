@@ -1,8 +1,20 @@
+import json
 from rest_framework import serializers
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from .models import Post, PostReport
 from users.models import User, UserReport, MutedUser
+
+
+CANVAS_STATE_VERSIONS = {1}
+CANVAS_STATE_MAX_BYTES = 100_000
+
+
+def _is_author(post, context):
+    """True when the request comes from the post author's device."""
+    request = context.get('request')
+    device_id = request.META.get('HTTP_X_DEVICE_ID') if request else None
+    return bool(device_id) and getattr(post.author, 'device_id', None) == device_id
 
 
 class AuthorSerializer(serializers.ModelSerializer):
@@ -21,6 +33,8 @@ class PostSerializer(serializers.ModelSerializer):
     repost_screenshot_url = serializers.SerializerMethodField()
     canvas_width = serializers.IntegerField(write_only=True, required=False)
     canvas_height = serializers.IntegerField(write_only=True, required=False)
+    canvas_state = serializers.JSONField(required=False, allow_null=True)
+    editable = serializers.SerializerMethodField()
     
     class Meta:
         model = Post
@@ -33,11 +47,12 @@ class PostSerializer(serializers.ModelSerializer):
             'created_at', 'view_count', 'is_repost', 'original_post', 
             'repost_screenshot_url', 'repost_data', 'canvas_width', 'canvas_height',
             'is_signed', 'signature_style',
-            'image_width', 'image_height', 'top_y', 'bottom_y'
+            'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes',
+            'canvas_state', 'editable',
         ]
         read_only_fields = ['id', 'author', 'rendered_image_url', 'created_at', 'view_count', 
                            'is_repost', 'original_post', 'repost_screenshot_url',
-                           'image_width', 'image_height', 'top_y', 'bottom_y']
+                           'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes']
         extra_kwargs = {
             'text_content': {'allow_blank': True}
         }
@@ -60,6 +75,26 @@ class PostSerializer(serializers.ModelSerializer):
             return obj.repost_screenshot.url
         return None
     
+    def validate_canvas_state(self, value):
+        if value is None:
+            return None
+        if not isinstance(value, dict) or value.get('version') not in CANVAS_STATE_VERSIONS:
+            raise serializers.ValidationError('canvas_state must be a versioned CanvasState object')
+        if len(json.dumps(value)) > CANVAS_STATE_MAX_BYTES:
+            raise serializers.ValidationError('canvas_state is too large')
+        return value
+
+    def get_editable(self, obj):
+        return obj.canvas_state is not None and _is_author(obj, self.context)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The saved composer state is the author's working file, not part of
+        # the published post
+        if not _is_author(instance, self.context):
+            data.pop('canvas_state', None)
+        return data
+
     def create(self, validated_data):
         """Create a post and preload text elements for rendering."""
         repost_data = validated_data.pop('repost_data', None)
@@ -182,6 +217,7 @@ class PostSerializer(serializers.ModelSerializer):
                     'image_height': post.image_height,
                     'top_y': post.top_y,
                     'bottom_y': post.bottom_y,
+                    'content_boxes': post.content_boxes,
                 }
                 
                 # If it's a repost, include original post data plus the
@@ -294,6 +330,7 @@ class PostListSerializer(serializers.ModelSerializer):
     quote = serializers.SerializerMethodField()
     quote_chain = serializers.SerializerMethodField()
     repost_screenshot_url = serializers.SerializerMethodField()
+    editable = serializers.SerializerMethodField()
 
     class Meta:
         model = Post
@@ -302,8 +339,13 @@ class PostListSerializer(serializers.ModelSerializer):
             'created_at', 'view_count', 'is_repost', 'original_post',
             'is_signed', 'signature_style', 'background_color', 'font_choice',
             'response_image_url', 'response_top_y', 'response_bottom_y', 'quote', 'quote_chain',
-            'repost_screenshot_url', 'image_width', 'image_height', 'top_y', 'bottom_y'
+            'repost_screenshot_url', 'image_width', 'image_height', 'top_y', 'bottom_y',
+            'content_boxes', 'editable',
         ]
+
+    def get_editable(self, obj):
+        # author is select_related on the feed, so this costs no query
+        return obj.canvas_state is not None and _is_author(obj, self.context)
 
     def get_quote_chain(self, obj):
         """Every quoted ancestor with its strip rect mapped into THIS post's

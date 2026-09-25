@@ -4,6 +4,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import PostComposer from '../components/PostComposer';
 import { Post, RepostData, RootStackParamList } from '../types';
+import { CanvasState } from '../types/canvas';
 
 interface Props {
   onPost?: (post: Post) => void;
@@ -11,6 +12,7 @@ interface Props {
 
 interface RouteParams {
   repostData?: RepostData;
+  restoreState?: CanvasState;
 }
 
 type PostComposerScreenNavigationProp = StackNavigationProp<RootStackParamList, 'PostComposer'>;
@@ -18,7 +20,7 @@ type PostComposerScreenNavigationProp = StackNavigationProp<RootStackParamList, 
 export default function PostComposerScreen({ onPost }: Props) {
   const navigation = useNavigation<PostComposerScreenNavigationProp>();
   const route = useRoute();
-  const { repostData } = (route.params as RouteParams) || {};
+  const { repostData, restoreState } = (route.params as RouteParams) || {};
 
   // goBack pops the composer and returns to the EXISTING feed. A
   // navigation.reset here rebuilt MainScreen from scratch, which meant every
@@ -49,6 +51,7 @@ export default function PostComposerScreen({ onPost }: Props) {
         onPost={handlePost} 
         onClose={handleClose}
         repostData={repostData}
+        restoreState={restoreState}
       />
     </View>
   );

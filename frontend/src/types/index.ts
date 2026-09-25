@@ -1,3 +1,4 @@
+import type { CanvasState } from './canvas';
 export interface User {
   handle: string;
   avatar_color: string;
@@ -44,6 +45,13 @@ export interface Post {
   image_height?: number;
   top_y?: number;
   bottom_y?: number;
+  // [[x0, y0, x1, y1], ...] canvas px of every piece of content; the card
+  // keeps the [Aa] off them (utils/displayCrop)
+  content_boxes?: number[][] | null;
+  // true on your own posts that saved their canvas (can "Edit again")
+  editable?: boolean;
+  // only ever present on your own posts' detail
+  canvas_state?: CanvasState;
   is_signed?: boolean;
   signature_style?: string;
   // Collapsed-repost render + quote chip (reposts only)
@@ -109,6 +117,7 @@ export interface StickerElement {
 }
 
 export interface PostCreate {
+  canvas_state?: CanvasState;
   text_content: string;
   text_elements?: TextElement[]; // NEW: Array of positioned text elements
   sticker_elements?: StickerElement[]; // NEW: Array of positioned sticker elements
@@ -150,7 +159,7 @@ export interface FeedResponse {
 
 export type RootStackParamList = {
   Main: undefined;
-  PostComposer: { repostData?: RepostData };
+  PostComposer: { repostData?: RepostData; restoreState?: CanvasState };
   PostDetail: { postId: string };
   Profile: undefined;
   Settings: undefined;

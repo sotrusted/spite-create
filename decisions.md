@@ -3,6 +3,24 @@
 Product and design decisions, newest first. One line of context each so we
 remember why, not just what.
 
+## 2026-09-25 - Canvas state is data; chrome never covers content
+
+- **CanvasState (v1, src/types/canvas.ts) is the canonical typed canvas**:
+  the composer's full working state, saved with every post (Post.canvas_state)
+  and returned only to the author. It is not the render contract - the
+  server renders from the flattened payload buildPostPayload derives from
+  it. "Edit again" (swipe menu, own posts) restores it exactly (verified
+  pixel-identical) and posting makes a NEW post; the original stays.
+  Rescales for a different screen width so the render is unchanged.
+- **[Aa] never covers content.** The server stores content_boxes (true rects
+  of text blocks, stickers, the quoted strip); the card extends its bottom
+  by exactly enough for the button to clear any content in its column, as a
+  pure function of the post and screen width (idempotent). The composer's
+  crop guides run the same function and outline where the button will sit.
+- **Highlighter is one block** spanning the text box edge to edge, padded
+  proportionally to the font size (0.25em / 0.1em, min 8/4 px).
+- Composer config-row labels share one baseline via measured font metrics.
+
 ## 2026-09-25 - Final name: Type. Reports queue for review, never ban
 
 - **The app is Type.** Masthead, loading screen, icon label, legal copy, WS

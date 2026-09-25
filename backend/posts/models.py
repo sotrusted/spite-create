@@ -63,6 +63,13 @@ def _sanitize_glyphs(text):
 # >= 106, so the cut sits in the gap. Mirrors rainbowFor in the composer.
 RAINBOW_MIN_DISTANCE = 90
 
+# Highlighter padding around a text element's block: a fraction of the font
+# size (a fixed few px vanished at large sizes, and script faces whose ink
+# overhangs their advance touched the edge), never below the minimum in
+# canvas px. Mirrors chipPadding in the composer.
+CHIP_PAD_X, CHIP_PAD_Y = 8, 4
+CHIP_PAD_X_EM, CHIP_PAD_Y_EM = 0.25, 0.1
+
 # Minimum height (canvas px) a background gradient is fitted to. Cards pad a
 # short post out to a chrome floor of 148pt at display time, which on the
 # narrowest supported width (320pt) is ~500 canvas px; a band at least that
@@ -201,6 +208,15 @@ class Post(models.Model):
     repost_screenshot = models.ImageField(upload_to='reposts/', null=True, blank=True)
     # WYSIWYG placement of the quoted strip, as shown in the composer:
     # {x, y, width} in canvas px. The bake puts the strip exactly here.
+    # [[x0, y0, x1, y1], ...] canvas px: every piece of content (text blocks,
+    # stickers, the quoted strip). Lets the client place overlay chrome (the
+    # [Aa] button) where it covers nothing. Written by generate_image.
+    content_boxes = models.JSONField(null=True, blank=True)
+    # The composer's full typed state at posting time (CanvasState, versioned;
+    # frontend/src/types/canvas.ts). Opaque to rendering - the render uses
+    # the flattened fields above - and returned only to the author, whose
+    # "Edit again" restores it exactly.
+    canvas_state = models.JSONField(null=True, blank=True)
     repost_geometry = models.JSONField(null=True, blank=True)
     
     class Meta:
@@ -523,7 +539,15 @@ class Post(models.Model):
                         reply_margin_top = REPLY_EDGE_MARGIN
                     else:
                         reply_margin_bottom = REPLY_EDGE_MARGIN
-                bounds.append((0, strip_top, int(self.image_width), strip_bottom))
+                strip_left = max(0, geometry['paste_x'])
+                strip_right = min(int(self.image_width), geometry['paste_x'] + geometry['strip_width'])
+                bounds.append((strip_left, strip_top, strip_right, strip_bottom))
+
+        if include_repost:
+            # Where content actually sits (text blocks, stickers, the quoted
+            # strip), for the client to keep overlay chrome off it. The crop
+            # below only uses the vertical extent.
+            self.content_boxes = [[int(v) for v in b] for b in bounds]
 
         if not bounds:
             if crop_band:
@@ -929,14 +953,27 @@ class Post(models.Model):
             bottom += pad
 
         if element.get('hasBackground'):
-            padding_x = 8
-            padding_y = 4
-            left -= padding_x
-            right += padding_x
-            top -= padding_y
-            bottom += padding_y
+            # the highlight block is bigger than the ink: full line boxes, the
+            # widest line's width
+            lines, _lh, _gap, total_height = self._styled_text_layout(element, font)
+            max_width = max(width for _text, width in lines)
+            block_top = element['y'] - total_height / 2
+            cl, ct, cr, cb = self._chip_rect(element, max_width, block_top, total_height)
+            left, top, right, bottom = min(left, cl), min(top, ct), max(right, cr), max(bottom, cb)
 
         return (int(left), int(top), int(right), int(bottom))
+
+    @staticmethod
+    def _chip_rect(element, max_width, top, total_height):
+        size = element.get('fontSize', 24)
+        pad_x = max(CHIP_PAD_X, size * CHIP_PAD_X_EM)
+        pad_y = max(CHIP_PAD_Y, size * CHIP_PAD_Y_EM)
+        return (
+            element['x'] - max_width / 2 - pad_x,
+            top - pad_y,
+            element['x'] + max_width / 2 + pad_x,
+            top + total_height + pad_y,
+        )
 
     def _render_text_ink(self, draw, element, font, include_chips=True):
         """Draw the element's text onto the given draw surface. Handles the
@@ -979,19 +1016,11 @@ class Post(models.Model):
                 return element['x'] + max_width / 2 - width
             return element['x'] - width / 2
 
-        # Per-line chips: each line gets its own rectangle wrapping just
-        # that line (staircase), drawn before any ink
+        # Highlighter: ONE rectangle behind the whole text block, spanning
+        # the widest line and every line, drawn before any ink
         if include_chips and element.get('hasBackground'):
-            pad_x, pad_y = 8, 4
-            for i, (line, width) in enumerate(lines):
-                if not line.strip():
-                    continue
-                x = line_x(width)
-                ly = top + i * (line_height + gap)
-                draw.rectangle(
-                    (x - pad_x, ly - pad_y, x + width + pad_x, ly + line_height + pad_y),
-                    fill=element.get('backgroundColor', '#FFFFFF'),
-                )
+            draw.rectangle(self._chip_rect(element, max_width, top, total_height),
+                           fill=element.get('backgroundColor', '#FFFFFF'))
 
         color_index = 0
         for i, (line, width) in enumerate(lines):

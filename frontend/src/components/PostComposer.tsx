@@ -37,11 +37,15 @@ import Toast from 'react-native-toast-message';
 import { Colors, FontChoices, resolveFontFace, rainbowFor } from '../constants/colors';
 import { FEATURES } from '../constants/features';
 import { SPACE, CHROME } from '../constants/space';
+import { inkBaselineFor } from '../constants/fontMetrics';
 import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { captureRef } from 'react-native-view-shot';
 import { emitPostCreated } from '../utils/postEvents';
 import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
+import { displayCropBounds } from '../utils/displayCrop';
+import { toCanvasState, fromCanvasState } from '../utils/canvasState';
+import { CanvasState, CanvasTextElement } from '../types/canvas';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
 
 
@@ -54,6 +58,17 @@ const DIAGONAL = { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } } as const;
 // 500): the smallest band a background gradient is fitted to.
 const GRADIENT_MIN_BAND_PX = 500;
 
+// Highlighter padding: a fraction of the font size, never below a minimum in
+// canvas px. Mirrors CHIP_PAD_* on the server. Returned in the element's own
+// points (its scale is a transform on the container, so it is divided out).
+const chipPadding = (fontSize: number, scale: number) => {
+  const k = CANVAS_WIDTH / screenWidth;
+  return {
+    x: Math.max(8 / (k * scale), fontSize * 0.25),
+    y: Math.max(4 / (k * scale), fontSize * 0.1),
+  };
+};
+
 // A canvas-filling gradient whose line runs corner to corner of a band, in the
 // unit coordinates LinearGradient takes. Past the band the end colours carry
 // on, exactly as the server's clamp does.
@@ -65,6 +80,19 @@ const gradientLineFor = (band: { top: number; bottom: number }) => ({
 // Gap between a caption's centre line and the top of the quote below it:
 // half the placeholder's line plus a gutter, so the two never touch.
 const CAPTION_CLEARANCE = SPACE.lg + SPACE.lg;
+
+// Every text label in the config row sits on ONE baseline whatever its font.
+// Centring each label in its button left each face floating at its own
+// height (Arial Black, Times and Caveat have very different ascents), so the
+// labels are placed like the masthead: top = baseline - ink ascent x size.
+const BAR_BASELINE = 27; // pt from the top of a 38pt control
+const onBarBaseline = (fontFamily: string, fontSize: number) => ({
+  position: 'absolute' as const,
+  left: 0,
+  right: 0,
+  textAlign: 'center' as const,
+  top: BAR_BASELINE - inkBaselineFor(fontFamily) * fontSize,
+});
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
@@ -96,33 +124,8 @@ const getNextBackgroundColor = (currentColor: string): string => {
   return Colors.postColors[(colorIndex + 1) % Colors.postColors.length];
 };
 
-interface TextElement {
-  id: string;
-  content: string;
-  x: number;
-  y: number;
-  originalX: number | null;
-  originalY: number | null;
-  fontSize: number;
-  color: string;
-  fontFamily: FontChoice;
-  hasBackground: boolean;
-  backgroundColor: string;
-  backgroundMode: 'off' | 'white' | 'inverted';
-  capsLock: boolean;
-  scale: number;
-  letterSpacing: number;
-  opacity?: number;
-  glow: boolean;
-  rainbow: boolean;
-  // Two palette colours cycled per letter; wins over rainbow when set
-  alternateColors?: string[];
-  align: 'left' | 'center' | 'right';
-  bold: boolean;
-  italic: boolean;
-  underline: boolean;
-  listStyle: 'none' | 'bullet' | 'dash' | 'star' | 'number';
-}
+// One definition of a text element, shared with the saved canvas state
+type TextElement = CanvasTextElement;
 
 const LIST_STYLES = ['none', 'bullet', 'dash', 'star', 'number'] as const;
 const LIST_MARKERS: Record<string, string> = { bullet: '\u2022 ', dash: '- ', star: '* ' };
@@ -141,6 +144,8 @@ interface Props {
   onPost?: (post: any) => void;
   onClose?: () => void;
   repostData?: RepostData;
+  // "Edit again": the canvas exactly as it was when the post was made
+  restoreState?: CanvasState;
 }
 // Heuristic: normalize and provide fallbacks iOS sometimes needs
 const buildImageCandidates = (raw?: string) => {
@@ -214,7 +219,10 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
   );
 };
 
-export default function PostComposer({ onPost, onClose, repostData }: Props) {
+export default function PostComposer({ onPost, onClose, repostData, restoreState }: Props) {
+  // A restore replaces every default below; rescaled if this screen differs
+  // from the one it was composed on. Read once - it seeds initial state only.
+  const restored = useRef(restoreState ? fromCanvasState(restoreState, screenWidth) : null).current;
   // Resolved before the first text element so its ink can be checked against it
   const initialBackground = repostData?.originalPost?.background_color
     ? getNextBackgroundColor(repostData.originalPost.background_color)
@@ -231,7 +239,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     return Math.min(preferred, strip.top - CAPTION_CLEARANCE);
   })();
   // Text elements state
-  const [textElements, setTextElements] = useState<TextElement[]>([
+  const [textElements, setTextElements] = useState<TextElement[]>(restored ? restored.textElements : [
     {
       id: '1',
       content: '',
@@ -258,20 +266,21 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     }
   ]);
   
-  const [selectedTextId, setSelectedTextId] = useState<string>('1');
+  const [selectedTextId, setSelectedTextId] = useState<string>(restored?.textElements[0]?.id ?? '1');
   const [isEditingText, setIsEditingText] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [userProfile, setUserProfile] = useState<User | null>(null);
 
   // Signature is a visible toggle (top bar) with a live band preview on the
   // canvas, replacing the old hidden hold-to-sign gesture
-  const [signPost, setSignPost] = useState(false);
+  const [signPost, setSignPost] = useState(restored?.isSigned ?? false);
 
   useEffect(() => {
     api.get(endpoints.getUserProfile)
       .then(response => {
         setUserProfile(response.data);
-        setSignPost(!!response.data?.default_signed_posts);
+        // a restored canvas keeps the choice it was posted with
+        if (!restored) setSignPost(!!response.data?.default_signed_posts);
       })
       .catch(() => {});
   }, []);
@@ -279,7 +288,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const [currentFontSize, setCurrentFontSize] = useState<number>(24); // Current editing font size (12-48)
 
   // Sticker elements state
-  const [stickerElements, setStickerElements] = useState<StickerElement[]>([]);
+  const [stickerElements, setStickerElements] = useState<StickerElement[]>(restored?.stickerElements ?? []);
   const [selectedStickerId, setSelectedStickerId] = useState<string | null>(null);
   const [isDraggingElement, setIsDraggingElement] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false); // For trash can visibility
@@ -312,10 +321,10 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
 
   
   // Canvas background - use next color in sequence if reposting
-  const getInitialBackgroundColor = () => initialBackground;
+  const getInitialBackgroundColor = () => restored?.backgroundColor ?? initialBackground;
   
   const [backgroundColor, setBackgroundColor] = useState(getInitialBackgroundColor());
-  const [backgroundGradient, setBackgroundGradient] = useState<string[]>([]);
+  const [backgroundGradient, setBackgroundGradient] = useState<string[]>(restored?.backgroundGradient ?? []);
   const backgroundOptions = Colors.postColors; // Use the proper color list
   const [currentBgIndex, setCurrentBgIndex] = useState(() => {
     const initialColor = getInitialBackgroundColor();
@@ -323,13 +332,13 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   });
 
   // Image background state
-  const [backgroundImage, setBackgroundImage] = useState<string | null>(null);
-  const [imageBackgroundScale, setImageBackgroundScale] = useState(1);
-  const [imageBackgroundPosition, setImageBackgroundPosition] = useState({ x: 0, y: 0 });
+  const [backgroundImage, setBackgroundImage] = useState<string | null>(restored?.backgroundImage ?? null);
+  const [imageBackgroundScale, setImageBackgroundScale] = useState(restored?.imageBackgroundScale ?? 1);
+  const [imageBackgroundPosition, setImageBackgroundPosition] = useState(restored?.imageBackgroundPosition ?? { x: 0, y: 0 });
   // Natural-size to canvas cover factor. The preview treats scale 1 as
   // contentFit="cover", while the backend scales the raw image pixels, so
   // the gesture scale is multiplied by this factor at submit time.
-  const [imageCoverScale, setImageCoverScale] = useState(1);
+  const [imageCoverScale, setImageCoverScale] = useState(restored?.imageCoverScale ?? 1);
 
   // Crop bars for image backgrounds: the band between them is what the feed
   // shows. Dragging both bars to the screen edges (0 / screenHeight) makes
@@ -338,17 +347,17 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   const CROP_MIN_BAND = 120;
   const CROP_INITIAL_TOP = 90;
   const CROP_INITIAL_BOTTOM = screenHeight - 110;
-  const [cropTop, setCropTop] = useState(CROP_INITIAL_TOP);
-  const [cropBottom, setCropBottom] = useState(CROP_INITIAL_BOTTOM);
+  const [cropTop, setCropTop] = useState(restored?.cropTop ?? CROP_INITIAL_TOP);
+  const [cropBottom, setCropBottom] = useState(restored?.cropBottom ?? CROP_INITIAL_BOTTOM);
   const cropDragStart = useRef({ top: 0, bottom: 0 });
   
   // Shared values for image background gestures
-  const imageScale = useSharedValue(1);
-  const imageTranslateX = useSharedValue(0);
-  const imageTranslateY = useSharedValue(0);
-  const imageBaseScale = useSharedValue(1);
-  const imageBaseTranslateX = useSharedValue(0);
-  const imageBaseTranslateY = useSharedValue(0);
+  const imageScale = useSharedValue(restored?.imageBackgroundScale ?? 1);
+  const imageTranslateX = useSharedValue(restored?.imageBackgroundPosition.x ?? 0);
+  const imageTranslateY = useSharedValue(restored?.imageBackgroundPosition.y ?? 0);
+  const imageBaseScale = useSharedValue(restored?.imageBackgroundScale ?? 1);
+  const imageBaseTranslateX = useSharedValue(restored?.imageBackgroundPosition.x ?? 0);
+  const imageBaseTranslateY = useSharedValue(restored?.imageBackgroundPosition.y ?? 0);
   
   // UI state - Instagram Create Mode
   const [showControlBar, setShowControlBar] = useState(false);
@@ -366,8 +375,13 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   // The quoted strip is draggable like a text element; its position is
   // WYSIWYG (the payload sends whatever rect is showing)
   const defaultStripRect = getRepostStripRect(repostData?.originalPost, screenWidth, screenHeight);
-  const [stripPosition, setStripPosition] = useState<{ x: number; y: number } | null>(null);
-  const [stripScale, setStripScale] = useState(1);
+  const savedStrip = restored?.repost?.stripRect ?? null;
+  const [stripPosition, setStripPosition] = useState<{ x: number; y: number } | null>(
+    savedStrip ? { x: savedStrip.left, y: savedStrip.top } : null,
+  );
+  const [stripScale, setStripScale] = useState(
+    savedStrip && defaultStripRect ? savedStrip.width / defaultStripRect.width : 1,
+  );
   const stripRect = defaultStripRect
     ? {
         left: stripPosition ? stripPosition.x : defaultStripRect.left,
@@ -1063,7 +1077,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     // Pure payload construction: maps screen points onto the fixed logical
     // canvas. Kept in buildPostPayload so the payload contract is testable
     // from fixtures (npm test in frontend, contract test in backend).
-    const postData: PostCreate = buildPostPayload({
+    const snapshot = {
       screenWidth,
       screenHeight,
       textElements: currentElements,
@@ -1080,7 +1094,13 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       signatureStyle,
       repostData,
       repostStripRect: stripRect,
-    });
+    };
+    // The render payload, plus the canvas itself so "Edit again" can bring
+    // this exact state back
+    const postData: PostCreate = {
+      ...buildPostPayload(snapshot),
+      canvas_state: toCanvasState(snapshot),
+    };
 
     if (SHOW_PARITY_GHOST) {
       // Parity checking only: blocks so the server render can be overlaid on
@@ -1350,10 +1370,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       fontWeight: fontConfig.fontWeight as any,
       textAlign: effectiveAlign,
       textDecorationLine: element.underline ? 'underline' as const : 'none' as const,
-      // Chips render per-line via a nested span (staircase), not a block
-      backgroundColor: 'transparent',
-      paddingHorizontal: 0,
-      paddingVertical: hasPadding ? 4 : 0,
+      // Highlighter: one block behind the whole text box, like the server's
+      // single rectangle
+      backgroundColor: bgColor,
+      paddingHorizontal: hasPadding ? chipPadding(element.fontSize, element.scale).x : 0,
+      paddingVertical: hasPadding ? chipPadding(element.fontSize, element.scale).y : 0,
       textTransform: element.capsLock ? 'uppercase' : 'none' as any,
       includeFontPadding: false,
       textAlignVertical: 'center' as const,
@@ -1430,15 +1451,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           </Text>
         );
       });
-    }
-    // Nested span background highlights each rendered line (staircase),
-    // matching the server's per-line chips
-    const chipColor =
-      element.backgroundMode === 'white' ? '#FFFFFF'
-      : element.backgroundMode === 'inverted' ? element.color
-      : null;
-    if (chipColor && text) {
-      return <Text style={{ backgroundColor: chipColor }}>{content}</Text>;
     }
     return content;
   };
@@ -2090,13 +2102,36 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     return { top, bottom };
   };
 
+  // The card the feed will actually show: the projected content crop run
+  // through the same displayCropBounds the feed uses (chrome floor + [Aa]
+  // clearance), fed with this canvas's content boxes. Screen points in and out.
+  const getProjectedDisplayCrop = () => {
+    const bounds = getProjectedCropBounds();
+    if (!bounds) return null;
+    const k = CANVAS_WIDTH / screenWidth;
+    const boxes: number[][] = textElements
+      .filter(el => el.content.trim() && textInkSizes[el.id])
+      .map(el => {
+        const w = textInkSizes[el.id].width * el.scale;
+        const h = textInkSizes[el.id].height * el.scale;
+        return [el.x - w / 2, el.y - h / 2, el.x + w / 2, el.y + h / 2].map(v => v * k);
+      });
+    if (stripRect) {
+      boxes.push([stripRect.left, stripRect.top, stripRect.left + stripRect.width,
+                  stripRect.top + stripRect.height].map(v => v * k));
+    }
+    const crop = displayCropBounds(bounds.top * k, bounds.bottom * k, CANVAS_WIDTH,
+                                   screenHeight * k, screenWidth, boxes);
+    return { top: crop.topY / k, bottom: crop.bottomY / k };
+  };
+
   // Adaptive crop guides: hairlines showing where the feed will crop
   const renderCropGuides = () => {
     // With a quote in the canvas the crop is anchored by the strip, so the
     // guides just drew white hairlines around the OP - noise, not
     // information. The bounds themselves still include the strip.
     if (isEditingText || backgroundImage || stripRect) return null;
-    const bounds = getProjectedCropBounds();
+    const bounds = getProjectedDisplayCrop();
     if (!bounds) return null;
     if (bounds.top <= 0 && bounds.bottom >= screenHeight) return null;
 
@@ -2107,6 +2142,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         <View pointerEvents="none" style={[styles.cropOutsideDim, { top: bounds.bottom, bottom: 0 }]} />
         <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.top }]} />
         <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.bottom }]} />
+        {/* Where the card's [Aa] will sit, so the layout is honest */}
+        <View
+          pointerEvents="none"
+          style={[styles.quoteButtonGhost, { top: bounds.bottom - CHROME.inset - CHROME.buttonHeight }]}
+        />
       </>
     );
   };
@@ -2492,7 +2532,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           {/* Font: shows and cycles the typeface */}
           <TouchableOpacity style={styles.controlOption} onPress={cycleFont}>
             <Text
-              style={[styles.controlFontLabel, {
+              style={[styles.controlFontLabel, onBarBaseline(fontConfig.fontFamily, 22), {
                 fontFamily: fontConfig.fontFamily,
                 fontWeight: fontConfig.fontWeight as any,
               }]}
@@ -2506,7 +2546,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               style={[styles.controlOption, styles.controlLetterOption, el.bold && styles.controlOptionActive]}
               onPress={() => updateTextElement(el.id, { bold: !el.bold })}
             >
-              <Text style={[styles.controlFormatLabel, { color: el.bold ? Colors.accent : 'white' }]}>B</Text>
+              <Text style={[styles.controlFormatLabel, onBarBaseline('CourierPrimeBold', 22), { color: el.bold ? Colors.accent : 'white' }]}>B</Text>
             </TouchableOpacity>
           )}
 
@@ -2515,7 +2555,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               style={[styles.controlOption, styles.controlLetterOption, el.italic && styles.controlOptionActive]}
               onPress={() => updateTextElement(el.id, { italic: !el.italic })}
             >
-              <Text style={[styles.controlFormatLabel, styles.controlItalicLabel, { color: el.italic ? Colors.accent : 'white' }]}>I</Text>
+              <Text style={[styles.controlFormatLabel, styles.controlItalicLabel, onBarBaseline('CourierPrimeItalic', 22), { color: el.italic ? Colors.accent : 'white' }]}>I</Text>
             </TouchableOpacity>
           )}
           {/* Underline */}
@@ -2523,7 +2563,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             style={[styles.controlOption, styles.controlLetterOption, el.underline && styles.controlOptionActive]}
             onPress={() => updateTextElement(el.id, { underline: !el.underline })}
           >
-            <Text style={[styles.controlFormatLabel, {
+            <Text style={[styles.controlFormatLabel, onBarBaseline('CourierPrimeBold', 22), {
               color: el.underline ? Colors.accent : 'white',
               textDecorationLine: 'underline',
             }]}>U</Text>
@@ -2589,7 +2629,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             onPress={cycleSpacing}
           >
             <Text
-              style={[styles.controlSpacingLabel, {
+              style={[styles.controlSpacingLabel, onBarBaseline('CourierPrimeBold', 19), {
                 color: (el.letterSpacing || 0) > 0 ? Colors.accent : 'white',
                 letterSpacing: Math.min(el.letterSpacing || 0, 4),
                 marginRight: -Math.min(el.letterSpacing || 0, 4),
@@ -2998,8 +3038,6 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 22,
     includeFontPadding: false,
-    textAlignVertical: 'center',
-    lineHeight: 26,
   },
   controlColorSwatch: {
     width: 28,
@@ -3012,10 +3050,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontFamily: 'CourierPrimeBold',
     color: 'white',
-    // match the optical baseline of the Aa / AB labels beside them
     includeFontPadding: false,
-    textAlignVertical: 'center',
-    lineHeight: 26,
   },
   // B, I and U are single letters - they do not need a full-width button
   controlLetterOption: {
@@ -3026,10 +3061,8 @@ const styles = StyleSheet.create({
   },
   controlSpacingLabel: {
     fontSize: 19,
-    fontWeight: '700',
+    fontFamily: 'CourierPrimeBold',
     includeFontPadding: false,
-    textAlignVertical: 'center',
-    lineHeight: 26,
   },
   topMenuButtonActive: {
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
@@ -3067,6 +3100,16 @@ const styles = StyleSheet.create({
     zIndex: 21,
   },
   // Adaptive crop guide hairlines for text posts
+  quoteButtonGhost: {
+    position: 'absolute',
+    right: CHROME.inset,
+    width: CHROME.buttonWidth,
+    height: CHROME.buttonHeight,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(255,255,255,0.6)',
+    zIndex: 22, // above the canvas, with the guide lines
+  },
   cropGuideLine: {
     position: 'absolute',
     left: 0,
