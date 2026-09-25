@@ -315,6 +315,10 @@ class PostListSerializer(serializers.ModelSerializer):
             return []
         blocked_ids = self.context.get('blocked_author_ids') or set()
         request = self.context.get('request')
+        # The feed batch-loads every ancestor on the page (one query per
+        # level); following current.original_post instead costs a query per
+        # ancestor per post. Falls back to the FK outside the feed.
+        ancestors = self.context.get('ancestors') or {}
 
         def url_of(image):
             if not image:
@@ -329,7 +333,7 @@ class PostListSerializer(serializers.ModelSerializer):
             if not current.is_repost or not current.original_post_id:
                 break
             geometry = current.repost_geometry
-            parent = current.original_post
+            parent = ancestors.get(current.original_post_id) or current.original_post
             if not (isinstance(geometry, dict) and geometry.get('width')):
                 break
             parent_width = parent.image_width or 1080

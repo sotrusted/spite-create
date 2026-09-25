@@ -11,3 +11,6 @@ requests==2.31.0
 sentry-sdk
 django-storages
 boto3
+psycopg[binary]==3.3.6
+dj-database-url==3.1.2
+uvicorn[standard]==0.53.0

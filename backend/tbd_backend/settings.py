@@ -89,12 +89,36 @@ ASGI_APPLICATION = 'tbd_backend.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Production runs Postgres (DATABASE_URL, e.g. postgres:///cmim over the local
+# socket); local dev stays on SQLite. CONN_MAX_AGE=0: under ASGI sync views run
+# in a thread pool, and persistent per-thread connections leak - local socket
+# connects cost ~1ms.
+DATABASE_URL = config('DATABASE_URL', default='')
+if DATABASE_URL:
+    import dj_database_url
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL, conn_max_age=0, conn_health_checks=True),
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+
+# The cache backs DRF throttling. The default LocMemCache holds 300 keys per
+# process, so past ~150 active clients rate-limit history was evicted (limits
+# silently reset), and it was never shared between worker processes. Redis
+# when CACHE_URL is set (production), in-memory for dev and tests.
+CACHE_URL = config('CACHE_URL', default='')
+if CACHE_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': CACHE_URL,
+        }
+    }
 
 
 # Password validation
@@ -206,8 +230,17 @@ if USE_S3:
                 'access_key': config('AWS_ACCESS_KEY_ID', default=None),
                 'secret_key': config('AWS_SECRET_ACCESS_KEY', default=None),
                 'querystring_auth': False,  # public bucket, clean cacheable URLs
-                'file_overwrite': False,
+                # Render filenames are unique per render, so there is nothing
+                # to protect: overwrite=False made every save a HEAD + PUT
+                'file_overwrite': True,
                 'default_acl': None,
+                # A render is never rewritten in place (a re-render gets a new
+                # name), so clients and any CDN can keep it forever
+                'object_parameters': {'CacheControl': 'public, max-age=31536000, immutable'},
+                # S3-compatible stores (Cloudflare R2) and CDN domains are
+                # pure configuration
+                'endpoint_url': config('AWS_S3_ENDPOINT_URL', default=None),
+                'custom_domain': config('AWS_S3_CUSTOM_DOMAIN', default=None),
             },
         },
         'staticfiles': {

@@ -908,3 +908,73 @@ class AlternatingTextColorTests(RenderTestCase):
         # Rainbow's third stop would appear if rainbow had won
         self.assertNotIn((255, 215, 0), colors)
         self.assertIn((255, 26, 26), colors)
+
+
+class FeedQueryTests(RenderTestCase):
+    """The feed's query count must not grow with how many deep quote chains
+    are on the page. Walking original_post level by level per post made it
+    one query per ancestor per post (up to ~250 for a page of deep chains)."""
+
+    GEOMETRY = {'x': 86, 'y': 900, 'width': 907}
+
+    def _chain(self, depth, label):
+        post = self.make_post([text_element(f'{label}0', color='#000000')])
+        for level in range(1, depth + 1):
+            post = self.make_post([text_element(f'{label}{level}', color='#000000', y=500)],
+                                  is_repost=True, original_post=post,
+                                  repost_geometry=self.GEOMETRY)
+        return post
+
+    def _feed_queries(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get('/api/feed/?page_size=50',
+                                       HTTP_X_DEVICE_ID=self.user.device_id)
+        self.assertEqual(response.status_code, 200)
+        return len(ctx.captured_queries), response.json()['results']
+
+    def test_query_count_is_independent_of_how_many_deep_chains(self):
+        self.user.device_id = 'feed-query-device'
+        self.user.save()
+        self._chain(5, 'A')
+        one_chain, _ = self._feed_queries()
+        for label in 'BCDE':
+            self._chain(5, label)
+        five_chains, results = self._feed_queries()
+        self.assertEqual(five_chains, one_chain,
+                         f'{one_chain} queries with one deep chain, {five_chains} with five')
+        # and the chain itself is still complete
+        deepest = max(results, key=lambda p: len(p['quote_chain']))
+        self.assertEqual(len(deepest['quote_chain']), 5)
+
+
+class RequestIdentityTests(RenderTestCase):
+    """Correctness fixes found in the scale audit."""
+
+    def _payload(self):
+        with open(os.path.join(FIXTURES_DIR, 'post-payload.json')) as f:
+            return json.load(f)
+
+    def test_restricted_user_is_refused_and_nothing_is_saved(self):
+        restricted = User.objects.create(device_id='restricted-device', is_shadowbanned=True)
+        before = Post.objects.count()
+        response = self.client.post('/api/posts/', self._payload(),
+                                    content_type='application/json',
+                                    HTTP_X_DEVICE_ID=restricted.device_id)
+        # was a 201 for a post that was never saved
+        self.assertEqual(response.status_code, 403, response.content)
+        self.assertEqual(Post.objects.count(), before)
+
+    def test_requests_without_a_device_id_mint_no_users(self):
+        before = User.objects.count()
+        self.assertEqual(self.client.get('/api/notifications/').status_code, 200)
+        self.assertEqual(self.client.post('/api/notifications/read/').status_code, 400)
+        self.assertEqual(User.objects.count(), before)
+
+    def test_viewing_a_post_counts_the_view(self):
+        post = self.make_post([text_element('SEEN', color='#000000')])
+        for _ in range(3):
+            self.assertEqual(self.client.get(f'/api/posts/{post.id}/').status_code, 200)
+        post.refresh_from_db()
+        self.assertEqual(post.view_count, 3)

@@ -266,8 +266,13 @@ class Post(models.Model):
         return img
 
     def _save_render(self, img, field, filename):
+        # Unique per render: stored objects are served with an immutable,
+        # year-long cache header, so a re-render must land at a new URL
+        # rather than overwrite one that clients and CDNs already hold
+        stem, ext = os.path.splitext(filename)
+        filename = f"{stem}-{uuid.uuid4().hex[:8]}{ext}"
         img_io = io.BytesIO()
-        img.save(img_io, format='PNG', quality=settings.POST_IMAGE_QUALITY)
+        img.save(img_io, format='PNG')
         img_io.seek(0)
         field.save(filename, ContentFile(img_io.read()), save=False)
 
@@ -1334,6 +1339,10 @@ class Notification(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            # the app-open query: this user's unread, newest first
+            models.Index(fields=['recipient', 'is_read', '-created_at'], name='notif_inbox_idx'),
+        ]
 
     def __str__(self):
         return f"{self.notif_type}: @{self.actor.handle} -> @{self.recipient.handle}"

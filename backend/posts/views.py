@@ -1,9 +1,9 @@
-from rest_framework import generics, status, permissions
+from rest_framework import generics, status, permissions, exceptions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import CursorPagination
 from .throttles import RealIPThrottle, DeviceThrottle, PostCreateThrottle, PostCreateIPThrottle
-from django.db.models import Q, Prefetch
+from django.db.models import Q, Prefetch, F
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
@@ -46,37 +46,22 @@ class PostCreateView(generics.CreateAPIView):
         # Get or create anonymous user
         user = self.get_or_create_user()
         
-        # Check if user can post
+        # perform_create's return value is ignored by DRF, so a refusal has
+        # to be raised - returning a Response here used to fall through to a
+        # 201 for a post that was never saved
         if not user.can_post():
-            return Response(
-                {'error': 'You are temporarily restricted from posting'},
-                status=status.HTTP_429_TOO_MANY_REQUESTS
-            )
-        
+            raise exceptions.PermissionDenied('You are temporarily restricted from posting')
+
         # Save the post. The serializer broadcasts the new post over the
         # WebSocket with full crop geometry, so no second notification here.
-        post = serializer.save(author=user)
+        serializer.save(author=user)
 
-        # Update user's last post time
         user.last_post_time = timezone.now()
-        user.save()
-    
+        user.save(update_fields=['last_post_time'])
+
     def get_or_create_user(self):
-        """Get or create anonymous user based on device ID"""
-        device_id = self.request.META.get('HTTP_X_DEVICE_ID')
-        
-        if device_id:
-            user, created = User.objects.get_or_create(
-                device_id=device_id,
-                defaults={'is_anonymous_mode': True}
-            )
-            return user
-        else:
-            # Create completely anonymous user
-            return User.objects.create(
-                is_anonymous_mode=True
-            )
-    
+        return get_or_create_user_from_request(self.request)
+
 
 class FeedListView(generics.ListAPIView):
     """Get paginated feed of posts"""
@@ -87,11 +72,7 @@ class FeedListView(generics.ListAPIView):
     
     def get_queryset(self):
         """Get posts excluding muted users and hidden posts"""
-        queryset = Post.objects.filter(
-            is_hidden=False
-        ).select_related('author').prefetch_related(
-            'reports'
-        )
+        queryset = Post.objects.filter(is_hidden=False).select_related('author')
         
         # Exclude posts from shadowbanned users
         queryset = queryset.exclude(author__is_shadowbanned=True)
@@ -112,26 +93,54 @@ class FeedListView(generics.ListAPIView):
         return queryset.select_related('original_post__author')
 
     def get_blocked_author_ids(self, user):
-        """Users blocked by the viewer plus users who blocked the viewer."""
-        blocked = set(BlockedUser.objects.filter(user=user).values_list('blocked_user_id', flat=True))
-        blocked |= set(BlockedUser.objects.filter(blocked_user=user).values_list('user_id', flat=True))
-        return blocked
+        """Users blocked by the viewer plus users who blocked the viewer.
+        Computed once per request: the queryset and the serializer both need it."""
+        if not hasattr(self, '_blocked_ids'):
+            if user is None:
+                self._blocked_ids = set()
+            else:
+                pairs = BlockedUser.objects.filter(
+                    Q(user=user) | Q(blocked_user=user)
+                ).values_list('user_id', 'blocked_user_id')
+                self._blocked_ids = {
+                    other for pair in pairs for other in pair if other != user.id
+                }
+        return self._blocked_ids
+
+    def list(self, request, *args, **kwargs):
+        page = self.paginate_queryset(self.filter_queryset(self.get_queryset()))
+        self._ancestors = self.fetch_ancestors(page or [])
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
+
+    @staticmethod
+    def fetch_ancestors(posts, max_depth=6):
+        """Every post quoted, at any depth, by the posts on this page - one
+        query per LEVEL rather than per ancestor per post, so a page of deep
+        quote chains costs at most max_depth queries."""
+        ancestors = {}
+        frontier = {p.original_post_id for p in posts if p.is_repost and p.original_post_id}
+        for _ in range(max_depth):
+            frontier -= ancestors.keys()
+            if not frontier:
+                break
+            fetched = list(Post.objects.filter(id__in=frontier))
+            ancestors.update((a.id, a) for a in fetched)
+            frontier = {a.original_post_id for a in fetched if a.is_repost and a.original_post_id}
+        return ancestors
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        user = self.get_user_from_request()
-        context['blocked_author_ids'] = self.get_blocked_author_ids(user) if user else set()
+        context['blocked_author_ids'] = self.get_blocked_author_ids(self.get_user_from_request())
+        context['ancestors'] = getattr(self, '_ancestors', {})
         return context
-    
+
     def get_user_from_request(self):
-        """Get user from device ID or authentication"""
-        device_id = self.request.META.get('HTTP_X_DEVICE_ID')
-        if device_id:
-            try:
-                return User.objects.get(device_id=device_id)
-            except User.DoesNotExist:
-                pass
-        return None
+        """The viewer, looked up (never created) once per request."""
+        if not hasattr(self, '_viewer'):
+            device_id = self.request.META.get('HTTP_X_DEVICE_ID')
+            self._viewer = User.objects.filter(device_id=device_id).first() if device_id else None
+        return self._viewer
 
 
 class PostDetailView(generics.RetrieveAPIView):
@@ -147,15 +156,12 @@ class PostDetailView(generics.RetrieveAPIView):
         ).select_related('author')
     
     def retrieve(self, request, *args, **kwargs):
-        """Increment view count when post is viewed"""
-        response = super().retrieve(request, *args, **kwargs)
-        
-        # Increment view count
         post = self.get_object()
+        # Atomic in the database: a read-modify-write lost counts whenever two
+        # people opened the same post at once
+        Post.objects.filter(pk=post.pk).update(view_count=F('view_count') + 1)
         post.view_count += 1
-        post.save(update_fields=['view_count'])
-        
-        return response
+        return Response(self.get_serializer(post).data)
 
 
 @api_view(['POST'])
@@ -329,20 +335,22 @@ def user_profile(request):
 
 
 def get_or_create_user_from_request(request):
-    """Helper function to get or create user from request"""
+    """The user behind the request's X-Device-Id, created on first sight.
+
+    Every client sends a device id. A request without one is refused: minting
+    a fresh anonymous user for it (the old behaviour) grew the users table by
+    a row per call and gave the caller an identity nothing could ever reuse.
+    get_or_create already retries the lookup if two first requests race on
+    the unique device_id.
+    """
     device_id = request.META.get('HTTP_X_DEVICE_ID')
-    
-    if device_id:
-        user, created = User.objects.get_or_create(
-            device_id=device_id,
-            defaults={'is_anonymous_mode': True}
-        )
-        return user
-    else:
-        # Create completely anonymous user; handle is auto-generated in save()
-        return User.objects.create(
-            is_anonymous_mode=True
-        )
+    if not device_id:
+        raise exceptions.ValidationError({'detail': 'X-Device-Id header required'})
+    user, _ = User.objects.get_or_create(
+        device_id=device_id,
+        defaults={'is_anonymous_mode': True},
+    )
+    return user
 
 
 @api_view(['POST'])
@@ -426,8 +434,11 @@ def notifications_list(request):
     """Unread notifications for the requesting device's user (MVP: reposts).
     ?all=1 returns the latest 50 regardless of read state."""
     from .models import Notification
-    user = get_or_create_user_from_request(request)
-    qs = Notification.objects.filter(recipient=user).select_related('actor', 'post')
+    device_id = request.META.get('HTTP_X_DEVICE_ID')
+    user = User.objects.filter(device_id=device_id).first() if device_id else None
+    if user is None:
+        return Response({'results': [], 'unread_count': 0})
+    qs = Notification.objects.filter(recipient=user).select_related('actor', 'post__original_post')
     if not request.GET.get('all'):
         qs = qs.filter(is_read=False)
     items = [
