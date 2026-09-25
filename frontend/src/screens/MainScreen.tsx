@@ -20,6 +20,8 @@ import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Feed from '../components/Feed';
 import { GUIDELINES_TEXT, TERMS_TEXT } from '../constants/legal';
+import { subscribeToPostCreated, PostEvent } from '../utils/postEvents';
+import { metricsFor, inkBaselineFor } from '../constants/fontMetrics';
 import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
 import { contrastRatio, hexToRgb } from '../utils/contrast';
 import { FontChoice, Post } from '../types';
@@ -42,6 +44,7 @@ export default function MainScreen() {
     letterSpacing: 1,
     glow: false,
     caps: false,
+    fontSize: 24,
     sourceId: '',
   });
   const themePool = useRef<Post[]>([]);
@@ -76,30 +79,102 @@ export default function MainScreen() {
       letterSpacing: Math.min((Number(el.letterSpacing) || 0) / k, 3) || 1,
       glow: !!el.glow,
       caps: !!el.capsLock,
+      fontSize: fitHeaderSize(resolveFontFace(fontKey, !!el.bold, !!el.italic)),
       sourceId: post.id,
     });
   };
 
   const handleFeedLoaded = (posts: Post[]) => {
-    themePool.current = posts.slice(0, 20);
-    if (themeLatched.current || posts.length === 0) return;
-    themeLatched.current = true;
-    applyThemeFromPost(posts[Math.floor(Math.random() * themePool.current.length)]);
+    try {
+      buildThemePool(posts);
+    } catch (error) {
+      console.log('Masthead theme sampling failed (non-critical):', error);
+    }
   };
 
-  const rerollHeaderTheme = () => {
-    const pool = themePool.current;
-    if (pool.length === 0) return;
-    // full pool, but the result must LOOK different: reject picks whose
-    // background and font both match the current costume
-    const visiblyDifferent = pool.filter(p => {
-      const bg = p.background_color || Colors.background;
-      const fontKey = (p.font_choice as FontChoice) in FontChoices ? (p.font_choice as FontChoice) : 'arial-black';
-      return bg !== headerTheme.background || FontChoices[fontKey].fontFamily !== headerTheme.fontFamily;
+  const buildThemePool = (posts: Post[]) => {
+    // Every level on the page is a candidate, quoted ancestors included -
+    // a repost's middle levels have styles the top level never shows.
+    const levels: Post[] = [];
+    posts.slice(0, 20).forEach(post => {
+      levels.push(post);
+      (post.quote_chain || []).forEach((level: any, i: number) => {
+        if (!level?.background_color) return;
+        levels.push({
+          ...post,
+          id: `${post.id}-q${i}`,
+          background_color: level.background_color,
+          font_choice: level.font_choice || post.font_choice,
+          text_elements: level.text_elements || [],
+        } as Post);
+      });
     });
-    const candidates = visiblyDifferent.length > 0 ? visiblyDifferent : pool.filter(p => p.id !== headerTheme.sourceId);
-    if (candidates.length === 0) return;
-    applyThemeFromPost(candidates[Math.floor(Math.random() * candidates.length)]);
+    themePool.current = levels;
+    if (themeLatched.current || posts.length === 0) return;
+    themeLatched.current = true;
+    // The masthead starts randomized. Half the time it borrows a costume
+    // from something on the page (any level, quoted ancestors included),
+    // half the time it rolls the full composer option space - same as a tap.
+    const pool = themePool.current;
+    if (pool.length > 0 && Math.random() < 0.5) {
+      applyThemeFromPost(pool[Math.floor(Math.random() * pool.length)]);
+    } else {
+      rerollHeaderTheme();
+    }
+  };
+
+  // Tapping the masthead re-rolls it from the FULL composer option space -
+  // every font, colour and formatting toggle a post could use - rather than
+  // from what happens to be in the feed. Guards: the font always changes,
+  // ink always clears 4.5:1 against the background, size stays in a range
+  // the one-line masthead can wear.
+  // The baseline is held by arithmetic, not by freezing the size: each title
+  // is positioned so (top + ascent x fontSize) lands on the same line, using
+  // ascents measured from the shipped TTFs. Size picks the largest that still
+  // fits the slot, so autoshrink never fires and never invalidates the maths.
+  const HEADER_SIZE_RANGE = [20, 30];
+  const HEADER_BASELINE = 30; // px from the top of the title slot
+  const headerSlotWidth = screenWidth - 92; // padding + profile icon + margin
+
+  const fitHeaderSize = (fontFamily: string) => {
+    const { widthPerPt } = metricsFor(fontFamily);
+    const maxThatFits = Math.floor(headerSlotWidth / widthPerPt);
+    const hi = Math.min(HEADER_SIZE_RANGE[1], maxThatFits);
+    const lo = Math.min(HEADER_SIZE_RANGE[0], hi);
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  };
+  const rerollHeaderTheme = () => {
+    const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)];
+    const fontKeys = (Object.keys(FontChoices) as FontChoice[]).filter(
+      k => resolveFontFace(k, false, false) !== headerTheme.fontFamily,
+    );
+    const fontKey = pick(fontKeys.length > 0 ? fontKeys : (Object.keys(FontChoices) as FontChoice[]));
+    const variants = (FontChoices[fontKey] as any).variants || {};
+    const bold = !!variants.bold && Math.random() < 0.4;
+    const italic = !!variants.italic && Math.random() < 0.3;
+
+    const background = pick(Colors.postColors);
+    const bg = hexToRgb(background);
+    // Readable ink only: palette colours that clear 4.5:1, else black/white
+    const readable = Colors.postColors.filter(
+      c => contrastRatio(bg, hexToRgb(c)) >= 4.5,
+    );
+    const text = readable.length > 0
+      ? pick(readable)
+      : (contrastRatio(bg, [255, 255, 255]) >= contrastRatio(bg, [0, 0, 0]) ? '#FFFFFF' : '#000000');
+
+    setHeaderTheme({
+      background,
+      text,
+      fontFamily: resolveFontFace(fontKey, bold, italic),
+      fontWeight: FontChoices[fontKey].fontWeight as 'normal' | 'bold',
+      underline: Math.random() < 0.08,
+      letterSpacing: pick([0, 1, 2, 3]),
+      glow: Math.random() < 0.25,
+      caps: Math.random() < 0.3,
+      fontSize: fitHeaderSize(resolveFontFace(fontKey, bold, italic)),
+      sourceId: '',
+    });
   };
 
   // First-open: offer the generated handle for editing before first use
@@ -166,9 +241,14 @@ export default function MainScreen() {
     })
   ).current;
 
+  const [newPostEvent, setNewPostEvent] = useState<PostEvent | null>(null);
+
   const handleNewPost = (post: Post) => {
     setNewPost(post);
   };
+
+  // Eagerly-posted content arrives here after the composer has already closed
+  useEffect(() => subscribeToPostCreated(setNewPostEvent), []);
 
   const handleNewPostDisplayed = () => {
     setNewPost(null);
@@ -201,11 +281,14 @@ export default function MainScreen() {
       >
         <Pressable onPress={rerollHeaderTheme}>
         <SafeAreaView edges={['top']} style={styles.headerContent}>
+          <View style={styles.appTitleSlot}>
           <Text
             style={[styles.appTitle, {
+              top: HEADER_BASELINE - inkBaselineFor(headerTheme.fontFamily) * headerTheme.fontSize,
               color: headerTheme.text,
               fontFamily: headerTheme.fontFamily,
               fontWeight: headerTheme.fontWeight,
+              fontSize: headerTheme.fontSize,
               textDecorationLine: headerTheme.underline ? 'underline' as const : 'none' as const,
               letterSpacing: headerTheme.letterSpacing,
               textTransform: headerTheme.caps ? 'uppercase' as const : 'none' as const,
@@ -219,8 +302,9 @@ export default function MainScreen() {
             adjustsFontSizeToFit
             minimumFontScale={0.5}
           >
-            Type
+            Creative Mind's Ideas
           </Text>
+          </View>
           <TouchableOpacity onPress={openProfile} style={styles.profileButton}>
             <Ionicons name="person-circle-outline" size={28} color={headerTheme.text} />
           </TouchableOpacity>
@@ -234,6 +318,7 @@ export default function MainScreen() {
           newPost={newPost}
           onNewPostDisplayed={handleNewPostDisplayed}
           onFeedLoaded={handleFeedLoaded}
+          postEvent={newPostEvent}
           onScroll={handleScroll}
           contentInsetAdjustmentBehavior="never"
           contentInset={{ top: 100 }}
@@ -328,14 +413,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
   },
-  appTitle: {
+  // The slot has a fixed height and bottom-aligns its text, so every
+  // randomized costume - whatever font or size it draws - sits on the same
+  // baseline instead of bouncing the masthead around.
+  appTitleSlot: {
     flex: 1,
+    height: 38,
+    marginRight: 12,
+  },
+  appTitle: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    includeFontPadding: false,
     fontSize: 24,
     fontFamily: 'ArialBlack',
     fontWeight: 'bold',
     color: Colors.primary,
     letterSpacing: 1,
-    marginRight: 12,
   },
   profileButton: {
     padding: 4,

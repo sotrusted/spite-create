@@ -2,7 +2,7 @@ from rest_framework import generics, status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import CursorPagination
-from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
+from .throttles import RealIPThrottle, DeviceThrottle, PostCreateThrottle, PostCreateIPThrottle
 from django.db.models import Q, Prefetch
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -26,11 +26,6 @@ User = get_user_model()
 channel_layer = get_channel_layer()
 
 
-class PostCreateThrottle(UserRateThrottle):
-    """Custom throttle for post creation"""
-    scope = 'post_create'
-
-
 class FeedPagination(CursorPagination):
     """Custom pagination for feed with larger page size"""
     page_size = 20
@@ -44,7 +39,7 @@ class PostCreateView(generics.CreateAPIView):
     """Create new posts"""
     serializer_class = PostSerializer
     permission_classes = [permissions.AllowAny]  # Anonymous posting allowed
-    throttle_classes = [PostCreateThrottle]
+    throttle_classes = [PostCreateThrottle, PostCreateIPThrottle]
     
     def perform_create(self, serializer):
         """Save post with author and send realtime notification"""
@@ -88,7 +83,7 @@ class FeedListView(generics.ListAPIView):
     serializer_class = PostListSerializer
     permission_classes = [permissions.AllowAny]
     pagination_class = FeedPagination
-    throttle_classes = [AnonRateThrottle, UserRateThrottle]
+    throttle_classes = [RealIPThrottle, DeviceThrottle]
     
     def get_queryset(self):
         """Get posts excluding muted users and hidden posts"""

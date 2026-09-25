@@ -92,7 +92,7 @@ export default function ProfileScreen() {
         <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
           <Ionicons name="close" size={24} color={Colors.primary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>PROFILE</Text>
+        <Text style={styles.headerTitle}>Profile</Text>
         <TouchableOpacity onPress={handleSettings} style={styles.settingsButton}>
           <Ionicons name="settings-outline" size={22} color={Colors.primary} />
         </TouchableOpacity>
@@ -139,11 +139,9 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.statsSection}>
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>{user.posts_count_today || 0}</Text>
-                <Text style={styles.statLabel}>Posts today</Text>
-              </View>
-              {/* Reports stat retired from view 2026-09-20 */}
+              <Text style={styles.statLine}>
+                {user.total_posts ?? 0} {(user.total_posts ?? 0) === 1 ? 'post' : 'posts'}
+              </Text>
             </View>
 
             {/* Account Status section slimmed 2026-09-20: anonymous-mode and
@@ -269,8 +267,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontFamily: 'ArialBlack',
-    fontWeight: 'bold',
+    fontWeight: '600',
     color: Colors.primary,
   },
   settingsButton: {
@@ -299,6 +296,10 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 14,
+    color: Colors.secondary,
+  },
+  statLine: {
+    fontSize: 16,
     color: Colors.secondary,
   },
   statsSection: {

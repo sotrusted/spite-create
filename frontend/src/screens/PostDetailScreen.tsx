@@ -10,10 +10,15 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Share } from 'react-native';
+import * as MediaLibrary from 'expo-media-library';
+import * as LegacyFS from 'expo-file-system/legacy';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { api, endpoints, absoluteUrl } from '../config/api';
 import LoadingScreen from '../components/LoadingScreen';
 import { Colors } from '../constants/colors';
+import { CHROME } from '../constants/layout';
+import { displayCropBounds } from '../utils/displayCrop';
 import { Post } from '../types';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -24,16 +29,17 @@ const { width: screenWidth } = Dimensions.get('window');
 export default function PostDetailScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const { postId } = (route.params as { postId: string }) || {};
-  const [post, setPost] = useState<Post | null>(null);
+  const { postId, post: seed } = (route.params as { postId: string; post?: Post }) || {};
+  // Seeded from the feed when there is one - no fetch, no loading frame
+  const [post, setPost] = useState<Post | null>(seed ?? null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!postId) return;
     api.get<Post>(endpoints.getPost(postId))
       .then(response => setPost(response.data))
-      .catch(() => setError(true));
-  }, [postId]);
+      .catch(() => { if (!seed) setError(true); });
+  }, [postId, seed]);
 
   const handleRepost = () => {
     if (!post?.rendered_image_url) return;
@@ -54,11 +60,12 @@ export default function PostDetailScreen() {
 
     if (canvasWidth > 0 && canvasHeight > 0 && topY !== null && bottomY !== null && bottomY > topY) {
       const scale = screenWidth / canvasWidth;
+      const crop = displayCropBounds(topY, bottomY, canvasWidth, canvasHeight, screenWidth);
       return (
-        <View style={{ width: '100%', height: (bottomY - topY) * scale, overflow: 'hidden' }}>
+        <View style={{ width: '100%', height: (crop.bottomY - crop.topY) * scale, overflow: 'hidden' }}>
           <Image
             source={{ uri: absoluteUrl(post.rendered_image_url) }}
-            style={{ width: '100%', height: canvasHeight * scale, transform: [{ translateY: -topY * scale }] }}
+            style={{ width: '100%', height: canvasHeight * scale, transform: [{ translateY: -crop.topY * scale }] }}
             resizeMode="cover"
           />
           {/* Invisible selectable text laid over the rendered text: we know
@@ -67,7 +74,7 @@ export default function PostDetailScreen() {
           {(post as any).text_elements?.map((el: any, index: number) => {
             if (!el?.content?.trim()) return null;
             const x = (el.x || 0) * scale;
-            const y = ((el.y || 0) - topY) * scale;
+            const y = ((el.y || 0) - crop.topY) * scale;
             const fontSize = Math.max(8, (el.fontSize || 24) * scale);
             const maxWidth = screenWidth * 0.9;
             return (
@@ -102,12 +109,31 @@ export default function PostDetailScreen() {
     );
   };
 
-  return (
-    <View style={styles.container}>
-      <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
-        <Ionicons name="close" size={24} color={Colors.primary} />
-      </TouchableOpacity>
+  // Save the post's rendered image: one tap to Photos, share sheet if the
+  // build predates the photo permission string.
+  const handleDownload = async () => {
+    const remote = post?.rendered_image_url;
+    if (!remote) return;
+    try {
+      const target = LegacyFS.cacheDirectory + `post-${post!.id}.png`;
+      const { uri } = await LegacyFS.downloadAsync(absoluteUrl(remote)!, target);
+      try {
+        const { granted } = await MediaLibrary.requestPermissionsAsync(true);
+        if (!granted) return;
+        await MediaLibrary.saveToLibraryAsync(uri);
+      } catch {
+        await Share.share({ url: uri });
+      }
+    } catch (error) {
+      console.log('Post export failed:', error);
+    }
+  };
 
+  const background = post?.background_color || Colors.background;
+  const chrome = chromeColor(background);
+
+  return (
+    <View style={[styles.container, { backgroundColor: background }]}>
       {!post && !error && (
         <View style={styles.loading}>
           <LoadingScreen />
@@ -120,36 +146,46 @@ export default function PostDetailScreen() {
       )}
 
       {post && (
-        <ScrollView contentContainerStyle={styles.content}>
-          {renderImage()}
+        <>
+          {/* Full bleed: the post floats in its own colour, vertically centred */}
+          <View style={styles.stage}>{renderImage()}</View>
 
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.repostButton} onPress={handleRepost}>
-              <Ionicons name="repeat-outline" size={18} color="white" />
-              <Text style={styles.repostText}>Repost</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
+          <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
+            <Ionicons name="close" size={26} color={chrome} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.downloadButton} onPress={handleDownload}>
+            <Ionicons name="download-outline" size={24} color={chrome} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.quoteButton, { backgroundColor: chrome }]}
+            onPress={handleRepost}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.quoteButtonText, { color: background }]}>Aa</Text>
+          </TouchableOpacity>
+        </>
       )}
     </View>
   );
 }
 
+// Chrome reads against the post's own colour, same rule as the feed's chip
+const chromeColor = (background: string) => {
+  const hex = background.replace('#', '');
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 140 ? '#000000' : '#FFFFFF';
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
-  closeButton: {
-    position: 'absolute',
-    top: 60,
-    left: 20,
-    zIndex: 10,
-    width: 40,
-    height: 40,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+  // The post floats in its own colour, centred vertically, edge to edge
+  stage: {
+    flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
   },
   loading: {
     flex: 1,
@@ -157,42 +193,46 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   errorText: {
-    color: Colors.secondary,
-    fontSize: 16,
-    fontFamily: 'CourierPrime',
-  },
-  content: {
-    paddingTop: 110,
-    paddingBottom: 60,
-  },
-  textBlock: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-  },
-  selectableText: {
     color: Colors.primary,
     fontSize: 16,
-    fontFamily: 'CourierPrime',
-    lineHeight: 24,
   },
-  actions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 20,
-    paddingTop: 24,
-  },
-  repostButton: {
-    flexDirection: 'row',
+  closeButton: {
+    position: 'absolute',
+    top: CHROME.topInset,
+    left: CHROME.inset,
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.accent,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    zIndex: 10,
   },
-  repostText: {
-    color: 'white',
-    fontSize: 15,
+  downloadButton: {
+    position: 'absolute',
+    top: CHROME.topInset,
+    right: CHROME.inset,
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  quoteButton: {
+    position: 'absolute',
+    right: CHROME.inset,
+    bottom: CHROME.inset,
+    width: CHROME.buttonWidth,
+    height: CHROME.buttonHeight,
+    borderWidth: 1,
+    borderColor: CHROME.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  quoteButtonText: {
     fontFamily: 'CourierPrime',
     fontWeight: '700',
+    fontSize: 15,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
 });

@@ -16,6 +16,8 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Share,
+  Modal,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,10 +38,26 @@ import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
 import { FEATURES } from '../constants/features';
 import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
 import { api, endpoints, absoluteUrl } from '../config/api';
+import { captureRef } from 'react-native-view-shot';
+import { emitPostCreated } from '../utils/postEvents';
 import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+// Flip to true (dev only) to overlay the server render on the composer canvas
+// after posting - the WYSIWYG parity check. Costs the eager-post behaviour
+// while on, so it stays off.
+const SHOW_PARITY_GHOST = false;
+
+// Default ink must read against whatever canvas it lands on. Reposting a
+// ghost-white post picks red as the next background, and the default ink was
+// also red - so quoting produced a red-on-red canvas every time.
+const readableDefaultInk = (canvas: string) => {
+  const base = '#FF1A1A';
+  if (contrastRatio(hexToRgb(canvas), hexToRgb(base)) >= 3.0) return base;
+  return pickReadableColor(canvas, Colors.postColors, base);
+};
 const DEFAULT_SIGNATURE_STYLE = 'default';
 
 // User can pick their own images as stickers - no presets needed
@@ -72,9 +90,10 @@ interface TextElement {
   scale: number;
   letterSpacing: number;
   opacity?: number;
-  blendMode?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference';
   glow: boolean;
   rainbow: boolean;
+  // Two palette colours cycled per letter; wins over rainbow when set
+  alternateColors?: string[];
   align: 'left' | 'center' | 'right';
   bold: boolean;
   italic: boolean;
@@ -173,6 +192,10 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
 };
 
 export default function PostComposer({ onPost, onClose, repostData }: Props) {
+  // Resolved before the first text element so its ink can be checked against it
+  const initialBackground = repostData?.originalPost?.background_color
+    ? getNextBackgroundColor(repostData.originalPost.background_color)
+    : Colors.postColors[0];
   // Text elements state
   const [textElements, setTextElements] = useState<TextElement[]>([
     {
@@ -183,7 +206,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       originalX: null,
       originalY: null,
       fontSize: 24,
-      color: '#FF1A1A',
+      color: readableDefaultInk(initialBackground),
       fontFamily: 'arial-black',
       hasBackground: false,
       backgroundColor: '#FFFFFF',
@@ -252,14 +275,10 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   
   // Local state for immediate text input updates (prevents input lag)
   const [localTextContent, setLocalTextContent] = useState<Record<string, string>>({});
+
   
   // Canvas background - use next color in sequence if reposting
-  const getInitialBackgroundColor = () => {
-    if (repostData?.originalPost?.background_color) {
-      return getNextBackgroundColor(repostData.originalPost.background_color);
-    }
-    return Colors.postColors[0]; // Default to first color in the list
-  };
+  const getInitialBackgroundColor = () => initialBackground;
   
   const [backgroundColor, setBackgroundColor] = useState(getInitialBackgroundColor());
   const [backgroundGradient, setBackgroundGradient] = useState<string[]>([]);
@@ -304,6 +323,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   // Dev-only WYSIWYG check: after posting, overlay the server render on the
   // live canvas at half opacity so any drift is immediately visible
   const [parityGhost, setParityGhost] = useState<{ uri: string; post: any } | null>(null);
+  const [colorGridMode, setColorGridMode] = useState<'background' | 'text' | null>(null);
+  // Colours collected so far while building a two-colour letter cycle;
+  // null means the grid is in its normal single-pick mode.
+  const [duoPending, setDuoPending] = useState<string[] | null>(null);
+  const canvasCaptureRef = useRef<View>(null);
 
   // The quoted strip is draggable like a text element; its position is
   // WYSIWYG (the payload sends whatever rect is showing)
@@ -366,6 +390,13 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     persistComposerPrefs();
   };
 
+  // A quote may be enlarged past the canvas edges. When it is bigger than the
+  // canvas it pans like a zoomed image; when smaller it stays fully on screen.
+  const clampStripAxis = (value: number, size: number, screen: number) =>
+    size >= screen
+      ? Math.min(0, Math.max(screen - size, value))
+      : Math.max(0, Math.min(screen - size, value));
+
   const handleStripPan = (event: any) => {
     if (!stripRect) return;
     const { state, translationX, translationY } = event.nativeEvent;
@@ -373,8 +404,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       stripDragStart.current = { x: stripRect.left, y: stripRect.top };
     } else if (state === State.ACTIVE) {
       setStripPosition({
-        x: Math.max(0, Math.min(screenWidth - stripRect.width, stripDragStart.current.x + translationX)),
-        y: Math.max(0, Math.min(screenHeight - stripRect.height, stripDragStart.current.y + translationY)),
+        x: clampStripAxis(stripDragStart.current.x + translationX, stripRect.width, screenWidth),
+        y: clampStripAxis(stripDragStart.current.y + translationY, stripRect.height, screenHeight),
       });
     }
   };
@@ -385,7 +416,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     if (state === State.BEGAN) {
       stripPinchBase.current = stripScale;
     } else if (state === State.ACTIVE) {
-      const maxScale = screenWidth / defaultStripRect.width;
+      // up to 3x the canvas: the quote can be blown up past the edges
+      const maxScale = (screenWidth * 3) / defaultStripRect.width;
       const next = Math.max(0.2, Math.min(maxScale, stripPinchBase.current * scale));
       // Zoom around the strip's center
       const centerX = stripRect.left + stripRect.width / 2;
@@ -394,8 +426,8 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       const newHeight = defaultStripRect.height * next;
       setStripScale(next);
       setStripPosition({
-        x: Math.max(0, Math.min(screenWidth - newWidth, centerX - newWidth / 2)),
-        y: Math.max(0, Math.min(screenHeight - newHeight, centerY - newHeight / 2)),
+        x: clampStripAxis(centerX - newWidth / 2, newWidth, screenWidth),
+        y: clampStripAxis(centerY - newHeight / 2, newHeight, screenHeight),
       });
     }
   };
@@ -625,14 +657,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     return textElements.find(el => el.id === selectedTextId) || textElements[0];
   };
 
-  // Default ink checked against the live canvas color, so a saved red-ish
-  // background can never spawn red-on-red
-  const readableDefaultInk = (canvas: string) => {
-    const base = '#FF1A1A';
-    if (contrastRatio(hexToRgb(canvas), hexToRgb(base)) >= 3.0) return base;
-    return pickReadableColor(canvas, Colors.postColors, base);
-  };
-
   const updateTextElement = (id: string, updates: Partial<TextElement>) => {
     console.log('🔄 updateTextElement called:', { id, updates });
     setTextElements(prev => {
@@ -845,8 +869,20 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     }
 
     // Only create/edit text when NOT currently editing
-    const { locationX, locationY } = event.nativeEvent;
-    console.log('Tap coordinates:', { locationX, locationY });
+    // locationX/Y are relative to whichever CHILD received the touch, so a
+    // tap that landed on an existing element's touch area reported tiny
+    // coordinates and dropped the new element in the top-left corner. pageX/Y
+    // are screen coordinates, and this canvas is full-screen, so they are the
+    // canvas coordinates regardless of which child was hit.
+    const ne = event.nativeEvent || {};
+    const pageX = ne.pageX;
+    const pageY = ne.pageY;
+    const locationX = Number.isFinite(pageX)
+      ? pageX
+      : (Number.isFinite(ne.locationX) ? ne.locationX : screenWidth / 2);
+    const locationY = Number.isFinite(pageY)
+      ? pageY
+      : (Number.isFinite(ne.locationY) ? ne.locationY : screenHeight / 2);
     
     // Check if tap is on existing text element
     const tappedElement = findElementAtPosition(locationX, locationY);
@@ -1012,43 +1048,91 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       repostStripRect: stripRect,
     });
 
-    try {
-      const response = await api.post(endpoints.createPost, postData);
-
-      // Success animation
-      postButtonScale.value = withSpring(1.1, { duration: 200 });
-
-      if (__DEV__ && response.data?.rendered_image_url) {
-        // Hold the composer open under the parity ghost; finishPost runs
-        // when the ghost is dismissed
+    if (SHOW_PARITY_GHOST) {
+      // Parity checking only: blocks so the server render can be overlaid on
+      // the canvas that produced it. Off by default so dev exercises the
+      // same eager path that ships.
+      try {
+        const response = await api.post(endpoints.createPost, postData);
         setIsPosting(false);
-        setParityGhost({ uri: response.data.rendered_image_url, post: response.data });
-        return;
-      }
-
-      setTimeout(() => {
-        setIsPosting(false);
+        if (response.data?.rendered_image_url) {
+          setParityGhost({ uri: response.data.rendered_image_url, post: response.data });
+          return;
+        }
         finishPost(response.data);
-      }, 300);
+      } catch (error: any) {
+        console.error('Error creating post:', error);
+        postButtonScale.value = withSpring(1, { duration: 200 });
+        postButtonOpacity.value = withTiming(1, { duration: 200 });
+        Alert.alert('Error', error.response?.data?.detail || 'Failed to create post');
+        setIsPosting(false);
+      }
+      return;
+    }
 
+    // Eager post: snapshot the canvas, drop it into the feed immediately, and
+    // let the request finish in the background. The server render replaces
+    // the snapshot when it lands, so the feed never shows a gap or a spinner.
+    const optimistic = await buildOptimisticPost(postData);
+    setIsPosting(false);
+    finishPost(null);
+    if (optimistic) emitPostCreated(optimistic);
+    submitInBackground(postData, optimistic?.id);
+  };
+
+  // A local snapshot of the canvas, shaped like a feed post. Crop bounds come
+  // from the same projection the crop guides draw, so it lands in the feed at
+  // the height the real render will occupy.
+  const buildOptimisticPost = async (payload: PostCreate): Promise<any | null> => {
+    try {
+      const captured = await captureRef(canvasCaptureRef, { format: 'png', quality: 1 });
+      // captureRef hands back a bare path on iOS; without a scheme the feed
+      // resolves it against the API base and 404s
+      const uri = /^[a-z][a-z0-9+.-]*:/i.test(captured) ? captured : `file://${captured}`;
+      const k = CANVAS_WIDTH / screenWidth;
+      const bounds = getProjectedCropBounds();
+      const canvasHeight = Math.round(screenHeight * k);
+      return {
+        id: `optimistic-${Date.now()}`,
+        text_content: payload.text_content,
+        background_color: payload.background_color,
+        font_choice: payload.font_choice,
+        rendered_image_url: uri,
+        image_width: CANVAS_WIDTH,
+        image_height: canvasHeight,
+        top_y: bounds ? Math.round(bounds.top * k) : 0,
+        bottom_y: bounds ? Math.round(bounds.bottom * k) : canvasHeight,
+        created_at: new Date().toISOString(),
+        is_repost: !!repostData,
+        author: { handle: '', avatar_color: Colors.accent },
+        text_elements: payload.text_elements,
+        __optimistic: true,
+      };
+    } catch (error) {
+      console.log('Canvas snapshot failed (non-critical):', error);
+      return null;
+    }
+  };
+
+  const submitInBackground = async (payload: PostCreate, optimisticId?: string) => {
+    try {
+      const response = await api.post(endpoints.createPost, payload);
+      emitPostCreated(response.data, optimisticId);
+      onPost?.(response.data);
     } catch (error: any) {
       console.error('Error creating post:', error);
-      
-      // Reset button animation
-      postButtonScale.value = withSpring(1, { duration: 200 });
-      postButtonOpacity.value = withTiming(1, { duration: 200 });
-      
-      const errorMessage = error.response?.data?.detail || 
-                          error.response?.data?.error ||
-                          'Failed to create post';
-      Alert.alert('Error', errorMessage);
-      
-      setIsPosting(false);
+      const errorMessage = error.response?.data?.detail ||
+                           error.response?.data?.error ||
+                           'Failed to create post';
+      Alert.alert('Post failed', errorMessage, [
+        { text: 'Discard', style: 'destructive' },
+        { text: 'Retry', onPress: () => submitInBackground(payload) },
+      ]);
     }
   };
 
   const finishPost = (post: any) => {
-    onPost?.(post);
+    if (post) onPost?.(post);
     onClose?.();
     Toast.show({
       type: 'success',
@@ -1127,33 +1211,32 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   // Two-stop vertical gradients (top -> bottom), rendered identically by
   // the server's legacy gradient path. Long-press the bg button to cycle;
   // a plain tap returns to solid colors.
-  const GRADIENT_PRESETS: string[][] = [
-    ['#FF1493', '#FFD700'],
-    ['#0000EE', '#00CED1'],
-    ['#9932CC', '#FF1A1A'],
-    ['#000000', '#4169E1'],
-    ['#32CD32', '#FFD700'],
-    ['#FF6347', '#8B008B'],
-  ];
-  const gradientIndexRef = useRef(-1);
-  const cycleGradient = () => {
-    gradientIndexRef.current = (gradientIndexRef.current + 1) % GRADIENT_PRESETS.length;
-    const preset = GRADIENT_PRESETS[gradientIndexRef.current];
-    setBackgroundGradient(preset);
-    // theming, contrast guards, and the repost rule key off the top stop
-    setBackgroundColor(preset[0]);
+  // Only the rainbow: the two-stop presets were decoration, and gradients
+  // are grid-only now (long-press the background swatch).
+  const GRADIENT_PRESETS: string[][] = [Colors.rainbowPalette];
+  // Applying a background in one place: the ink guard is the same whether the
+  // colour came from the cycle button or the grid.
+  const applyBackground = (color: string, gradient: string[] = []) => {
+    setBackgroundGradient(gradient);
+    setBackgroundColor(color);
+    const index = Colors.postColors.indexOf(color);
+    if (index >= 0) setCurrentBgIndex(index);
+    if (gradient.length === 0) {
+      lastBgRef.current = color;
+      persistComposerPrefs();
+    }
     setTextElements(prev => prev.map(el => {
       if (el.rainbow) return el;
-      if (contrastRatio(hexToRgb(preset[0]), hexToRgb(el.color)) >= 3.0) return el;
-      return { ...el, color: pickReadableColor(preset[0], Colors.postColors, el.color) };
+      if (contrastRatio(hexToRgb(color), hexToRgb(el.color)) >= 3.0) return el;
+      return { ...el, color: pickReadableColor(color, Colors.postColors, el.color) };
     }));
   };
+
 
   const cycleBackgroundColor = () => {
     if (backgroundGradient.length > 0) {
       // leaving gradient mode: fall back to the top stop as a solid
       setBackgroundGradient([]);
-      gradientIndexRef.current = -1;
       return;
     }
     let nextIndex = (currentBgIndex + 1) % backgroundOptions.length;
@@ -1245,10 +1328,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       // glyphs only. Shed the trailing unit so centered = centered ink.
       marginRight: -(element.letterSpacing || 0),
       opacity: element.opacity ?? 1,
-      // New-arch blend modes; matches the server's ImageChops compositing
-      ...(element.blendMode && element.blendMode !== 'normal'
-        ? ({ mixBlendMode: element.blendMode } as any)
-        : {}),
       // Glow previews as a zero-offset text shadow; the server renders a
       // blurred ink layer with a matching radius
       ...(element.glow
@@ -1287,17 +1366,28 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     return <Text style={{ color: (element.color || '#1B1B1B') + alpha }}>Type...</Text>;
   };
 
+  // The palette a text element cycles per letter, or null for a flat colour.
+  // Mirrors Post._normalize_alternate_colors on the server.
+  const cycleColorsFor = (element: TextElement): string[] | null => {
+    if (element.alternateColors?.length === 2) return element.alternateColors;
+    if (element.rainbow) return Colors.rainbowPalette;
+    return null;
+  };
+
   const renderDisplayContent = (element: TextElement) => {
     const showPlaceholder = !getDisplayText(element) && element.id === '1' && !isEditingText && !anyElementHasInk();
     if (showPlaceholder) return placeholderNode(element);
     const raw = getDisplayText(element) || '';
     const text = applyListPrefixes(raw, element.listStyle);
     let content: React.ReactNode = text;
-    if (element.rainbow && text) {
+    // Same rule as the server: one palette advanced per non-space character,
+    // with an explicit pair taking precedence over rainbow.
+    const cyclePalette = cycleColorsFor(element);
+    if (cyclePalette && text) {
       let colorIndex = 0;
       content = text.split('').map((ch, i) => {
         if (/\s/.test(ch)) return ch;
-        const color = Colors.rainbowPalette[colorIndex++ % Colors.rainbowPalette.length];
+        const color = cyclePalette[colorIndex++ % cyclePalette.length];
         return (
           <Text key={i} style={{ color }}>
             {ch}
@@ -1716,6 +1806,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               onGestureEvent={(event) => handlePanGesture(event, element.id)}
               onHandlerStateChange={(event) => handlePanStateChange(event, element.id)}
               enabled={!isEditingText}
+              minDist={4}
             >
               <AnimatedReanimated.View style={styles.textElement}>
                 {isEditingText && selectedTextId === element.id ? (
@@ -1896,7 +1987,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     const measured = textElements.filter(
       el => el.content.trim() && textInkSizes[el.id]
     );
-    if (measured.length === 0) return null;
+    if (measured.length === 0 && !stripRect) return null;
 
     let top = Infinity;
     let bottom = -Infinity;
@@ -1907,8 +1998,29 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     });
 
     const margin = (40 * screenWidth) / CANVAS_WIDTH; // backend margin in points
-    top = Math.max(0, top - margin);
-    bottom = Math.min(screenHeight, bottom + margin);
+    // The reply's outer edge gets extra room (mirrors REPLY_EDGE_MARGIN on
+    // the server) so it never sits flush against the crop.
+    const replyEdge = (48 * screenWidth) / CANVAS_WIDTH;
+    let topExtra = 0;
+    let bottomExtra = 0;
+
+    // The quoted strip is part of the post, and the backend's bounds include
+    // it. Leaving it out cropped the OP off the optimistic preview entirely
+    // and made the crop guides lie about reposts.
+    if (stripRect) {
+      const stripTop = stripRect.top;
+      const stripBottom = stripRect.top + stripRect.height;
+      if (measured.length > 0) {
+        const replyMid = (top + bottom) / 2;
+        if (replyMid < (stripTop + stripBottom) / 2) topExtra = replyEdge;
+        else bottomExtra = replyEdge;
+      }
+      top = Math.min(top, stripTop);
+      bottom = Math.max(bottom, stripBottom);
+    }
+
+    top = Math.max(0, top - margin - topExtra);
+    bottom = Math.min(screenHeight, bottom + margin + bottomExtra);
 
     const maxHeight = screenWidth * MAX_POST_ASPECT;
     if (bottom - top > maxHeight) {
@@ -1922,7 +2034,10 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
 
   // Adaptive crop guides: hairlines showing where the feed will crop
   const renderCropGuides = () => {
-    if (isEditingText || backgroundImage) return null;
+    // With a quote in the canvas the crop is anchored by the strip, so the
+    // guides just drew white hairlines around the OP - noise, not
+    // information. The bounds themselves still include the strip.
+    if (isEditingText || backgroundImage || stripRect) return null;
     const bounds = getProjectedCropBounds();
     if (!bounds) return null;
     if (bounds.top <= 0 && bounds.bottom >= screenHeight) return null;
@@ -1965,6 +2080,10 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             shouldCancelWhenOutside={false}
             minPointers={1}
             maxPointers={1}
+            // A finger almost never stays still. Without a movement threshold
+            // this pan activated on the first pixel of drift and swallowed the
+            // tap, so placing text demanded an unnaturally precise press.
+            minDist={28}
           >
             <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
               {/* Repost image layer */}
@@ -1974,9 +2093,11 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               
               {/* Interaction/text layer sits on top */}
               <TouchableOpacity
-                style={[StyleSheet.absoluteFill, { zIndex: 20 }]} 
+                style={[StyleSheet.absoluteFill, { zIndex: 20 }]}
                 onPress={handleCanvasTap}
                 activeOpacity={1}
+                pressRetentionOffset={{ top: 40, left: 40, right: 40, bottom: 40 }}
+                hitSlop={{ top: 10, left: 10, right: 10, bottom: 10 }}
               >
                 {renderRepostLayer()}
                 {renderEditableText()}
@@ -2007,6 +2128,162 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
   };
 
   // Instagram Create Mode UI Components
+  const handleDownload = async () => {
+    let uri: string;
+    try {
+      const captured = await captureRef(canvasCaptureRef, { format: 'png', quality: 1 });
+      uri = /^[a-z][a-z0-9+.-]*:/i.test(captured) ? captured : `file://${captured}`;
+    } catch (error) {
+      console.log('Canvas capture failed:', error);
+      Toast.show({ type: 'error', text1: 'Could not export', position: 'bottom' });
+      return;
+    }
+
+    // One tap saves straight to Photos. Needs NSPhotoLibraryAddUsageDescription,
+    // which only exists in a build - on anything older this throws and we fall
+    // back to the share sheet rather than failing.
+    try {
+      const { granted } = await MediaLibrary.requestPermissionsAsync(true);
+      if (!granted) {
+        Toast.show({ type: 'info', text1: 'Photo access denied', position: 'bottom' });
+        return;
+      }
+      await MediaLibrary.saveToLibraryAsync(uri);
+      Toast.show({ type: 'success', text1: 'Saved to Photos', position: 'bottom' });
+    } catch (error) {
+      console.log('Direct save unavailable, using share sheet:', error);
+      try {
+        await Share.share({ url: uri });
+      } catch {}
+    }
+  };
+
+
+  // Long-press the background swatch. Deliberately plain: flat squares, a
+  // hairline, and the current colour marked. Gradients get the last row since
+  // the long-press used to cycle them.
+  const selectedElement = () =>
+    textElements.find(el => el.id === selectedTextId) || textElements[0] || null;
+  const selectedElementColor = () => selectedElement()?.color ?? null;
+  // Picking a flat colour clears both cycles, so the three modes stay
+  // mutually exclusive instead of leaving a stale pair behind the swatch.
+  const setSelectedElementColor = (color: string) => {
+    const el = selectedElement();
+    if (el) updateTextElement(el.id, { color, rainbow: false, alternateColors: undefined });
+  };
+  const setSelectedElementRainbow = () => {
+    const el = selectedElement();
+    if (el) updateTextElement(el.id, { rainbow: true, alternateColors: undefined });
+  };
+  const setSelectedElementDuo = (colors: string[]) => {
+    const el = selectedElement();
+    if (el) updateTextElement(el.id, { rainbow: false, alternateColors: colors });
+  };
+
+  const closeColorGrid = () => {
+    setColorGridMode(null);
+    setDuoPending(null);
+  };
+
+  // Tapping a swatch means different things depending on whether a duo is
+  // being collected, so both paths funnel through here.
+  const handleGridColorPress = (color: string) => {
+    if (duoPending) {
+      if (duoPending.includes(color)) return; // a duo of one colour is a solid
+      const picked = [...duoPending, color];
+      if (picked.length < 2) {
+        setDuoPending(picked);
+        return;
+      }
+      setSelectedElementDuo(picked);
+      closeColorGrid();
+      return;
+    }
+    if (colorGridMode === 'text') setSelectedElementColor(color);
+    else applyBackground(color);
+    closeColorGrid();
+  };
+
+  const renderColorGrid = () => {
+    const el = colorGridMode === 'text' ? selectedElement() : null;
+    const duo = el?.alternateColors?.length === 2 ? el.alternateColors : null;
+    return (
+    <Modal visible={colorGridMode !== null} transparent animationType="fade" onRequestClose={closeColorGrid}>
+      <TouchableWithoutFeedback onPress={closeColorGrid}>
+        <View style={styles.colorGridBackdrop}>
+          <TouchableWithoutFeedback>
+            <View style={styles.colorGridCard}>
+              {duoPending && (
+                <Text style={styles.colorGridLabel}>
+                  {duoPending.length === 0 ? 'PICK FIRST COLOR' : 'PICK SECOND COLOR'}
+                </Text>
+              )}
+              <View style={styles.colorGrid}>
+                {Colors.postColors.map(color => {
+                  const current = duoPending
+                    ? null
+                    : colorGridMode === 'text'
+                      ? (el?.rainbow || duo ? null : selectedElementColor())
+                      : (backgroundGradient.length === 0 ? backgroundColor : null);
+                  const picked = duoPending?.includes(color);
+                  return (
+                    <TouchableOpacity
+                      key={color}
+                      style={[
+                        styles.colorCell,
+                        { backgroundColor: color },
+                        (color === current || picked) && styles.colorCellActive,
+                      ]}
+                      onPress={() => handleGridColorPress(color)}
+                    />
+                  );
+                })}
+              </View>
+              {colorGridMode === 'background' && (
+                <View style={styles.colorGrid}>
+                  {GRADIENT_PRESETS.map((preset, i) => {
+                    const active = backgroundGradient.length > 0 && backgroundGradient[0] === preset[0]
+                      && backgroundGradient[backgroundGradient.length - 1] === preset[preset.length - 1];
+                    return (
+                      <TouchableOpacity
+                        key={i}
+                        onPress={() => { applyBackground(preset[0], preset); closeColorGrid(); }}
+                      >
+                        <LinearGradient
+                          colors={preset as [string, string, ...string[]]}
+                          style={[styles.colorCell, active && styles.colorCellActive]}
+                        />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+              {/* Text gets the per-letter cycles on their own row: rainbow,
+                  and a duo built from two taps on the palette above. */}
+              {colorGridMode === 'text' && !duoPending && (
+                <View style={styles.colorGrid}>
+                  <TouchableOpacity onPress={() => { setSelectedElementRainbow(); closeColorGrid(); }}>
+                    <LinearGradient
+                      colors={Colors.rainbowPalette as [string, string, ...string[]]}
+                      style={[styles.colorCell, !!el?.rainbow && styles.colorCellActive]}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => setDuoPending([])}>
+                    <View style={[styles.colorCell, !!duo && styles.colorCellActive]}>
+                      <View style={[styles.duoHalf, { backgroundColor: duo ? duo[0] : '#F8F8FF' }]} />
+                      <View style={[styles.duoHalf, { backgroundColor: duo ? duo[1] : '#000000' }]} />
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+    );
+  };
+
   const renderTopMenu = () => {
     
     return (
@@ -2036,7 +2313,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
           <TouchableOpacity
             style={styles.topMenuButton}
             onPress={cycleBackgroundColor}
-            onLongPress={cycleGradient}
+            onLongPress={() => setColorGridMode('background')}
             delayLongPress={350}
           >
             {backgroundGradient.length > 0 ? (
@@ -2056,10 +2333,20 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             </TouchableOpacity>
           )}
 
-          {/* Text Button */}
-          <TouchableOpacity style={styles.topMenuButton} onPress={createNewTextElement}>
-            <Text style={styles.topMenuText}>Text</Text>
-          </TouchableOpacity>
+          {/* Export the canvas as an image */}
+          {!isEditingText && (
+            <TouchableOpacity style={styles.topMenuButton} onPress={handleDownload}>
+              <Ionicons name="download-outline" size={22} color="white" />
+            </TouchableOpacity>
+          )}
+
+          {/* Commit editing. Tapping anywhere off the text does the same;
+              this is the discoverable version of it. */}
+          {isEditingText && (
+            <TouchableOpacity style={styles.topMenuButton} onPress={stopEditingText}>
+              <Ionicons name="checkmark" size={26} color="white" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     );
@@ -2082,7 +2369,12 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     };
 
     const cycleColor = () => {
-      // Palette colors in order, then rainbow, then back to the start
+      // Palette colors in order, then rainbow, then back to the start.
+      // A duo is only reachable from the grid, so tapping through drops it.
+      if (el.alternateColors?.length === 2) {
+        updateTextElement(el.id, { alternateColors: undefined, color: Colors.postColors[1] });
+        return;
+      }
       if (el.rainbow) {
         updateTextElement(el.id, { rainbow: false, color: Colors.postColors[1] });
         return;
@@ -2111,12 +2403,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
       const current = el.opacity ?? 1;
       const idx = steps.findIndex(v => Math.abs(v - current) < 0.01);
       updateTextElement(el.id, { opacity: steps[(idx + 1) % steps.length] });
-    };
-
-    const cycleBlend = () => {
-      const modes = ['normal', 'multiply', 'screen', 'overlay', 'difference'] as const;
-      const idx = modes.indexOf(el.blendMode || 'normal');
-      updateTextElement(el.id, { blendMode: modes[(idx + 1) % modes.length] });
     };
 
     const cycleChip = () => {
@@ -2153,10 +2439,47 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               Aa
             </Text>
           </TouchableOpacity>
+          {/* Bold/italic appear only for families with the real face */}
+          {canBold && (
+            <TouchableOpacity
+              style={[styles.controlOption, styles.controlLetterOption, el.bold && styles.controlOptionActive]}
+              onPress={() => updateTextElement(el.id, { bold: !el.bold })}
+            >
+              <Text style={[styles.controlFormatLabel, { color: el.bold ? Colors.accent : 'white' }]}>B</Text>
+            </TouchableOpacity>
+          )}
 
+          {canItalic && (
+            <TouchableOpacity
+              style={[styles.controlOption, styles.controlLetterOption, el.italic && styles.controlOptionActive]}
+              onPress={() => updateTextElement(el.id, { italic: !el.italic })}
+            >
+              <Text style={[styles.controlFormatLabel, styles.controlItalicLabel, { color: el.italic ? Colors.accent : 'white' }]}>I</Text>
+            </TouchableOpacity>
+          )}
+          {/* Underline */}
+          <TouchableOpacity
+            style={[styles.controlOption, styles.controlLetterOption, el.underline && styles.controlOptionActive]}
+            onPress={() => updateTextElement(el.id, { underline: !el.underline })}
+          >
+            <Text style={[styles.controlFormatLabel, {
+              color: el.underline ? Colors.accent : 'white',
+              textDecorationLine: 'underline',
+            }]}>U</Text>
+          </TouchableOpacity>
           {/* Color: swatch shows current, tap cycles palette then rainbow */}
-          <TouchableOpacity style={styles.controlOption} onPress={cycleColor}>
-            {el.rainbow ? (
+          <TouchableOpacity
+            style={styles.controlOption}
+            onPress={cycleColor}
+            onLongPress={() => setColorGridMode('text')}
+            delayLongPress={350}
+          >
+            {el.alternateColors?.length === 2 ? (
+              <View style={styles.controlColorSwatch}>
+                <View style={[styles.duoHalf, { backgroundColor: el.alternateColors[0] }]} />
+                <View style={[styles.duoHalf, { backgroundColor: el.alternateColors[1] }]} />
+              </View>
+            ) : el.rainbow ? (
               <LinearGradient
                 colors={Colors.rainbowPalette as [string, string, ...string[]]}
                 start={{ x: 0, y: 0 }}
@@ -2167,7 +2490,31 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               <View style={[styles.controlColorSwatch, { backgroundColor: el.color }]} />
             )}
           </TouchableOpacity>
-
+          {/* Text chip background cycle: off / white / inverted */}
+          <TouchableOpacity
+            style={[styles.controlOption, el.backgroundMode !== 'off' && styles.controlOptionActive]}
+            onPress={cycleChip}
+          >
+            <Ionicons name="color-fill" size={20} color={el.backgroundMode !== 'off' ? Colors.accent : 'white'} />
+          </TouchableOpacity>
+          {/* Opacity: cycles 100 / 70 / 45 / 25 percent */}
+          <TouchableOpacity
+            style={[styles.controlOption, (el.opacity ?? 1) < 1 && styles.controlOptionActive]}
+            onPress={cycleOpacity}
+          >
+            <MaterialIcons
+              name="opacity"
+              size={24}
+              color={(el.opacity ?? 1) < 1 ? Colors.accent : 'white'}
+            />
+          </TouchableOpacity>
+          {/* Glow toggle */}
+          <TouchableOpacity
+            style={[styles.controlOption, el.glow && styles.controlOptionActive]}
+            onPress={() => updateTextElement(el.id, { glow: !el.glow })}
+          >
+            <Ionicons name="sunny" size={20} color={el.glow ? Colors.accent : 'white'} />
+          </TouchableOpacity>
           {/* Justification cycle */}
           <TouchableOpacity style={styles.controlOption} onPress={cycleAlign}>
             <MaterialIcons
@@ -2176,23 +2523,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
               color="white"
             />
           </TouchableOpacity>
-
-          {/* Text chip background cycle: off / white / inverted */}
-          <TouchableOpacity
-            style={[styles.controlOption, el.backgroundMode !== 'off' && styles.controlOptionActive]}
-            onPress={cycleChip}
-          >
-            <Ionicons name="color-fill" size={20} color={el.backgroundMode !== 'off' ? Colors.accent : 'white'} />
-          </TouchableOpacity>
-
-          {/* Glow toggle */}
-          <TouchableOpacity
-            style={[styles.controlOption, el.glow && styles.controlOptionActive]}
-            onPress={() => updateTextElement(el.id, { glow: !el.glow })}
-          >
-            <Ionicons name="sunny" size={20} color={el.glow ? Colors.accent : 'white'} />
-          </TouchableOpacity>
-
           {/* Letter spacing cycle */}
           <TouchableOpacity
             style={[styles.controlOption, (el.letterSpacing || 0) > 0 && styles.controlOptionActive]}
@@ -2207,78 +2537,6 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
             >
               AB
             </Text>
-          </TouchableOpacity>
-
-          {/* Opacity: cycles 100 / 70 / 45 / 25 percent */}
-          <TouchableOpacity
-            style={[styles.controlOption, (el.opacity ?? 1) < 1 && styles.controlOptionActive]}
-            onPress={cycleOpacity}
-          >
-            <MaterialIcons
-              name="opacity"
-              size={24}
-              color={(el.opacity ?? 1) < 1 ? Colors.accent : 'white'}
-            />
-          </TouchableOpacity>
-
-          {/* Blend mode: normal / multiply / screen / difference */}
-          <TouchableOpacity
-            style={[styles.controlOption, (el.blendMode || 'normal') !== 'normal' && styles.controlOptionActive]}
-            onPress={cycleBlend}
-          >
-            <MaterialIcons
-              name="layers"
-              size={24}
-              color={(el.blendMode || 'normal') !== 'normal' ? Colors.accent : 'white'}
-            />
-          </TouchableOpacity>
-
-          {/* Bold/italic appear only for families with the real face */}
-          {canBold && (
-            <TouchableOpacity
-              style={[styles.controlOption, el.bold && styles.controlOptionActive]}
-              onPress={() => updateTextElement(el.id, { bold: !el.bold })}
-            >
-              <Text style={[styles.controlFormatLabel, { color: el.bold ? Colors.accent : 'white' }]}>B</Text>
-            </TouchableOpacity>
-          )}
-
-          {canItalic && (
-            <TouchableOpacity
-              style={[styles.controlOption, el.italic && styles.controlOptionActive]}
-              onPress={() => updateTextElement(el.id, { italic: !el.italic })}
-            >
-              <Text style={[styles.controlFormatLabel, styles.controlItalicLabel, { color: el.italic ? Colors.accent : 'white' }]}>I</Text>
-            </TouchableOpacity>
-          )}
-
-          {/* Underline */}
-          <TouchableOpacity
-            style={[styles.controlOption, el.underline && styles.controlOptionActive]}
-            onPress={() => updateTextElement(el.id, { underline: !el.underline })}
-          >
-            <Text style={[styles.controlFormatLabel, {
-              color: el.underline ? Colors.accent : 'white',
-              textDecorationLine: 'underline',
-            }]}>U</Text>
-          </TouchableOpacity>
-
-          {/* List cycle: none, bullet, dash, star, numbered */}
-          <TouchableOpacity
-            style={[styles.controlOption, el.listStyle !== 'none' && styles.controlOptionActive]}
-            onPress={cycleList}
-          >
-            {el.listStyle === 'dash' || el.listStyle === 'star' ? (
-              <Text style={[styles.controlFormatLabel, { color: Colors.accent }]}>
-                {el.listStyle === 'dash' ? '-' : '*'}
-              </Text>
-            ) : (
-              <MaterialIcons
-                name={el.listStyle === 'number' ? 'format-list-numbered' : 'format-list-bulleted'}
-                size={20}
-                color={el.listStyle !== 'none' ? Colors.accent : 'white'}
-              />
-            )}
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -2376,8 +2634,20 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         
-        {/* Full Screen Canvas - handles all taps via handleCanvasTap */}
-        <View style={styles.canvasContainer}>
+        {/* Full Screen Canvas - handles all taps via handleCanvasTap.
+            The ref captures the canvas WITHOUT the crop guides, which render
+            outside it, so the optimistic feed image has no chrome in it. */}
+        {/* The background colour is painted here, INSIDE the capture ref, as
+            well as by the screen-level layer below. captureRef snapshots only
+            this subtree, so without it every solid-colour export came out
+            transparent - invisible on a light post, obvious on a black one.
+            Skipped when a background image is up: this view sits above the
+            image layer and an opaque colour would hide it. */}
+        <View
+          style={[styles.canvasContainer, !backgroundImage && { backgroundColor }]}
+          ref={canvasCaptureRef}
+          collapsable={false}
+        >
           {renderCanvas()}
         </View>
 
@@ -2437,6 +2707,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
         )}
 
       </KeyboardAvoidingView>
+      {renderColorGrid()}
       {renderParityGhost()}
     </View>
   );
@@ -2485,6 +2756,44 @@ const styles = StyleSheet.create({
   },
   
   // Top Menu (when not editing)
+  colorGridBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  colorGridCard: {
+    backgroundColor: '#1B1B1B',
+    borderWidth: 1,
+    borderColor: '#88888A',
+    padding: 14,
+  },
+  colorGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    width: 6 * 48,
+  },
+  colorCell: {
+    width: 44,
+    height: 44,
+    margin: 2,
+    borderWidth: 1,
+    borderColor: '#88888A',
+  },
+  colorCellActive: {
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+  },
+  duoHalf: {
+    flex: 1,
+  },
+  colorGridLabel: {
+    color: '#F9F9F9',
+    fontFamily: 'CourierPrime',
+    fontSize: 11,
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
   topMenu: {
     position: 'absolute',
     top: 60,
@@ -2715,6 +3024,9 @@ const styles = StyleSheet.create({
   controlFontLabel: {
     color: 'white',
     fontSize: 22,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    lineHeight: 26,
   },
   controlColorSwatch: {
     width: 28,
@@ -2727,16 +3039,27 @@ const styles = StyleSheet.create({
     opacity: 0.3,
   },
   controlFormatLabel: {
-    fontSize: 16,
+    fontSize: 22,
     fontFamily: 'CourierPrimeBold',
     color: 'white',
+    // match the optical baseline of the Aa / AB labels beside them
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    lineHeight: 26,
+  },
+  // B, I and U are single letters - they do not need a full-width button
+  controlLetterOption: {
+    width: 26,
   },
   controlItalicLabel: {
     fontFamily: 'CourierPrimeItalic',
   },
   controlSpacingLabel: {
-    fontSize: 17,
+    fontSize: 19,
     fontWeight: '700',
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    lineHeight: 26,
   },
   topMenuButtonActive: {
     backgroundColor: 'rgba(255, 255, 255, 0.3)',

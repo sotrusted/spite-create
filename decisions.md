@@ -3,6 +3,58 @@
 Product and design decisions, newest first. One line of context each so we
 remember why, not just what.
 
+## 2026-09-22 - Masthead baseline by arithmetic, quotes stop shrinking
+
+- **A randomized masthead CAN hold one baseline.** First attempt froze the
+  font size, which was giving up. The real fix is arithmetic: position each
+  title at `baseline - (ascent + inkDrop) x fontSize`, with ascent taken from
+  each shipped TTF's hhea table (plus lineGap - only Times has any) and
+  inkDrop measured by rendering the title and comparing its ink bottom to the
+  metric baseline (Caveat hangs 0.061em below it, Times sits 0.027em above).
+  Size randomization is back; the size is chosen as the largest that fits the
+  slot so autoshrink never fires and invalidates the maths. Measured spread
+  across launches: 21px -> ~3px typical. Table in constants/fontMetrics.ts.
+- **Quotes are never auto-shrunk.** Three rounds of raising a height cap
+  (62%, then 85%) were treating a symptom; the cap itself was wrong. Default
+  is 90% of canvas width at any depth, and the canvas now lets a quote be
+  pinched past the canvas edges (3x max, 40pt always kept grabbable) - both
+  composer and backend clamps had to be relaxed together or WYSIWYG breaks.
+- Crop guides hide while quoting: including the strip in the crop bounds
+  (needed so the optimistic preview keeps the OP) had them drawing white
+  hairlines around the quote.
+
+## 2026-09-21 - Two production bugs, eager posting, blend modes reverted
+
+- **Reposts lost their parent strip in production.** `_composite_original`
+  read the quoted parent via `.path`, which S3 storage does not implement;
+  the exception hit a blanket `except` and every repost rendered reply-only.
+  Now read through the storage API. Regression test emulates S3 faithfully
+  (no .path, but streamable) and was confirmed to FAIL without the fix.
+  Both render swallow-points now log loudly and report to Sentry.
+- **Every new user hit "that handle is taken".** App launch fires profile +
+  feed + notifications concurrently; each raced to mint a device uuid, so
+  the losers became orphan accounts and the winner's handle PATCH collided
+  with its own shadow. ensureDeviceId now shares one in-flight promise.
+- **Eager posting.** The composer closes immediately and the request
+  finishes in the background (a round trip is ~1s on a phone, and ~0.2s of
+  that is the server). Failure raises a Retry alert holding the payload, so
+  no composer state is needed. Removed an artificial 300ms delay and the
+  post spinner. Found while doing it: the composer is a navigation screen,
+  so its onPost prop was never passed and had always been undefined - posts
+  only appeared because closing the composer remounted the feed. Replaced
+  with a small buffered event bus (utils/postEvents).
+- **Masthead** keeps random post-inheritance on load, but tapping it now
+  re-rolls from the FULL composer option space (every font, colour,
+  formatting toggle, size clamped 20-30pt) with a guaranteed font change and
+  a 4.5:1 ink guard. Title is "Creative Mind's Ideas Magazine" again, on the
+  loading screen too (size floor raised to 18).
+- **Blend modes removed** (one day old); opacity and gradients stay.
+  Tap-to-collapse parked behind FEATURES.collapsePosts - the recursive
+  renderer stays in PostCard. Composer lost the Text button, gained a
+  checkmark that commits an edit. Palette orange is now #FF9500.
+- Element-position NaN guard: a touch without location coords used to shunt
+  a text element to the top-left corner.
+
 ## 2026-09-20 - Blend modes, gradients, glyph armor, masthead roulette
 
 - **Blend modes** (multiply / screen / overlay / difference) per text

@@ -23,6 +23,7 @@ interface Props {
   newPost?: Post | null;
   onNewPostDisplayed?: () => void;
   onFeedLoaded?: (posts: Post[]) => void;
+  postEvent?: { post: Post; replacesId?: string } | null;
   onScroll?: any;
   contentInsetAdjustmentBehavior?: 'automatic' | 'scrollableAxes' | 'never' | 'always';
   scrollIndicatorInsets?: { top?: number; left?: number; bottom?: number; right?: number };
@@ -33,6 +34,7 @@ export default function Feed({
   newPost, 
   onNewPostDisplayed, 
   onFeedLoaded,
+  postEvent,
   onScroll,
   contentInsetAdjustmentBehavior,
   scrollIndicatorInsets,
@@ -294,6 +296,27 @@ export default function Feed({
     }
   }, [newPost, onNewPostDisplayed, scrollToTop]);
 
+  // An optimistic post shows instantly; the real one takes its place (same
+  // slot, no reflow) when the server render arrives.
+  useEffect(() => {
+    if (!postEvent) return;
+    const { post, replacesId } = postEvent;
+    setPosts(prev => {
+      if (replacesId) {
+        const at = prev.findIndex(p => p.id === replacesId);
+        if (at >= 0) {
+          const next = [...prev];
+          next[at] = post;
+          return next;
+        }
+      }
+      if (prev.some(p => p.id === post.id)) return prev;
+      return [post, ...prev];
+    });
+    setPendingPosts(prev => prev.filter(p => p.id !== post.id));
+    if (!replacesId) setTimeout(scrollToTop, 50);
+  }, [postEvent, scrollToTop]);
+
   // Reposts that happened while the app was closed
   useEffect(() => {
     (async () => {
@@ -397,7 +420,6 @@ export default function Feed({
       <Animated.View style={animatedStyle}>
         <PostCard
           post={item}
-          isFirst={index === 0}
           onReport={(reason, description) => handlePostAction(item.id, 'report', { reason, description })}
           onMute={() => handlePostAction(item.id, 'mute')}
           onBlock={() => handlePostAction(item.id, 'block')}

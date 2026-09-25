@@ -20,23 +20,27 @@ export default function PostComposerScreen({ onPost }: Props) {
   const route = useRoute();
   const { repostData } = (route.params as RouteParams) || {};
 
-  const handlePost = (post: Post) => {
-    // Pass post to parent for immediate feed update first
-    onPost?.(post);
-    
-    // Reset navigation stack to Main
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'Main' }],
-    });
+  // goBack pops the composer and returns to the EXISTING feed. A
+  // navigation.reset here rebuilt MainScreen from scratch, which meant every
+  // post was followed by an empty feed showing the loading animation while it
+  // refetched - and it threw away the masthead theme and scroll position too.
+  const returnToFeed = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+    }
   };
 
-  const handleClose = () => {
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'Main' }],
-    });
+  // The composer closes itself the instant you hit Post; this fires ~1s later
+  // when the server render lands. Navigating again from here found no screen
+  // to pop, fell back to reset(), and rebuilt the feed from scratch - the
+  // loading screen people saw after every post.
+  const handlePost = (post: Post) => {
+    onPost?.(post);
   };
+
+  const handleClose = returnToFeed;
 
   return (
     <View style={styles.container}>

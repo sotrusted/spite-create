@@ -1,0 +1,54 @@
+// The card chrome floor. These bounds are display-only: the server's
+// top_y/bottom_y stay the content extent so quoted strips are cut tight.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { displayCropBounds } from './displayCrop';
+import { MIN_CARD_HEIGHT } from '../constants/space';
+
+const CANVAS_W = 1080;
+const CANVAS_H = 2340;
+const SCREEN_W = 393;
+const FLOOR = MIN_CARD_HEIGHT * (CANVAS_W / SCREEN_W);
+
+const crop = (top: number, bottom: number, canvasH = CANVAS_H) =>
+  displayCropBounds(top, bottom, CANVAS_W, canvasH, SCREEN_W);
+
+test('leaves a tall post untouched', () => {
+  assert.deepEqual(crop(400, 1800), { topY: 400, bottomY: 1800 });
+});
+
+test('pads a one-line post out to the chrome floor', () => {
+  const c = crop(1100, 1250);
+  assert.ok(Math.abs(c.bottomY - c.topY - FLOOR) < 1e-6);
+});
+
+test('keeps the content optically centred when it pads', () => {
+  const c = crop(1100, 1250);
+  assert.ok(Math.abs((c.topY + c.bottomY) / 2 - 1175) < 1e-6);
+});
+
+test('clamps to the top of the canvas without shrinking below the floor', () => {
+  const c = crop(0, 80);
+  assert.equal(c.topY, 0);
+  assert.ok(Math.abs(c.bottomY - c.topY - FLOOR) < 1e-6);
+});
+
+test('clamps to the bottom of the canvas without shrinking below the floor', () => {
+  const c = crop(CANVAS_H - 80, CANVAS_H);
+  assert.equal(c.bottomY, CANVAS_H);
+  assert.ok(Math.abs(c.bottomY - c.topY - FLOOR) < 1e-6);
+});
+
+test('never overflows a canvas shorter than the floor', () => {
+  const shortCanvas = 200;
+  const c = crop(90, 110, shortCanvas);
+  assert.ok(c.topY >= 0);
+  assert.ok(c.bottomY <= shortCanvas);
+});
+
+test('the floor actually clears the quote button', () => {
+  // The whole point: a one-line card must be taller than the chrome it hosts.
+  const c = crop(1100, 1250);
+  const cardHeightPt = (c.bottomY - c.topY) * (SCREEN_W / CANVAS_W);
+  assert.ok(cardHeightPt >= MIN_CARD_HEIGHT - 1e-6);
+});

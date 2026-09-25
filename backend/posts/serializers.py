@@ -369,6 +369,10 @@ class PostListSerializer(serializers.ModelSerializer):
                 'strip': strip_source,
                 'snippet': (parent.text_content or '').strip()[:24],
                 'background_color': parent.background_color,
+                # the masthead samples its costume from every level of the
+                # page, quoted ancestors included - not just top-level posts
+                'font_choice': parent.font_choice,
+                'text_elements': parent.text_elements,
                 'hidden': parent.author_id in blocked_ids,
             })
 
@@ -510,6 +514,11 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
 class UserProfileSerializer(serializers.ModelSerializer):
     """Serializer for user profile information"""
+    total_posts = serializers.SerializerMethodField()
+
+    def get_total_posts(self, obj):
+        return obj.posts.filter(is_hidden=False).count()
+
     preferred_signature_style = serializers.ChoiceField(
         choices=[(key, key) for key in Post.SIGNATURE_STYLES.keys()],
         required=False
@@ -519,11 +528,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'handle', 'avatar_color', 'is_anonymous_mode',
-            'date_joined', 'posts_count_today',
+            'date_joined', 'posts_count_today', 'total_posts',
             'default_signed_posts', 'preferred_signature_style',
             'signature_font', 'signature_color',
         ]
-        read_only_fields = ['date_joined', 'posts_count_today']
+        read_only_fields = ['date_joined', 'posts_count_today', 'total_posts']
 
     def validate_handle(self, value):
         import re

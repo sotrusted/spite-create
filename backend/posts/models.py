@@ -1,7 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.files.base import ContentFile
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, features
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, features
 import io
 import os
 import re
@@ -14,6 +14,28 @@ import hashlib
 # chars (except newline), zero-width/invisible spam, directional overrides,
 # and caps combining-mark stacking (zalgo) at 2 marks per base glyph.
 _INVISIBLES = re.compile('[\u0000-\u0008\u000B-\u001F\u007F\u200B\u2060\uFEFF\u202A-\u202E\u2066-\u2069]')
+
+
+def _report_render_error(message, exc):
+    """Render failures degrade silently by design (a post still saves), which
+    once hid a broken repost composite in production for days. Log loudly and
+    send to Sentry when it is configured."""
+    import logging
+    logging.getLogger(__name__).exception('%s: %s', message, exc)
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_exception(exc)
+    except Exception:
+        pass
+
+
+# Extra breathing room on the reply's outer edge of a quote composite
+REPLY_EDGE_MARGIN = 48
+
+# A post must be tall enough to carry the overlay chrome the feed draws on it
+# (the quote button and its inset). A one-line post used to crop shorter than
+# the button sitting on it. Canvas px; MIN_CROP_CANVAS_PX mirrors it client side.
+
 
 def _sanitize_glyphs(text):
     if not text:
@@ -62,9 +84,9 @@ class Post(models.Model):
     
     # Color presets (old school internet + modern)
     COLOR_PRESETS = [
-        '#F8F8FF', '#FF1A1A', '#FAEBD7', '#000000', '#0000EE',
-        '#FF1493', '#00CED1', '#9932CC', '#FF6347', '#32CD32', 
-        '#FFD700', '#DC143C', '#4169E1', '#8B008B', '#2F4F4F'
+        '#F8F8FF', '#FAEBD7', '#B7BEC7', '#3D3D42', '#000000', '#690016',
+        '#FF1A1A', '#FF940A', '#F0FF00', '#CCFF00', '#32CD32', '#00CED1',
+        '#0000EE', '#4169E1', '#AB00FF', '#9932CC', '#FF1493', '#FF90C2'
     ]
 
     SIGNATURE_STYLES = {
@@ -218,7 +240,7 @@ class Post(models.Model):
                 self._save_render(response_img, self.response_image, f"{self.id}_response.png")
 
         except Exception as e:
-            print(f"Error generating image for post {self.id}: {e}")
+            _report_render_error(f'Error generating image for post {self.id}', e)
             self._create_fallback_image()
 
     def _render_canvas(self, text_elements, include_original):
@@ -323,13 +345,15 @@ class Post(models.Model):
                 'letterSpacing': float(element.get('letterSpacing') or 0),
                 'glow': bool(element.get('glow')),
                 'rainbow': bool(element.get('rainbow')),
+                'alternateColors': self._normalize_alternate_colors(
+                    element.get('alternateColors')
+                ),
                 'align': element.get('align') if element.get('align') in ('left', 'center', 'right') else 'center',
                 'bold': bool(element.get('bold')),
                 'italic': bool(element.get('italic')),
                 'underline': bool(element.get('underline')),
                 'listStyle': element.get('listStyle') if element.get('listStyle') in ('bullet', 'dash', 'star', 'number') else 'none',
                 'opacity': min(max(float(element.get('opacity') or 1), 0.05), 1.0),
-                'blendMode': element.get('blendMode') if element.get('blendMode') in ('multiply', 'screen', 'overlay', 'difference') else 'normal',
             }
 
             # Lists: prefix each typed line and force left alignment (the
@@ -428,6 +452,12 @@ class Post(models.Model):
             else:
                 return self._cap_bounds_height(0, canvas_height)
 
+        # A gradient spans the canvas, so cropping to the text showed a slice
+        # where the ramp had barely moved - it read as a flat colour in the
+        # feed. Gradient posts keep the whole canvas (capped to 5:4).
+        if self.background_gradient and len(self.background_gradient) >= 2:
+            return self._cap_bounds_height(0, canvas_height)
+
         has_repost_layer = include_repost and self.is_repost and self.original_post
         if not text_elements and not has_repost_layer and not self.sticker_elements:
             if crop_band:
@@ -459,15 +489,22 @@ class Post(models.Model):
                 
                 bounds.append((left, top, right, bottom))
 
+        # The reply's own outer edge gets extra room so it does not sit flush
+        # against the crop when a quote anchors the other side.
+        reply_margin_top = 0
+        reply_margin_bottom = 0
         if has_repost_layer:
             geometry = self._repost_strip_geometry()
             if geometry:
-                bounds.append((
-                    0,
-                    geometry['paste_y'],
-                    int(self.image_width),
-                    geometry['paste_y'] + geometry['strip_height'],
-                ))
+                strip_top = max(0, geometry['paste_y'])
+                strip_bottom = min(canvas_height, geometry['paste_y'] + geometry['strip_height'])
+                if bounds:
+                    reply_mid = (min(b[1] for b in bounds) + max(b[3] for b in bounds)) / 2
+                    if reply_mid < (strip_top + strip_bottom) / 2:
+                        reply_margin_top = REPLY_EDGE_MARGIN
+                    else:
+                        reply_margin_bottom = REPLY_EDGE_MARGIN
+                bounds.append((0, strip_top, int(self.image_width), strip_bottom))
 
         if not bounds:
             if crop_band:
@@ -478,8 +515,8 @@ class Post(models.Model):
         max_y = max(b[3] for b in bounds)
 
         margin = 40
-        final_top = max(0, int(min_y - margin))
-        final_bottom = min(canvas_height, int(max_y + margin))
+        final_top = max(0, int(min_y - margin - reply_margin_top))
+        final_bottom = min(canvas_height, int(max_y + margin + reply_margin_bottom))
 
         # The crop bars are authoritative: content inside the band never
         # widens the crop, but content placed outside it is never cut off
@@ -489,9 +526,13 @@ class Post(models.Model):
             final_top = min(final_top, crop_band[0])
             final_bottom = max(final_bottom, crop_band[1])
 
+        # These bounds are the post's CONTENT extent, not its display height.
+        # A card in the feed pads a short post out to MIN_CROP_CANVAS_PX so it
+        # can carry the [Aa] chrome, but that padding is the card's business:
+        # baking it in here would also inflate every quoted strip cut from
+        # this post, since _repost_strip_geometry crops on top_y/bottom_y.
         if final_bottom <= final_top:
-            stretch = max(1, min(canvas_height, 400))
-            final_bottom = min(canvas_height, final_top + stretch)
+            final_bottom = min(canvas_height, final_top + 1)
             if final_bottom <= final_top:
                 final_top = max(0, final_bottom - 1)
 
@@ -505,10 +546,17 @@ class Post(models.Model):
         if self.background_gradient and len(self.background_gradient) >= 2:
             background = Image.new('RGB', (width, height))
             draw = ImageDraw.Draw(background)
-            top_color = self.background_gradient[0]
-            bottom_color = self.background_gradient[-1]
+            # Interpolate across EVERY stop, not just the ends, so a rainbow
+            # (or any multi-stop preset) renders as designed.
+            stops = [c for c in self.background_gradient if isinstance(c, str) and len(c) == 7]
+            if len(stops) < 2:
+                stops = [self.background_gradient[0], self.background_gradient[-1]]
+            segments = len(stops) - 1
             for y in range(height):
-                ratio = y / max(1, height - 1)
+                t = (y / max(1, height - 1)) * segments
+                seg = min(int(t), segments - 1)
+                ratio = t - seg
+                top_color, bottom_color = stops[seg], stops[seg + 1]
                 r = int(int(top_color[1:3], 16) * (1 - ratio) + int(bottom_color[1:3], 16) * ratio)
                 g = int(int(top_color[3:5], 16) * (1 - ratio) + int(bottom_color[3:5], 16) * ratio)
                 b = int(int(top_color[5:7], 16) * (1 - ratio) + int(bottom_color[5:7], 16) * ratio)
@@ -635,11 +683,16 @@ class Post(models.Model):
         stored = self.repost_geometry or {}
         if stored.get('width') and stored.get('y') is not None:
             # WYSIWYG: the strip goes exactly where the composer showed it
-            strip_width = max(1, min(canvas_width, int(stored['width'])))
+            # A quote may be enlarged past the canvas edges (the composer
+            # allows it), so the strip can be wider than the canvas and land
+            # at negative coordinates. PIL crops the overflow; the only
+            # guard is that some of it stays on frame.
+            strip_width = max(1, min(canvas_width * 3, int(stored['width'])))
             scale = float(strip_width) / float(orig_width)
             strip_height = max(1, int(round((crop_bottom - crop_top) * scale)))
-            paste_x = max(0, min(canvas_width - strip_width, int(stored.get('x', 0))))
-            paste_y = max(0, min(canvas_height - strip_height, int(stored['y'])))
+            edge = 40
+            paste_x = max(-strip_width + edge, min(canvas_width - edge, int(stored.get('x', 0))))
+            paste_y = max(-strip_height + edge, min(canvas_height - edge, int(stored['y'])))
         else:
             # Fallback (no geometry sent): inset strip below the response
             # content, or centered when there is no response content
@@ -670,7 +723,10 @@ class Post(models.Model):
             if geometry is None:
                 return
 
-            original_img = Image.open(self.original_post.rendered_image.path).convert('RGB')
+            # Storage-agnostic read: .path raises NotImplementedError on S3,
+            # which used to be swallowed and silently drop the quoted strip
+            with self.original_post.rendered_image.open('rb') as fh:
+                original_img = Image.open(io.BytesIO(fh.read())).convert('RGB')
             strip = original_img.crop(
                 (0, geometry['crop_top'], original_img.width, geometry['crop_bottom'])
             )
@@ -692,7 +748,32 @@ class Post(models.Model):
                 width=2,
             )
         except Exception as e:
-            print(f"Error compositing repost background: {e}")
+            _report_render_error('Error compositing quoted parent strip', e)
+
+    @classmethod
+    def _normalize_alternate_colors(cls, value):
+        """Validate a two-colour per-letter cycle.
+
+        Only colours from the app's own palette are accepted - the composer
+        can only offer those, so anything else is a malformed or hand-crafted
+        payload and is dropped rather than rendered. Returns None unless
+        exactly two distinct valid colours came through, so the caller can
+        treat it as a plain on/off.
+        """
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            return None
+        presets = {c.upper() for c in cls.COLOR_PRESETS}
+        colors = []
+        for entry in value:
+            if not isinstance(entry, str):
+                return None
+            entry = entry.strip().upper()
+            if entry not in presets:
+                return None
+            colors.append(entry)
+        if colors[0] == colors[1]:
+            return None
+        return colors
 
     def _is_styled_text(self, element):
         """Styled text (rainbow, letter-spaced, underlined, or chipped)
@@ -700,6 +781,7 @@ class Post(models.Model):
         return bool(
             element.get('rainbow') or element.get('letterSpacing')
             or element.get('underline') or element.get('hasBackground')
+            or element.get('alternateColors')
         )
 
     def _glow_radius(self, element):
@@ -794,7 +876,12 @@ class Post(models.Model):
             return
 
         spacing = element.get('letterSpacing') or 0
-        rainbow = element.get('rainbow')
+        # Rainbow and two-colour alternation are one mechanism: a palette
+        # advanced per non-space character. An explicit pair wins over
+        # rainbow so a duo choice is never silently overridden.
+        cycle_palette = element.get('alternateColors') or None
+        if not cycle_palette and element.get('rainbow'):
+            cycle_palette = RAINBOW_TEXT_PALETTE
         lines, line_height, gap, total_height = self._styled_text_layout(element, font)
         top = element['y'] - total_height / 2
         max_width = max(width for _text, width in lines)
@@ -829,10 +916,10 @@ class Post(models.Model):
             x = line_x(width)
             y = top + i * (line_height + gap)
             line_start_x = x
-            if rainbow or spacing:
+            if cycle_palette or spacing:
                 for ch in line:
-                    if rainbow and not ch.isspace():
-                        fill = RAINBOW_TEXT_PALETTE[color_index % len(RAINBOW_TEXT_PALETTE)]
+                    if cycle_palette and not ch.isspace():
+                        fill = cycle_palette[color_index % len(cycle_palette)]
                         color_index += 1
                     else:
                         fill = element['color']
@@ -856,11 +943,10 @@ class Post(models.Model):
 
         font = self._get_font_for_element(element)
         opacity = float(element.get('opacity') or 1)
-        blend = element.get('blendMode') or 'normal'
 
-        if opacity < 1 or blend != 'normal':
-            # Whole element (chips + ink + glow) composites as one layer,
-            # exactly like the composer's Text opacity / mixBlendMode
+        if opacity < 1:
+            # Whole element (chips + ink + glow) fades as one layer, exactly
+            # like the composer's Text opacity
             layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
             layer_draw = ImageDraw.Draw(layer)
             if element.get('glow'):
@@ -871,26 +957,8 @@ class Post(models.Model):
                 layer.paste(glow_layer, (0, 0), glow_layer)
                 layer.paste(glow_layer, (0, 0), glow_layer)
             self._render_text_ink(layer_draw, element, font)
-            alpha = layer.getchannel('A').point(lambda a: int(a * opacity))
-
-            if blend != 'normal':
-                # Flatten the ink over the blend-identity color, blend with
-                # the canvas, then apply only where the element has coverage
-                base = img.convert('RGB')
-                identity = (255, 255, 255) if blend == 'multiply' else (0, 0, 0)
-                flat = Image.new('RGB', img.size, identity)
-                flat.paste(layer.convert('RGB'), (0, 0), layer.getchannel('A'))
-                blended = {
-                    'multiply': ImageChops.multiply,
-                    'screen': ImageChops.screen,
-                    'overlay': ImageChops.overlay,
-                    'difference': ImageChops.difference,
-                }[blend](base, flat)
-                out = Image.composite(blended, base, alpha)
-                img.paste(out, (0, 0))
-            else:
-                layer.putalpha(alpha)
-                img.paste(layer, (0, 0), layer)
+            layer.putalpha(layer.getchannel('A').point(lambda a: int(a * opacity)))
+            img.paste(layer, (0, 0), layer)
             return
 
         if element.get('glow'):

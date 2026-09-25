@@ -20,7 +20,8 @@
       "buildNumber": "1",
       "infoPlist": {
         "CFBundleDisplayName": "Type",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryAddUsageDescription": "Save the posts you compose to your photo library."
       }
     },
     "android": {
@@ -40,7 +41,15 @@
       }
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Save the posts you compose to your photo library.",
+          "savePhotosPermission": "Save the posts you compose to your photo library.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ]
     ],
     "owner": "sotrusted",
     "runtimeVersion": {

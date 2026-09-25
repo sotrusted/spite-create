@@ -7,4 +7,8 @@ export const FEATURES = {
   // Signatures (sign toggle, canvas band preview, feed band) are parked
   // until the band's design and placement are settled; backend fields stay.
   signatures: false,
+  // Tap-to-collapse (the "minimize" chip). Parked while the interaction is
+  // reconsidered; the whole recursive renderer stays in PostCard, so
+  // flipping this back to true restores it.
+  collapsePosts: false,
 };

@@ -16,21 +16,26 @@ export const Colors = {
   
   // Post color presets (old school internet + modern)
   postColors: [
+    // neutrals light to dark, then the warm half of the wheel, then the
+    // cool half - so the cycle button walks a spectrum instead of a jumble
     '#F8F8FF', // Ghost White
-    '#FF1A1A', // Bright Red (classic web red)
     '#FAEBD7', // Antique White
+    '#B7BEC7', // Cool Gray
+    '#3D3D42', // Graphite
     '#000000', // Eerie Black
-    '#0000EE', // Link Blue (classic web blue)
-    '#FF1493', // Deep Pink (90s neon)
-    '#00CED1', // Dark Turquoise (retro teal)
-    '#9932CC', // Dark Orchid (early web purple)
-    '#FF6347', // Tomato (warm retro orange)
-    '#32CD32', // Lime Green (classic bright green)
-    '#FFD700', // Gold (old web gold)
-    '#DC143C', // Crimson (deep red)
-    '#4169E1', // Royal Blue (refined blue)
-    '#8B008B', // Dark Magenta (deep purple)
-    '#2F4F4F', // Dark Slate Gray (modern neutral)
+    '#690016', // Oxblood
+    '#FF1A1A', // Bright Red
+    '#FF940A', // Bright Orange
+    '#F0FF00', // Bright Yellow
+    '#CCFF00', // Highlighter
+    '#32CD32', // Lime Green
+    '#00CED1', // Dark Turquoise
+    '#0000EE', // Link Blue
+    '#4169E1', // Royal Blue
+    '#AB00FF', // Electric Violet
+    '#9932CC', // Dark Orchid
+    '#FF1493', // Deep Pink
+    '#FF90C2', // Baby Pink
   ],
   
   // Per-character palette for rainbow text. Must match RAINBOW_TEXT_PALETTE

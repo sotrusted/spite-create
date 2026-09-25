@@ -163,13 +163,14 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.CursorPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle'
+        'posts.throttles.RealIPThrottle',
+        'posts.throttles.DeviceThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/hour',
-        'user': '300/hour',
-        'post_create': '10/hour',  # Custom throttle for creating posts
+        'anon': '1000/hour',          # per real client IP (carrier NAT shares IPs)
+        'user': '300/hour',           # per device id
+        'post_create': '10/hour',     # per device id - the product rule
+        'post_create_ip': '60/hour',  # per IP - stops device-id rotation
     }
 }
 

@@ -245,23 +245,30 @@ class OpacityTests(RenderTestCase):
         self.assert_matches_golden(faded, 'opacity_45')
 
 
-class BlendModeTests(RenderTestCase):
-    def test_multiply_produces_the_blended_color(self):
-        # multiply(turquoise 00CED1, pink FF1493) = (0, ~10, ~120): the ink
-        # must land on that exact blend, and raw turquoise must be absent -
-        # a fallback render can't fake both
-        mult = self.make_post([text_element('BLEND', fontSize=120, color='#00CED1',
-                                            blendMode='multiply')],
-                              background_color='#FF1493')
-        im = self.open_render(mult).convert('RGB')
-        cols = set()
-        for y in range(0, im.height, 3):
-            for x in range(0, im.width, 3):
-                cols.add(im.getpixel((x, y)))
-        self.assertNotIn((0, 206, 209), cols)  # raw ink must not survive
-        blended = [c for c in cols if c[0] < 25 and 90 < c[2] < 150 and c[1] < 35]
-        self.assertTrue(blended, f'expected multiply color, palette was {sorted(cols)[:8]}')
-        self.assert_matches_golden(mult, 'blend_multiply')
+class ThrottleKeyingTests(RenderTestCase):
+    """Behind nginx every REMOTE_ADDR is 127.0.0.1; limits must key on the
+    device id and the proxy-supplied real IP, never the socket address."""
+
+    def _request(self, device=None, real_ip=None):
+        from django.test import RequestFactory
+        extra = {'REMOTE_ADDR': '127.0.0.1'}
+        if device:
+            extra['HTTP_X_DEVICE_ID'] = device
+        if real_ip:
+            extra['HTTP_X_REAL_IP'] = real_ip
+        return RequestFactory().get('/api/feed/', **extra)
+
+    def test_devices_behind_one_proxy_get_separate_buckets(self):
+        from posts.throttles import PostCreateThrottle, RealIPThrottle
+        t = PostCreateThrottle()
+        a = t.get_cache_key(self._request(device='device-a', real_ip='1.1.1.1'), None)
+        b = t.get_cache_key(self._request(device='device-b', real_ip='1.1.1.1'), None)
+        self.assertNotEqual(a, b)
+        ip = RealIPThrottle()
+        x = ip.get_cache_key(self._request(real_ip='1.1.1.1'), None)
+        y = ip.get_cache_key(self._request(real_ip='2.2.2.2'), None)
+        self.assertNotEqual(x, y)
+        self.assertNotIn('127.0.0.1', x)
 
 
 class GlyphSanitizerTests(RenderTestCase):
@@ -272,23 +279,41 @@ class GlyphSanitizerTests(RenderTestCase):
         marks = sum(1 for c in cleaned if __import__('unicodedata').combining(c))
         self.assertLessEqual(marks, 2)
         self.assertEqual(_sanitize_glyphs('a\u202Eevil\u200B\u0000b'), 'aevilb')
-        # ornamental glyphs survive untouched
         self.assertEqual(_sanitize_glyphs('\u2605 \u00b6 \u2591\u2593 \u2192'), '\u2605 \u00b6 \u2591\u2593 \u2192')
 
 
 class GradientTests(RenderTestCase):
     def test_vertical_gradient_spans_top_to_bottom(self):
-        post = self.make_post([text_element('GRAD', fontSize=110, color='#F8F8FF',
-                                            blendMode='screen')],
+        post = self.make_post([text_element('GRAD', fontSize=110, color='#F8F8FF')],
                               background_color='#FF1493',
-                              background_gradient=['#FF1493', '#FFD700'])
+                              background_gradient=['#FF1493', '#F0FF00'])
         im = self.open_render(post).convert('RGB')
         top = im.getpixel((10, 5))
         bottom = im.getpixel((10, im.height - 5))
-        # top approximates pink, bottom approximates gold (crop bands allow drift)
-        self.assertGreater(top[2], bottom[2] + 40)   # blue falls toward gold
-        self.assertGreater(bottom[1], top[1] + 40)   # green rises toward gold
-        self.assert_matches_golden(post, 'gradient_screen')
+        self.assertGreater(top[2], bottom[2] + 40)
+        self.assertGreater(bottom[1], top[1] + 40)
+        self.assert_matches_golden(post, 'gradient_bg')
+
+    def test_gradient_post_keeps_the_whole_canvas(self):
+        """Cropping a gradient to its text showed a slice where the ramp had
+        barely moved - it read as a flat colour in the feed."""
+        post = self.make_post([text_element('SLICE', fontSize=90, color='#000000')],
+                              background_color='#0000EE',
+                              background_gradient=['#0000EE', '#00CED1'])
+        band = post.bottom_y - post.top_y
+        self.assertGreater(band, post.image_height * 0.5,
+                           f'gradient crop was only {band}px of {post.image_height}')
+
+    def test_multi_stop_gradient_hits_every_colour(self):
+        post = self.make_post([text_element('RAINBOW', fontSize=80, color='#000000')],
+                              background_color='#FF1A1A',
+                              background_gradient=['#FF1A1A', '#32CD32', '#0000EE'])
+        im = self.open_render(post).convert('RGB')
+        mid = im.getpixel((10, im.height // 2))
+        # the middle stop must actually appear - a two-stop lerp would put
+        # a red/blue blend here, not green
+        self.assertGreater(mid[1], mid[0], f'middle stop missing, got {mid}')
+        self.assertGreater(mid[1], mid[2], f'middle stop missing, got {mid}')
 
 
 class FormattingTests(RenderTestCase):
@@ -539,6 +564,107 @@ class ImageGateTests(RenderTestCase):
         self.assertEqual(self.client.post('/api/stickers/upload/').status_code, 403)
 
 
+class RemoteStorageRepostTests(RenderTestCase):
+    """S3 storage has no local .path. Reading the quoted parent through it
+    raised NotImplementedError, generate_image swallowed the error, and every
+    repost in production silently rendered without its parent strip."""
+
+    def test_parent_strip_composites_when_storage_has_no_path(self):
+        parent = self.make_post([text_element('PARENT', color='#000000')],
+                                background_color='#00CED1')
+
+        from unittest import mock
+        storage = parent.rendered_image.storage
+        parent_name = parent.rendered_image.name
+        real_path = storage.path
+
+        real_open = storage.open
+
+        # Emulate S3 faithfully: the parent's file has no local .path, but it
+        # IS readable as a stream. (Local storage's own open() goes through
+        # path(), so it gets a bypass that uses the pre-patch resolver.)
+        def selective_path(name):
+            if name == parent_name:
+                raise NotImplementedError('This backend does not support absolute paths.')
+            return real_path(name)
+
+        def streaming_open(name, mode='rb'):
+            if name == parent_name:
+                import io as _io
+                return _io.open(real_path(name), mode)
+            return real_open(name, mode)
+
+        with mock.patch.object(storage, 'path', side_effect=selective_path), \
+             mock.patch.object(storage, 'open', side_effect=streaming_open):
+            with self.assertRaises(NotImplementedError):
+                _ = parent.rendered_image.path  # the S3 behaviour we emulate
+            repost = self.make_post([text_element('REPLY', y=700, color='#FFFFFF')],
+                                    background_color='#000000', is_repost=True,
+                                    original_post=parent,
+                                    repost_geometry={'x': 86, 'y': 1200, 'width': 907})
+
+        img = self.open_render(repost).convert('RGB')
+        # the parent's turquoise canvas must appear inside the composite
+        found = any(
+            img.getpixel((x, y)) == (0, 206, 209)
+            for y in range(0, img.height, 4)
+            for x in range(0, img.width, 4)
+        )
+        self.assertTrue(found, 'quoted parent strip missing from the composite')
+
+
+class ReplyMarginTests(RenderTestCase):
+    """The reply's outer edge gets extra room so it is not flush against the
+    crop when the quote anchors the other side."""
+
+    def _bounds(self, reply_y, strip_y):
+        parent = self.make_post([text_element('P', color='#000000')],
+                                background_color='#00CED1')
+        return self.make_post([text_element('REPLY', y=reply_y, color='#FFFFFF')],
+                              background_color='#000000', is_repost=True,
+                              original_post=parent,
+                              repost_geometry={'x': 86, 'y': strip_y, 'width': 907})
+
+    def test_reply_above_quote_gets_top_room(self):
+        plain = self.make_post([text_element('REPLY', y=600, color='#000000')],
+                               background_color='#FFFFFF')
+        quoted = self._bounds(reply_y=600, strip_y=1400)
+        plain_gap = 600 - plain.top_y
+        quoted_gap = 600 - quoted.top_y
+        self.assertGreater(quoted_gap, plain_gap,
+                           'reply above the quote got no extra top room')
+
+    def test_reply_below_quote_gets_bottom_room(self):
+        # kept inside the 5:4 cap so the crop is not centre-cropped instead
+        quoted = self._bounds(reply_y=1500, strip_y=800)
+        self.assertGreater(quoted.bottom_y - 1500, 88,
+                           'reply below the quote got no extra bottom room')
+
+
+class OversizedQuoteTests(RenderTestCase):
+    """A quote can be enlarged past the canvas edges, so the strip may be
+    wider than the canvas and land at negative coordinates."""
+
+    def test_quote_wider_than_canvas_still_composites(self):
+        parent = self.make_post([text_element('BIG', color='#000000')],
+                                background_color='#00CED1')
+        repost = self.make_post([text_element('REPLY', y=400, color='#FFFFFF')],
+                                background_color='#000000', is_repost=True,
+                                original_post=parent,
+                                repost_geometry={'x': -300, 'y': 600,
+                                                 'width': int(CANVAS_WIDTH * 1.8)})
+        img = self.open_render(repost).convert('RGB')
+        found = any(
+            img.getpixel((x, y)) == (0, 206, 209)
+            for y in range(0, img.height, 4)
+            for x in range(0, img.width, 4)
+        )
+        self.assertTrue(found, 'oversized quote did not composite')
+        # bounds stay inside the canvas
+        self.assertGreaterEqual(repost.top_y, 0)
+        self.assertLessEqual(repost.bottom_y, repost.image_height)
+
+
 class QuoteChainTests(RenderTestCase):
     def test_two_level_chain_rects_nest(self):
         leaf = self.make_post([text_element('LEAF', color='#000000')],
@@ -700,3 +826,50 @@ class BlockTests(RenderTestCase):
         self.assertNotIn('the original words here', texts, "blocked author's own post must vanish")
         repost = next(p for p in feed if p['is_repost'])
         self.assertTrue(repost['quote']['hidden'], 'quoted strip must hide for the blocker')
+
+
+class AlternatingTextColorTests(RenderTestCase):
+    """Per-letter alternation between two palette colours. Shares the
+    per-character draw path with rainbow, so the guard is that a duo
+    actually reaches the pixels and that junk input never does."""
+
+    def _element(self, colors):
+        return text_element('ABCD', color='#000000', alternateColors=colors)
+
+    def test_letters_alternate_between_the_two_colours(self):
+        post = self.make_post([self._element(['#FF1A1A', '#0000EE'])],
+                              background_color='#F8F8FF')
+        img = Image.open(post.rendered_image.path).convert('RGB')
+        counts = {}
+        for pixel in img.getdata():
+            counts[pixel] = counts.get(pixel, 0) + 1
+        # Both chosen colours are inked, and the element's own colour is not
+        self.assertGreater(counts.get((255, 26, 26), 0), 200, 'first colour missing')
+        self.assertGreater(counts.get((0, 0, 238), 0), 200, 'second colour missing')
+        self.assertLess(counts.get((0, 0, 0), 0), 200, 'base colour still drawn')
+
+    def test_normalizer_accepts_a_valid_pair(self):
+        self.assertEqual(
+            Post._normalize_alternate_colors(['#ff1a1a', '#0000EE']),
+            ['#FF1A1A', '#0000EE'],
+        )
+
+    def test_normalizer_rejects_junk(self):
+        for bad in (
+            None, [], ['#FF1A1A'], ['#FF1A1A', '#0000EE', '#32CD32'],
+            ['#FF1A1A', '#FF1A1A'],            # same colour twice
+            ['#FF1A1A', '#123456'],            # off-palette
+            ['#FF1A1A', 42], 'not-a-list',
+        ):
+            self.assertIsNone(Post._normalize_alternate_colors(bad), bad)
+
+    def test_pair_wins_over_rainbow(self):
+        post = self.make_post(
+            [text_element('ABCD', color='#000000', rainbow=True,
+                          alternateColors=['#FF1A1A', '#0000EE'])],
+            background_color='#F8F8FF')
+        img = Image.open(post.rendered_image.path).convert('RGB')
+        colors = {p for p in img.getdata()}
+        # Rainbow's third stop would appear if rainbow had won
+        self.assertNotIn((255, 215, 0), colors)
+        self.assertIn((255, 26, 26), colors)

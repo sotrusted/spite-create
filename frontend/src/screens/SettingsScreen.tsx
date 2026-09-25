@@ -1,24 +1,19 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Pressable,
   Linking,
   Alert,
-  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import { Colors } from '../constants/colors';
-import LoadingScreen from '../components/LoadingScreen';
 import { GUIDELINES_TEXT, TERMS_TEXT, PRIVACY_TEXT } from '../constants/legal';
 
 export default function SettingsScreen() {
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewPaused, setPreviewPaused] = useState(false);
   const handleExportData = () => {
     Toast.show({
       type: 'info',
@@ -28,7 +23,7 @@ export default function SettingsScreen() {
   };
 
   const handleContactSupport = () => {
-    Linking.openURL('mailto:support@subscript-app.com?subject=Creative Mind%27s Ideas Magazine Support');
+    Linking.openURL('mailto:support@creativemindsideasmagazine.com?subject=Creative Mind%27s Ideas Magazine Support');
   };
 
   const handleViewGuidelines = () => {
@@ -78,13 +73,6 @@ export default function SettingsScreen() {
           {renderSettingItem('mail-outline', 'Contact Support', handleContactSupport)}
         </View>
 
-        {/* TEMP: dev preview of the loading animation (too fast to catch
-            on localhost). Remove before release. */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>DEV</Text>
-          {renderSettingItem('play-outline', 'Preview Loading Screen', () => setPreviewLoading(true))}
-        </View>
-
         {/* About */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>ABOUT</Text>
@@ -95,18 +83,6 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      <Modal visible={previewLoading} animationType="fade" onRequestClose={() => setPreviewLoading(false)}>
-        {/* Tap dismisses; press-and-hold freezes the current frame */}
-        <Pressable
-          style={{ flex: 1 }}
-          onPress={() => setPreviewLoading(false)}
-          onLongPress={() => setPreviewPaused(true)}
-          delayLongPress={180}
-          onPressOut={() => setPreviewPaused(false)}
-        >
-          <LoadingScreen paused={previewPaused} />
-        </Pressable>
-      </Modal>
     </SafeAreaView>
   );
 }

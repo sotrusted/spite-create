@@ -4,6 +4,7 @@ export interface User {
   is_anonymous_mode: boolean;
   date_joined: string;
   posts_count_today: number;
+  total_posts?: number;
   report_count?: number;
   is_shadowbanned?: boolean;
   shadowban_reason?: string;
@@ -86,12 +87,12 @@ export interface TextElement {
   letterSpacing?: number;
   glow?: boolean;
   rainbow?: boolean;
+  alternateColors?: string[];
   align?: 'left' | 'center' | 'right';
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
   opacity?: number;
-  blendMode?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference';
   listStyle?: 'none' | 'bullet' | 'dash' | 'star' | 'number';
 }
 

@@ -9,18 +9,21 @@ import {
   Alert,
   Modal,
   TouchableWithoutFeedback,
+  Animated,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
+import { FEATURES } from '../constants/features';
+import { CHROME } from '../constants/layout';
 import { Colors } from '../constants/colors';
 import { Post } from '../types';
 import { absoluteUrl } from '../config/api';
 import { contrastRatio, hexToRgb } from '../utils/contrast';
+import { displayCropBounds } from '../utils/displayCrop';
 
 const { width: screenWidth } = Dimensions.get('window');
 
 interface Props {
-  isFirst?: boolean;
   onSwipeableOpen?: (ref: React.RefObject<Swipeable | null>) => void;
   post: Post;
   onReport: (reason: string, description: string) => void;
@@ -43,7 +46,7 @@ const chipTextColor = (background: string) => {
     : '#000000';
 };
 
-export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableOpen, isFirst }: Props) {
+export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableOpen }: Props) {
   const swipeableRef = React.useRef<Swipeable | null>(null);
   const navigation = useNavigation();
   const [showReportModal, setShowReportModal] = useState(false);
@@ -95,7 +98,47 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
 
   // Captured at onPressIn: locationX/Y are unreliable in onPress events
   const pressLocation = { current: { x: 0, y: 0 } } as { current: { x: number; y: number } };
+  // Double tap quotes the post. A single tap's action (collapse, when that
+  // feature is on) waits out the double-tap window so the two don't both
+  // fire; with collapse parked the wait costs nothing.
+  // A light flash confirms the tap landed - the posts are full-bleed images
+  // with no other press feedback. Colour is chosen against the post's own
+  // background so it reads on white and black alike.
+  const flashOpacity = React.useRef(new Animated.Value(0)).current;
+  const flashColor = chipTextColor(post.background_color || '#1B1B1B');
+  const flash = () => {
+    flashOpacity.stopAnimation();
+    Animated.sequence([
+      Animated.timing(flashOpacity, { toValue: 0.18, duration: 60, useNativeDriver: true }),
+      Animated.timing(flashOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const DOUBLE_TAP_MS = 260;
+  const tapTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(() => () => {
+    if (tapTimer.current) clearTimeout(tapTimer.current);
+  }, []);
+
   const handleBodyPress = () => {
+    flash();
+    if (tapTimer.current) {
+      clearTimeout(tapTimer.current);
+      tapTimer.current = null;
+      handleRepost();
+      return;
+    }
+    tapTimer.current = setTimeout(() => {
+      tapTimer.current = null;
+      handleSingleTap();
+    }, DOUBLE_TAP_MS);
+  };
+
+  const handleSingleTap = () => {
+    if (!FEATURES.collapsePosts) {
+      openDetail();
+      return;
+    }
     // locationX/Y are relative to the touched child - the full-canvas Image -
     // so dividing by scale yields CANVAS coordinates directly
     const { x: locationX, y: locationY } = pressLocation.current;
@@ -124,7 +167,10 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
   };
 
   const openDetail = () => {
-    (navigation as any).navigate('PostDetail', { postId: post.id });
+    // Hand the post over: the feed already has every field the detail screen
+    // needs, and its image is already in cache, so the screen renders warm
+    // instead of flashing the loading animation while it refetches.
+    (navigation as any).navigate('PostDetail', { postId: post.id, post });
   };
 
   const confirmMute = () => {
@@ -359,14 +405,15 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
 
     if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
       const scale = screenWidth / canvasWidth;
-      const croppedHeight = Math.max(bottomY - topY, 1);
+      const crop = displayCropBounds(topY, bottomY, canvasWidth, canvasHeight, screenWidth);
+      const croppedHeight = Math.max(crop.bottomY - crop.topY, 1);
       return (
         <View style={[styles.postImageWrapper, { height: croppedHeight * scale }]}>
           <Image
             source={{ uri: absoluteUrl(displayUri) }}
             style={[styles.postImage, {
               height: canvasHeight * scale,
-              transform: [{ translateY: -topY * scale }],
+              transform: [{ translateY: -crop.topY * scale }],
             }]}
             resizeMode="cover"
             onError={(error) => console.log('Post image error:', error.nativeEvent)}
@@ -454,7 +501,14 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
       onSwipeableOpenStartDrag={() => onSwipeableOpen?.(swipeableRef)}
       onSwipeableWillOpen={() => onSwipeableOpen?.(swipeableRef)}
     >
-      <View style={[styles.container, isFirst && { paddingTop: 16, backgroundColor: post.background_color || Colors.background }]}>
+      <View
+        style={[
+          styles.container,
+          // a locally-snapshotted post is provisional until the server
+          // render replaces it
+          (post as any).__optimistic && { opacity: 0.5 },
+        ]}
+      >
         {/* Tap opens detail (selectable text); long-press stages a repost */}
         {collapsedAt === 0 ? (
           <TouchableOpacity
@@ -497,6 +551,25 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
             {renderImage()}
           </TouchableOpacity>
         )}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: flashColor, opacity: flashOpacity },
+          ]}
+        />
+        {/* Visible quote affordance - double tap and long press do the same,
+            but neither announces itself. Auto-contrasts against the post. */}
+        {collapsedAt !== 0 && (
+          <TouchableOpacity
+            style={[styles.quoteButton, { backgroundColor: flashColor }]}
+            onPress={handleRepost}
+            activeOpacity={0.7}
+            hitSlop={{ top: CHROME.hitSlop, left: CHROME.hitSlop, right: CHROME.hitSlop, bottom: CHROME.hitSlop }}
+          >
+            <Text style={[styles.quoteButtonText, { color: post.background_color || Colors.background }]}>Aa</Text>
+          </TouchableOpacity>
+        )}
         {renderReportModal()}
       </View>
     </Swipeable>
@@ -504,6 +577,26 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
 }
 
 const styles = StyleSheet.create({
+  quoteButton: {
+    position: 'absolute',
+    right: CHROME.inset,
+    bottom: CHROME.inset,
+    width: CHROME.buttonWidth,
+    height: CHROME.buttonHeight,
+    borderWidth: 1,
+    borderColor: CHROME.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 30,
+  },
+  quoteButtonText: {
+    fontFamily: 'CourierPrime',
+    fontWeight: '700',
+    fontSize: 15,
+    // no lineHeight: an explicit one sat the glyph high in the box
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+  },
   container: {
     backgroundColor: Colors.background,
     marginBottom: 0, // no gap between posts

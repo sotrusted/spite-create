@@ -9,7 +9,7 @@ import { pickReadableColor, contrastRatio, hexToRgb } from '../utils/contrast';
 // with zero allocation, so this is safe to mount anywhere as the generic
 // loading state.
 
-const TITLE = "Type Magazine";
+const TITLE = "Creative Mind's Ideas";
 // PHOTOSENSITIVITY FLOOR: keep >= 170ms. WCAG 2.3.1 allows max 3 opposing
 // luminance pairs/sec on a full field; at 240ms we max out at ~2.1. Below
 // ~167ms the worst-case sequence crosses into seizure-trigger territory.
@@ -52,7 +52,9 @@ const FORMATS = [
   { bold: true, italic: true, underline: false },
 ];
 
-const SIZES = [13, 17, 22, 27, 15, 32, 19, 24];
+// Floor of 18: below that the long title turned into unreadable grey mush
+// in the chip. Ceiling keeps it inside the narrow shapes.
+const SIZES = [18, 24, 30, 21, 34, 19, 27, 22];
 
 // Chip geometries, strictly alternating wide/narrow (including the
 // wraparound) so adjacent shapes never read as near-duplicates. Narrow

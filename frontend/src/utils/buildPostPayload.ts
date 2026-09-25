@@ -24,12 +24,13 @@ export interface ComposerTextElement {
   letterSpacing?: number;
   glow?: boolean;
   rainbow?: boolean;
+  // Two palette colours cycled per letter; wins over rainbow when set
+  alternateColors?: string[];
   align?: 'left' | 'center' | 'right';
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
   opacity?: number;
-  blendMode?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'difference';
   listStyle?: 'none' | 'bullet' | 'dash' | 'star' | 'number';
   backgroundMode?: 'off' | 'white' | 'inverted';
 }
@@ -72,19 +73,14 @@ export function getRepostStripRect(
   const bottomY = typeof original?.bottom_y === 'number' ? original.bottom_y : null;
   if (!origWidth || topY === null || bottomY === null || bottomY <= topY) return null;
 
-  const inset = screenW * 0.08;
+  const inset = screenW * 0.05;
   let width = screenW - 2 * inset;
   let height = ((bottomY - topY) / origWidth) * width;
 
-  // Tall quotes (multi-level reposts, long posts) get smushed harder:
-  // cap the strip's height so the reply + strip composite stays inside
-  // the 5:4 render window (canvas height budget = 1.25 * screenW)
-  const maxStripH = screenW * 1.25 * 0.52;
-  if (height > maxStripH) {
-    const shrink = maxStripH / height;
-    width *= shrink;
-    height = maxStripH;
-  }
+  // Quotes are NOT shrunk to fit any more. Every automatic height cap made
+  // deep quotes too small to read, and the canvas now lets you pinch a quote
+  // to any size (including past the edges), so the default is simply big and
+  // the choice is yours. The server's 5:4 cap remains the backstop.
 
   // Placement: below the caption slot when it fits, otherwise raised so
   // the strip never bottoms out near the config bar / crop edge
@@ -127,12 +123,12 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       letterSpacing: Math.round((el.letterSpacing ?? 0) * k),
       glow: !!el.glow,
       rainbow: !!el.rainbow,
+      alternateColors: el.alternateColors?.length === 2 ? el.alternateColors : null,
       align: el.align || 'center',
       bold: !!el.bold,
       italic: !!el.italic,
       underline: !!el.underline,
       opacity: el.opacity ?? 1,
-      blendMode: el.blendMode || 'normal',
       listStyle: el.listStyle || 'none',
       };
     }) as PostCreate['text_elements'],

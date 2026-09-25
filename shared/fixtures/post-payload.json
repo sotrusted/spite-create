@@ -13,12 +13,12 @@
       "letterSpacing": 0,
       "glow": false,
       "rainbow": false,
+      "alternateColors": null,
       "align": "center",
       "bold": false,
       "italic": false,
       "underline": false,
       "opacity": 1,
-      "blendMode": "normal",
       "listStyle": "none"
     },
     {
@@ -33,12 +33,12 @@
       "letterSpacing": 0,
       "glow": false,
       "rainbow": false,
+      "alternateColors": null,
       "align": "center",
       "bold": false,
       "italic": false,
       "underline": false,
       "opacity": 1,
-      "blendMode": "normal",
       "listStyle": "none"
     }
   ],
