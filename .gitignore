@@ -24,9 +24,6 @@ backend/ENV/
 backend/*.env
 backend/*.local
 
-# Django migrations (keep __init__.py though)
-backend/**/migrations/*.py
-!backend/**/migrations/__init__.py
 
 # ---- React Native / Frontend ----
 frontend/node_modules/
