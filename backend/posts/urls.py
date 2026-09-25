@@ -22,6 +22,7 @@ urlpatterns = [
     # User endpoints
     path('users/create/', views.create_user, name='create-user'),
     path('users/profile/', views.user_profile, name='user-profile'),
+    path('users/me/', views.delete_account, name='delete-account'),
     path('notifications/', views.notifications_list, name='notifications'),
     path('notifications/read/', views.notifications_mark_read, name='notifications-read'),
 ]

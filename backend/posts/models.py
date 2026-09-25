@@ -70,6 +70,9 @@ RAINBOW_MIN_DISTANCE = 90
 CHIP_PAD_X, CHIP_PAD_Y = 8, 4
 CHIP_PAD_X_EM, CHIP_PAD_Y_EM = 0.25, 0.1
 
+# A quote whose author deleted their account renders as this flat block
+REMOVED_FILL, REMOVED_INK = '#3D3D42', '#B7BEC7'
+
 # Minimum height (canvas px) a background gradient is fitted to. Cards pad a
 # short post out to a chrome floor of 148pt at display time, which on the
 # narrowest supported width (320pt) is ~500 canvas px; a band at least that
@@ -204,7 +207,11 @@ class Post(models.Model):
 
     # Repost functionality
     is_repost = models.BooleanField(default=False)
-    original_post = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='reposts')
+    # SET_NULL, never CASCADE: deleting a post (or its author) must not take
+    # other people's reposts of it down too. Account deletion freezes the
+    # quote's rect into repost_geometry['removed'] first, so those reposts
+    # re-render with a placeholder where the quote was.
+    original_post = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='reposts')
     repost_screenshot = models.ImageField(upload_to='reposts/', null=True, blank=True)
     # WYSIWYG placement of the quoted strip, as shown in the composer:
     # {x, y, width} in canvas px. The bake puts the strip exactly here.
@@ -282,7 +289,7 @@ class Post(models.Model):
     def _render_canvas(self, text_elements, include_original):
         img = self._create_background(int(self.image_height or settings.POST_IMAGE_HEIGHT))
         draw = ImageDraw.Draw(img)
-        if include_original and self.is_repost and self.original_post and self.original_post.rendered_image:
+        if include_original and self.is_repost and self._repost_strip_geometry() is not None:
             self._composite_original(img)
         for element in text_elements:
             self._draw_text_element(img, draw, element)
@@ -493,7 +500,7 @@ class Post(models.Model):
             else:
                 return self._cap_bounds_height(0, canvas_height)
 
-        has_repost_layer = include_repost and self.is_repost and self.original_post
+        has_repost_layer = include_repost and self.is_repost and self._repost_strip_geometry() is not None
         if not text_elements and not has_repost_layer and not self.sticker_elements:
             if crop_band:
                 return self._cap_bounds_height(*crop_band)
@@ -755,6 +762,18 @@ class Post(models.Model):
         the compositor and the crop-bounds calculation.
         """
         original = self.original_post
+        removed = (self.repost_geometry or {}).get('removed')
+        if not original and removed:
+            # The quoted post was deleted: keep its footprint, draw a placeholder
+            return {
+                'removed': True,
+                'crop_top': 0,
+                'crop_bottom': 0,
+                'strip_width': int(removed['width']),
+                'strip_height': int(removed['height']),
+                'paste_x': int(removed['x']),
+                'paste_y': int(removed['y']),
+            }
         if not original or not original.rendered_image:
             return None
 
@@ -811,6 +830,9 @@ class Post(models.Model):
         try:
             geometry = self._repost_strip_geometry()
             if geometry is None:
+                return
+            if geometry.get('removed'):
+                self._draw_removed_placeholder(img, geometry)
                 return
 
             # Storage-agnostic read: .path raises NotImplementedError on S3,
@@ -880,6 +902,18 @@ class Post(models.Model):
             if math.dist(bg, tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))) >= RAINBOW_MIN_DISTANCE
         ]
         return visible if len(visible) >= 2 else RAINBOW_TEXT_PALETTE
+
+    def _draw_removed_placeholder(self, img, geometry):
+        """A quoted post whose author deleted their account: the quote's
+        exact footprint, filled flat, framed like any quote, labelled."""
+        x, y = geometry['paste_x'], geometry['paste_y']
+        w, h = geometry['strip_width'], geometry['strip_height']
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((x, y, x + w, y + h), fill=REMOVED_FILL)
+        draw.rectangle((x - 1, y - 1, x + w, y + h), outline='#88888A', width=2)
+        size = int(max(28, min(64, h * 0.12)))
+        font = self._load_font('courier-prime', size)
+        draw.text((x + w / 2, y + h / 2), 'post removed', font=font, fill=REMOVED_INK, anchor='mm')
 
     def _is_styled_text(self, element):
         """Styled text (rainbow, letter-spaced, underlined, or chipped)

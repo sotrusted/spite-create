@@ -14,7 +14,7 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
-import { api, endpoints } from '../config/api';
+import { api, endpoints, ONBOARD_FLAG } from '../config/api';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -179,7 +179,6 @@ export default function MainScreen() {
   };
 
   // First-open: offer the generated handle for editing before first use
-  const ONBOARD_FLAG = FileSystem.documentDirectory + 'onboarded.flag';
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardHandle, setOnboardHandle] = useState('');
   const [agreedTerms, setAgreedTerms] = useState(false);

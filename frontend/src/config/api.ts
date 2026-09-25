@@ -45,6 +45,20 @@ export const ensureDeviceId = async (): Promise<string> => {
   return deviceIdPromise;
 };
 
+// First-run flag: when absent, the feed opens the handle picker
+export const ONBOARD_FLAG = LegacyFS.documentDirectory + 'onboarded.flag';
+
+// After account deletion: the old id must never be sent again, or the next
+// request would quietly recreate an empty account under it. A fresh id and
+// no onboarding flag make the next launch a first launch.
+export const resetIdentity = async () => {
+  const minted = mintUuid();
+  await LegacyFS.writeAsStringAsync(DEVICE_ID_FILE, minted);
+  cachedDeviceId = minted;
+  deviceIdPromise = null;
+  await LegacyFS.deleteAsync(ONBOARD_FLAG, { idempotent: true });
+};
+
 // Synchronous accessor for callers that run after startup (WS URL);
 // ensureDeviceId() must have resolved at least once first
 export const getDeviceId = () => cachedDeviceId || 'pending-device-id';
@@ -107,6 +121,7 @@ export const endpoints = {
   // User
   createUser: '/users/create/',
   getUserProfile: '/users/profile/',
+  deleteAccount: '/users/me/',
 };
 
 // Request interceptor to add device ID and logging

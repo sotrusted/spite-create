@@ -1122,3 +1122,71 @@ class CanvasStateTests(RenderTestCase):
     def test_malformed_state_is_rejected(self):
         self.assertEqual(self._create({'no': 'version'}).status_code, 400)
         self.assertEqual(self._create({'version': 1, 'blob': 'x' * 200_000}).status_code, 400)
+
+
+class AccountDeletionTests(RenderTestCase):
+    """Deleting an account removes the user's data everywhere, including where
+    other people's reposts had it baked in."""
+
+    GEOMETRY = {'x': 140, 'y': 900, 'width': 800}
+
+    def _post(self, author, content, **overrides):
+        elements = [text_element(content, color=overrides.pop('ink', '#000000'), y=overrides.pop('y', 500))]
+        post = Post(author=author, text_content=content, image_width=CANVAS_WIDTH,
+                    image_height=CANVAS_HEIGHT, text_elements=elements,
+                    background_color=overrides.pop('background_color', '#F8F8FF'), **overrides)
+        post._text_elements_data = elements
+        post.save()
+        return post
+
+    def setUp(self):
+        super().setUp()
+        self.leaver = User.objects.create(device_id='leaver-device')
+        self.quoter = User.objects.create(device_id='quoter-device')
+        self.third = User.objects.create(device_id='third-device')
+        # distinctive cyan background so any surviving trace is detectable
+        self.original = self._post(self.leaver, 'GOODBYE', background_color='#00CED1')
+        self.quote = self._post(self.quoter, 'QUOTING', is_repost=True, original_post=self.original,
+                                repost_geometry=self.GEOMETRY, background_color='#F0FF00')
+        self.quote_of_quote = self._post(self.third, 'DEEPER', is_repost=True, original_post=self.quote,
+                                         repost_geometry=self.GEOMETRY, background_color='#FF90C2')
+
+    def _pixels(self, post):
+        return set(Image.open(post.rendered_image.path).convert('RGB').getdata())
+
+    def test_deleting_a_post_keeps_other_peoples_reposts(self):
+        self.original.delete()
+        self.assertTrue(Post.objects.filter(pk=self.quote.pk).exists())
+        self.assertTrue(Post.objects.filter(pk=self.quote_of_quote.pk).exists())
+
+    def test_account_deletion_scrubs_the_user_everywhere(self):
+        cyan, removed_fill = (0, 206, 209), (0x3D, 0x3D, 0x42)
+        self.assertIn(cyan, self._pixels(self.quote))           # baked in before
+        old_files = [self.original.rendered_image.path, self.quote.rendered_image.path,
+                     self.quote_of_quote.rendered_image.path]
+
+        response = self.client.delete('/api/users/me/', HTTP_X_DEVICE_ID='leaver-device')
+        self.assertEqual(response.status_code, 204)
+
+        self.assertFalse(User.objects.filter(device_id='leaver-device').exists())
+        self.assertFalse(Post.objects.filter(pk=self.original.pk).exists())
+        quote = Post.objects.get(pk=self.quote.pk)
+        deeper = Post.objects.get(pk=self.quote_of_quote.pk)
+        self.assertIsNone(quote.original_post_id)
+        self.assertIn('removed', quote.repost_geometry)
+        # the deleted post is gone from both surviving images, placeholder in its place
+        for post in (quote, deeper):
+            pixels = self._pixels(post)
+            self.assertNotIn(cyan, pixels, f'{post.text_content} still shows the deleted post')
+            self.assertIn(removed_fill, pixels, f'{post.text_content} has no placeholder')
+        # the placeholder keeps its footprint inside the crop
+        self.assertLessEqual(quote.top_y, 500)
+        self.assertGreaterEqual(quote.bottom_y, quote.repost_geometry['removed']['y'] + 50)
+        # every old image that showed the deleted post is gone from storage
+        for path in old_files:
+            self.assertFalse(os.path.exists(path), f'{path} survived')
+
+    def test_deletion_is_idempotent_and_needs_a_device(self):
+        self.assertEqual(self.client.delete('/api/users/me/', HTTP_X_DEVICE_ID='leaver-device').status_code, 204)
+        self.assertEqual(self.client.delete('/api/users/me/', HTTP_X_DEVICE_ID='leaver-device').status_code, 204)
+        self.assertEqual(self.client.delete('/api/users/me/').status_code, 400)

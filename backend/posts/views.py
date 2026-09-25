@@ -353,6 +353,21 @@ def get_or_create_user_from_request(request):
     return user
 
 
+@api_view(['DELETE'])
+@permission_classes([permissions.AllowAny])
+def delete_account(request):
+    """Delete the requesting device's account and everything it made.
+    Idempotent: a device with no account gets the same 204."""
+    from .account import delete_account as run_deletion
+    device_id = request.META.get('HTTP_X_DEVICE_ID')
+    if not device_id:
+        raise exceptions.ValidationError({'detail': 'X-Device-Id header required'})
+    user = User.objects.filter(device_id=device_id).first()
+    if user is not None:
+        run_deletion(user)
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def upload_background(request):
