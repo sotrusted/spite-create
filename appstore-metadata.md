@@ -51,9 +51,10 @@ Collected, **linked to the user**, not used for tracking, purpose App Functional
   account, hence linked even though handles are pseudonymous.
 
 Collected, **not linked**, not used for tracking, purpose App Functionality:
-- **Diagnostics → Crash Data** and **Performance Data**: server-side error
-  reports and 10% request traces (Sentry). No device id, no local variables,
-  no IP (send_default_pii off).
+- **Diagnostics → Other Diagnostic Data** (server-side error reports) and
+  **Performance Data** (10% of requests traced), via Sentry. Not "Crash
+  Data": the app itself sends no crash logs. No device id, no local
+  variables, no IP (send_default_pii off).
 
 Not collected: contact info, health, financial, location, sensitive info,
 contacts, photos/videos (image posts are off; saving to Photos is local),
