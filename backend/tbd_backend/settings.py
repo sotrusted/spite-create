@@ -274,6 +274,10 @@ if SENTRY_DSN:
         traces_sample_rate=0.1,
         send_default_pii=False,  # semi-anonymous app: keep user data out
     )
+    # Sentry hooks logging below the handler level, so the null handler above
+    # does not keep these out of it
+    from sentry_sdk.integrations.logging import ignore_logger
+    ignore_logger('django.security.DisallowedHost')
 
 # Report digest emails (manage.py report_digest, cron on the VM).
 # Default backend prints to stdout so the flow is testable locally;
@@ -304,9 +308,21 @@ LOGGING = {
             'class': 'logging.FileHandler',
             'filename': BASE_DIR / 'logs/django.log',
         },
+        'null': {
+            'class': 'logging.NullHandler',
+        },
     },
     'root': {
         'handlers': ['console', 'file'],
         'level': 'INFO',
+    },
+    'loggers': {
+        # Scanners send other sites' Host headers to this box; Django already
+        # answers 400. Logged as errors with a full traceback, they buried the
+        # real ones.
+        'django.security.DisallowedHost': {
+            'handlers': ['null'],
+            'propagate': False,
+        },
     },
 }
