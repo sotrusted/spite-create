@@ -283,49 +283,68 @@ class GlyphSanitizerTests(RenderTestCase):
 
 
 class GradientTests(RenderTestCase):
-    def test_gradient_runs_corner_to_corner(self):
+    """Gradients crop to their content like any post, and the ramp is fitted
+    to a band around that crop so even a one-line post shows all of it."""
+
+    def _band(self, post):
+        return post._gradient_band_for(post.top_y, post.bottom_y, post.image_height)
+
+    def test_gradient_post_crops_to_its_content(self):
+        post = self.make_post([text_element('SLICE', fontSize=90, color='#000000')],
+                              background_color='#0000EE',
+                              background_gradient=['#0000EE', '#00CED1'])
+        self.assertLess(post.bottom_y - post.top_y, post.image_height * 0.25,
+                        'gradient post kept the whole canvas instead of cropping')
+
+    def test_whole_ramp_lands_inside_the_band(self):
         post = self.make_post([text_element('GRAD', fontSize=110, color='#F8F8FF')],
                               background_color='#FF1493',
                               background_gradient=['#FF1493', '#F0FF00'])
         im = self.open_render(post).convert('RGB')
-        w, h = im.size
-        top_left = im.getpixel((2, 2))
-        bottom_right = im.getpixel((w - 3, h - 3))
-        self.assertGreater(top_left[2], bottom_right[2] + 40)
-        self.assertGreater(bottom_right[1], top_left[1] + 40)
-        # Isolines are perpendicular to the canvas diagonal (how iOS draws
-        # start 0,0 -> end 1,1), so two points either side of the centre
-        # along that perpendicular share a colour. Offset clears the text.
-        norm = (w * w + h * h) ** 0.5
-        dx, dy = 300 * h / norm, -300 * w / norm
-        p1 = im.getpixel((int(w / 2 + dx), int(h / 2 + dy)))
-        p2 = im.getpixel((int(w / 2 - dx), int(h / 2 - dy)))
-        for a, b in zip(p1, p2):
-            self.assertLessEqual(abs(a - b), 3, f'{p1} vs {p2}')
-        top_right = im.getpixel((w - 3, 2))
-        self.assertGreater(abs(top_right[1] - top_left[1]), 20, 'still vertical')
+        w = im.width
+        top, bottom = self._band(post)
+        self.assertGreaterEqual(bottom - top, 500)
+        start = im.getpixel((0, top))
+        finish = im.getpixel((w - 1, bottom - 1))
+        # The line's two ends are the first and last stops
+        for got, want in ((start, (0xFF, 0x14, 0x93)), (finish, (0xF0, 0xFF, 0x00))):
+            for a, b in zip(got, want):
+                self.assertLessEqual(abs(a - b), 4, f'{got} vs {want}')
+        # Past the ends of the line the end colours continue, flat
+        self.assertGreater(top, 0, 'band should sit inside the canvas for a centred post')
+        self.assertEqual(im.getpixel((0, 0)), im.getpixel((0, top // 2)))
+        self.assertEqual(im.getpixel((w - 1, im.height - 1)),
+                         im.getpixel((w - 1, (bottom + im.height) // 2)))
         self.assert_matches_golden(post, 'gradient_bg')
 
-    def test_gradient_post_keeps_the_whole_canvas(self):
-        """Cropping a gradient to its text showed a slice where the ramp had
-        barely moved - it read as a flat colour in the feed."""
-        post = self.make_post([text_element('SLICE', fontSize=90, color='#000000')],
-                              background_color='#0000EE',
-                              background_gradient=['#0000EE', '#00CED1'])
-        band = post.bottom_y - post.top_y
-        self.assertGreater(band, post.image_height * 0.5,
-                           f'gradient crop was only {band}px of {post.image_height}')
+    def test_isolines_are_perpendicular_to_the_band_diagonal(self):
+        post = self.make_post([text_element('GRAD', fontSize=110, color='#F8F8FF')],
+                              background_color='#FF1493',
+                              background_gradient=['#FF1493', '#F0FF00'])
+        im = self.open_render(post).convert('RGB')
+        w = im.width
+        top, bottom = self._band(post)
+        b = bottom - top
+        cx, cy = w / 2, (top + bottom) / 2
+        norm = (w * w + b * b) ** 0.5
+        # step along the isoline through the band centre, clear of the text
+        dx, dy = 200 * b / norm, -200 * w / norm
+        p1 = im.getpixel((int(cx + dx), int(cy + dy)))
+        p2 = im.getpixel((int(cx - dx), int(cy - dy)))
+        for a, c in zip(p1, p2):
+            self.assertLessEqual(abs(a - c), 3, f'{p1} vs {p2}')
 
     def test_multi_stop_gradient_hits_every_colour(self):
         post = self.make_post([text_element('RAINBOW', fontSize=80, color='#000000')],
                               background_color='#FF1A1A',
                               background_gradient=['#FF1A1A', '#32CD32', '#0000EE'])
         im = self.open_render(post).convert('RGB')
-        # the t=0.5 isoline passes through the centre; step along it to clear
-        # the centred text
-        w, h = im.size
-        norm = (w * w + h * h) ** 0.5
-        mid = im.getpixel((int(w / 2 + 300 * h / norm), int(h / 2 - 300 * w / norm)))
+        w = im.width
+        top, bottom = self._band(post)
+        b = bottom - top
+        norm = (w * w + b * b) ** 0.5
+        # t = 0.5 isoline through the band centre, stepped clear of the text
+        mid = im.getpixel((int(w / 2 + 200 * b / norm), int((top + bottom) / 2 - 200 * w / norm)))
         # the middle stop must actually appear - a two-stop lerp would put
         # a red/blue blend here, not green
         self.assertGreater(mid[1], mid[0], f'middle stop missing, got {mid}')

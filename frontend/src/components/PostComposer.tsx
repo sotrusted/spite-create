@@ -50,6 +50,18 @@ import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
 // renders the same projection, so the preview and the post agree.
 const DIAGONAL = { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } } as const;
 
+// Canvas px. Mirrors GRADIENT_MIN_BAND on the server (see models.py for why
+// 500): the smallest band a background gradient is fitted to.
+const GRADIENT_MIN_BAND_PX = 500;
+
+// A canvas-filling gradient whose line runs corner to corner of a band, in the
+// unit coordinates LinearGradient takes. Past the band the end colours carry
+// on, exactly as the server's clamp does.
+const gradientLineFor = (band: { top: number; bottom: number }) => ({
+  start: { x: 0, y: band.top / screenHeight },
+  end: { x: 1, y: band.bottom / screenHeight },
+});
+
 // Gap between a caption's centre line and the top of the quote below it:
 // half the placeholder's line plus a gutter, so the two never touch.
 const CAPTION_CLEARANCE = SPACE.lg + SPACE.lg;
@@ -2054,6 +2066,28 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     return { top, bottom };
   };
 
+  // The band a background gradient is fitted to: the projected crop, grown
+  // to at least GRADIENT_MIN_BAND_PX. Mirrors Post._gradient_band_for, so the
+  // ramp the composer shows is the ramp the post gets - the whole of it,
+  // across the part of the canvas the feed will actually show.
+  const gradientBand = () => {
+    let bounds = getProjectedCropBounds();
+    if (!bounds) {
+      // Nothing placed yet: the server crops an empty canvas to the centred
+      // 5:4 cap
+      const maxHeight = Math.min(screenWidth * MAX_POST_ASPECT, screenHeight);
+      const top = (screenHeight - maxHeight) / 2;
+      bounds = { top, bottom: top + maxHeight };
+    }
+    const need = Math.min((GRADIENT_MIN_BAND_PX * screenWidth) / CANVAS_WIDTH, screenHeight);
+    if (bounds.bottom - bounds.top >= need) return bounds;
+    const centre = (bounds.top + bounds.bottom) / 2;
+    let top = Math.max(0, centre - need / 2);
+    const bottom = Math.min(screenHeight, top + need);
+    top = Math.max(0, bottom - need);
+    return { top, bottom };
+  };
+
   // Adaptive crop guides: hairlines showing where the feed will crop
   const renderCropGuides = () => {
     // With a quote in the canvas the crop is anchored by the strip, so the
@@ -2134,7 +2168,7 @@ export default function PostComposer({ onPost, onClose, repostData }: Props) {
     if (backgroundGradient.length > 0) {
       return (
         <LinearGradient
-          {...DIAGONAL}
+          {...gradientLineFor(gradientBand())}
           colors={backgroundGradient as [string, string, ...string[]]}
           style={styles.fullScreenCanvas}
         >

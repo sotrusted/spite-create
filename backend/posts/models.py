@@ -1,7 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.files.base import ContentFile
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, features
+from PIL import Image, ImageDraw, ImageMath, ImageFilter, ImageFont, features
 import io
 import os
 import re
@@ -55,6 +55,13 @@ def _sanitize_glyphs(text):
 
 # Per-character palette for rainbow text. Must match rainbowPalette in
 # frontend/src/constants/colors.ts so the preview cycles identically.
+# Minimum height (canvas px) a background gradient is fitted to. Cards pad a
+# short post out to a chrome floor of 148pt at display time, which on the
+# narrowest supported width (320pt) is ~500 canvas px; a band at least that
+# tall keeps the padding inside the ramp. Mirrors GRADIENT_MIN_BAND_PX in the
+# composer.
+GRADIENT_MIN_BAND = 500
+
 RAINBOW_TEXT_PALETTE = [
     '#FF1A1A', '#FF9500', '#FFD700', '#32CD32', '#00CED1', '#9932CC'
 ]
@@ -224,6 +231,11 @@ class Post(models.Model):
             self._strip_anchor_bottom = response_bottom if has_response_content else None
 
             final_top, final_bottom = self._calculate_vertical_bounds(text_elements)
+            # Gradients are fitted to where the post will be seen (its crop),
+            # so the bounds have to exist before the background is painted
+            self._gradient_band = self._gradient_band_for(
+                final_top, final_bottom, int(self.image_height or settings.POST_IMAGE_HEIGHT)
+            )
             img = self._render_canvas(text_elements, include_original=True)
             final_bottom = self._draw_signature(img, final_bottom)
             final_top, final_bottom = self._cap_bounds_height(final_top, final_bottom)
@@ -452,12 +464,6 @@ class Post(models.Model):
             else:
                 return self._cap_bounds_height(0, canvas_height)
 
-        # A gradient spans the canvas, so cropping to the text showed a slice
-        # where the ramp had barely moved - it read as a flat colour in the
-        # feed. Gradient posts keep the whole canvas (capped to 5:4).
-        if self.background_gradient and len(self.background_gradient) >= 2:
-            return self._cap_bounds_height(0, canvas_height)
-
         has_repost_layer = include_repost and self.is_repost and self.original_post
         if not text_elements and not has_repost_layer and not self.sticker_elements:
             if crop_band:
@@ -539,24 +545,34 @@ class Post(models.Model):
         return self._cap_bounds_height(final_top, final_bottom)
 
     @staticmethod
-    def _diagonal_gradient(width, height, stops):
-        """Top-left to bottom-right ramp across every stop.
+    def _diagonal_gradient(width, height, stops, band=None):
+        """Top-left to bottom-right ramp across every stop, fitted to a band.
 
-        Matches the composer's LinearGradient start (0,0) -> end (1,1). iOS
-        projects each point onto the real diagonal (in points, not unit
-        space): t = (x*w + y*h) / (w^2 + h^2). Isolines are therefore
-        perpendicular to the diagonal, not corner to corner - fitted against
-        a simulator capture to within 1 colour unit. Built from C-level
-        Pillow ops (two ramps blended, then a 256-entry palette) since a
-        per-pixel Python loop over 2.5M pixels would dominate render time.
+        Matches the composer's LinearGradient, which runs from (0, band_top)
+        to (width, band_bottom) and which iOS evaluates by projecting each
+        point onto that line, in points: t = (x*w + (y - top)*b) / (w^2 + b^2)
+        with b the band height, clamped to [0, 1]. Isolines are therefore
+        perpendicular to the band's diagonal. Fitted against a simulator
+        capture to within 1 colour unit.
+
+        The band is where the post will actually be seen, so a short post
+        still shows the whole ramp instead of a near-flat slice of a
+        full-canvas one. Outside it the end colours simply continue.
         """
-        ramp = Image.linear_gradient('L')  # 256x256, 0 at top -> 255 at bottom
-        vertical = ramp.resize((width, height), Image.BILINEAR)
-        horizontal = ramp.rotate(90, expand=True)  # 0 at left -> 255 at right
-        horizontal = horizontal.resize((width, height), Image.BILINEAR)
-        # t = a*(x/w) + b*(y/h), with a = w^2/(w^2+h^2) and b = 1 - a
-        b = (height * height) / float(width * width + height * height)
-        t = Image.blend(horizontal, vertical, b)
+        top, bottom = band if band else (0, height)
+        band_h = max(1.0, float(bottom - top))
+        xs = Image.new('F', (width, 1))
+        xs.putdata([float(x) for x in range(width)])
+        ys = Image.new('F', (1, height))
+        ys.putdata([float(y) for y in range(height)])
+        scale = 255.0 / (width * width + band_h * band_h)
+        # Signed arithmetic in float; converting to 'L' clips to 0..255, which
+        # is exactly the clamp iOS applies past the ends of the line.
+        t = ImageMath.lambda_eval(
+            lambda a: (a['X'] * width + (a['Y'] - top) * band_h) * scale + 0.5,
+            X=xs.resize((width, height), Image.NEAREST),
+            Y=ys.resize((width, height), Image.NEAREST),
+        ).convert('L')
 
         # Interpolate across EVERY stop, not just the ends, so a rainbow
         # (or any multi-stop preset) renders as designed.
@@ -572,6 +588,20 @@ class Post(models.Model):
         t.putpalette(palette)  # 'L' -> 'P' in place
         return t.convert('RGB')
 
+    def _gradient_band_for(self, top, bottom, canvas_height):
+        """The band a gradient is fitted to: the post's crop, grown to at
+        least GRADIENT_MIN_BAND so a card padded out to its chrome floor on
+        any device still shows ramp rather than the flat end colours.
+        Mirrors gradientBandFor in the composer."""
+        need = min(GRADIENT_MIN_BAND, canvas_height)
+        if bottom - top >= need:
+            return int(top), int(bottom)
+        centre = (top + bottom) / 2
+        band_top = max(0, centre - need / 2)
+        band_bottom = min(canvas_height, band_top + need)
+        band_top = max(0, band_bottom - need)
+        return int(band_top), int(band_bottom)
+
     def _create_background(self, height):
         width = int(self.image_width or settings.POST_IMAGE_WIDTH)
         height = int(height)
@@ -581,7 +611,9 @@ class Post(models.Model):
             stops = [c for c in self.background_gradient if isinstance(c, str) and len(c) == 7]
             if len(stops) < 2:
                 stops = [self.background_gradient[0], self.background_gradient[-1]]
-            background = self._diagonal_gradient(width, height, stops)
+            background = self._diagonal_gradient(
+                width, height, stops, getattr(self, '_gradient_band', None)
+            )
         else:
             background = Image.new('RGB', (width, height), self.background_color)
         

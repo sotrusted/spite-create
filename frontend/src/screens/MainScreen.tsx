@@ -234,13 +234,34 @@ export default function MainScreen() {
       extrapolateLeft: 'clamp',
     })
   ).current;
-  const headerTranslateY = useRef(
+  const tuckedTranslateY = useRef(
     Animated.diffClamp(scrollYPositive, 0, HEADER_SLOP + HEADER_HIDE).interpolate({
       inputRange: [0, HEADER_SLOP, HEADER_SLOP + HEADER_HIDE],
       outputRange: [0, 0, -HEADER_HIDE],
       extrapolate: 'clamp',
     })
   ).current;
+  // diffClamp remembers scroll HISTORY, not position: if the list reaches the
+  // top without a matching stream of scroll events (a remount, a jump, a
+  // resync after another screen was up) it can stay tucked while the feed
+  // sits at offset 0 - uncovering the header clearance as a blank band.
+  // Scaling by how far the list has actually scrolled caps the tuck at the
+  // scroll distance, so at the top the header is always fully down.
+  const headerTranslateY = useRef(
+    Animated.multiply(
+      tuckedTranslateY,
+      scrollYPositive.interpolate({
+        inputRange: [0, HEADER_HIDE],
+        outputRange: [0, 1],
+        extrapolate: 'clamp',
+      })
+    )
+  ).current;
+  // The feed's top clearance is the header's real height, measured - not a
+  // guess. It changes with the safe-area inset (notch vs island, and the
+  // composer hiding the status bar), and a fixed 100 left a gap whenever the
+  // header came out shorter.
+  const [headerHeight, setHeaderHeight] = useState(100);
 
   const [newPostEvent, setNewPostEvent] = useState<PostEvent | null>(null);
 
@@ -272,6 +293,10 @@ export default function MainScreen() {
     <View style={styles.container}>
       {/* Collapsible Header */}
       <Animated.View
+        onLayout={(e) => {
+          const h = Math.round(e.nativeEvent.layout.height);
+          if (h > 0) setHeaderHeight(h);
+        }}
         style={[
           styles.header,
           {
@@ -322,8 +347,8 @@ export default function MainScreen() {
           postEvent={newPostEvent}
           onScroll={handleScroll}
           contentInsetAdjustmentBehavior="never"
-          contentInset={{ top: 100 }}
-          scrollIndicatorInsets={{ top: 80 }}
+          contentInset={{ top: headerHeight }}
+          scrollIndicatorInsets={{ top: headerHeight }}
         />
       </View>
 
