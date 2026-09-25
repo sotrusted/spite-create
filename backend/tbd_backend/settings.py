@@ -266,6 +266,11 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Error reporting: no-op unless SENTRY_DSN is set (set it on the VM)
 SENTRY_DSN = config('SENTRY_DSN', default='')
+from sentry_sdk.scrubber import EventScrubber, DEFAULT_DENYLIST
+SENTRY_SCRUBBER = EventScrubber(
+    denylist=DEFAULT_DENYLIST + ['x-device-id', 'x_device_id', 'http_x_device_id', 'device_id'],
+    recursive=True,
+)
 if SENTRY_DSN:
     import sentry_sdk
     sentry_sdk.init(
@@ -273,6 +278,12 @@ if SENTRY_DSN:
         environment=config('SENTRY_ENV', default='production'),
         traces_sample_rate=0.1,
         send_default_pii=False,  # semi-anonymous app: keep user data out
+        # Diagnostics are declared to Apple as NOT linked to the user, so no
+        # event may carry anything that ties it to an account: the device id
+        # header is scrubbed, and frame locals (which hold device ids, users
+        # and handles) are not captured at all.
+        include_local_variables=False,
+        event_scrubber=SENTRY_SCRUBBER,
     )
     # Sentry hooks logging below the handler level, so the null handler above
     # does not keep these out of it

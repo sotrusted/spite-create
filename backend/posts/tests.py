@@ -1037,3 +1037,18 @@ class ReviewNotAutoBanTests(RenderTestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('awaiting review', mail.outbox[0].body)
         self.assertIn('4 reports', mail.outbox[0].body)
+
+
+class DiagnosticsUnlinkedTests(TestCase):
+    """Sentry events are declared to Apple as not linked to the user."""
+
+    def test_device_id_is_scrubbed_from_error_events(self):
+        from django.conf import settings
+        # the shape the Django integration sends: headers and body (env only
+        # ever carries SERVER_NAME / SERVER_PORT)
+        event = {'request': {'headers': {'X-Device-Id': 'd-123', 'User-Agent': 'Type/1'},
+                             'data': {'device_id': 'd-123', 'reason': 'spam'}}}
+        settings.SENTRY_SCRUBBER.scrub_event(event)
+        flat = json.dumps(event, default=lambda o: getattr(o, 'value', repr(o)))
+        self.assertNotIn('d-123', flat)
+        self.assertEqual(event['request']['headers']['User-Agent'], 'Type/1')
