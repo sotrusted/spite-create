@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Share } from 'react-native';
+import { Share, StatusBar } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -147,6 +147,9 @@ export default function PostDetailScreen() {
 
       {post && (
         <>
+          {/* The status bar sits on the post's colour too: same contrast rule
+              as the buttons, or the clock vanishes on a black post */}
+          <StatusBar barStyle={chrome === '#FFFFFF' ? 'light-content' : 'dark-content'} animated />
           {/* Full bleed: the post floats in its own colour, vertically centred */}
           <View style={styles.stage}>{renderImage()}</View>
 

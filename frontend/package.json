@@ -8,7 +8,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "tsx --test src/**/*.test.ts",
-    "bless:fixtures": "tsx scripts/bless-fixtures.ts"
+    "bless:fixtures": "tsx scripts/bless-fixtures.ts",
+    "seed:store": "tsx scripts/seed-store.ts"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
