@@ -50,6 +50,19 @@ export default function Feed({
   // under the reader
   const [pendingPosts, setPendingPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(!boot);
+  // Opening on the cached page: a small spinner under the masthead says the
+  // fresh page is on its way (it may differ). Held back 300ms so a quick
+  // refresh never flashes it.
+  const [syncing, setSyncing] = useState(!!boot);
+  const [showSyncSpinner, setShowSyncSpinner] = useState(false);
+  useEffect(() => {
+    if (!syncing) {
+      setShowSyncSpinner(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowSyncSpinner(true), 300);
+    return () => clearTimeout(timer);
+  }, [syncing]);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextUrl, setNextUrl] = useState<string | null>(boot?.next ?? null);
@@ -144,6 +157,7 @@ export default function Feed({
       // settle the first-launch loading screen so the error is visible
       if (!cursor) feedLoadedRef.current?.([]);
     } finally {
+      if (!cursor) setSyncing(false);
       setLoading(false);
       setRefreshing(false);
       setLoadingMore(false);
@@ -467,6 +481,11 @@ export default function Feed({
 
   return (
     <View style={styles.container}>
+      {showSyncSpinner && (
+        <View style={[styles.syncSpinner, { top: headerClearance + SPACE.md }]} pointerEvents="none">
+          <ActivityIndicator size="small" color={Colors.secondary} />
+        </View>
+      )}
       {pendingPosts.length > 0 && (
         <TouchableOpacity style={[styles.newPostsBanner, { top: headerClearance + 8 }]} onPress={releasePendingPosts}>
           <Text style={styles.newPostsBannerText}>
@@ -520,6 +539,11 @@ export default function Feed({
 }
 
 const styles = StyleSheet.create({
+  syncSpinner: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 40,
+  },
   newPostsBanner: {
     position: 'absolute',
     alignSelf: 'center',
