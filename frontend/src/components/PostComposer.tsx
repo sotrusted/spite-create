@@ -2136,11 +2136,6 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         <View pointerEvents="none" style={[styles.cropOutsideDim, { top: bounds.bottom, bottom: 0 }]} />
         <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.top }]} />
         <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.bottom }]} />
-        {/* Where the card's [Aa] will sit, so the layout is honest */}
-        <View
-          pointerEvents="none"
-          style={[styles.quoteButtonGhost, { top: bounds.bottom - CHROME.inset - CHROME.buttonHeight }]}
-        />
       </>
     );
   };
@@ -3102,16 +3097,6 @@ const styles = StyleSheet.create({
     zIndex: 21,
   },
   // Adaptive crop guide hairlines for text posts
-  quoteButtonGhost: {
-    position: 'absolute',
-    right: CHROME.inset,
-    width: CHROME.buttonWidth,
-    height: CHROME.buttonHeight,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: 'rgba(255,255,255,0.6)',
-    zIndex: 22, // above the canvas, with the guide lines
-  },
   cropGuideLine: {
     position: 'absolute',
     left: 0,
