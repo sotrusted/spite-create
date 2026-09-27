@@ -32,7 +32,12 @@ const snapshot = (background: string, textElements: CanvasTextElement[], extra: 
   cropTop: 0, cropBottom: H, isSigned: false, ...extra,
 });
 
+// Per-run device ids: reseeding reuses no identity, so the dev server's
+// per-device post limit never trips on a second run
+const RUN = Date.now().toString(36);
+
 async function post(device: string, snap: ReturnType<typeof snapshot>) {
+  device = `${device}-${RUN}`;
   const body = { ...buildPostPayload(snap as ComposerSnapshot), canvas_state: toCanvasState(snap as any) };
   const res = await fetch(`${API}/api/posts/`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Device-Id': device },
@@ -64,23 +69,23 @@ async function main() {
   ]));
   await post('seed-ines', snapshot('#FF1A1A', [], {
     backgroundGradient: ['#FF1A1A', '#FF9500', '#FFD700', '#32CD32', '#00CED1', '#9932CC'],
-    textElements: [el('TEXT AS\nIMAGE!', { fontFamily: 'impact', fontSize: 72, color: '#F8F8FF', y: 470 })],
+    textElements: [el('Text as\nimage!', { fontFamily: 'impact', fontSize: 76, color: '#F8F8FF', y: 470 })],
   }));
   await post('seed-maru', snapshot('#FF90C2', [
-    el("Creative Mind's Ideas!", {
-      fontFamily: 'caveat', fontSize: 44, color: '#0000EE', backgroundMode: 'white', hasBackground: true, y: 470,
+    el('i typed this at 3am\nand it looks incredible', {
+      fontFamily: 'caveat', fontSize: 36, color: '#0000EE', backgroundMode: 'white', hasBackground: true, y: 470,
     }),
   ]));
   await post('seed-otto', snapshot('#000000', [
     el('colors from\nthe old internet', { fontFamily: 'arial-black', fontSize: 34, rainbow: true, y: 470 }),
   ]));
   await post('seed-maru', snapshot('#FAEBD7', [
-    el('no likes. no followers.\nno algorithm.\nthe newest page is on top.', {
-      fontFamily: 'crimson-text', fontSize: 28, color: '#690016', italic: true, y: 470,
+    el("posting in times new roman\nlike it's 2003", {
+      fontFamily: 'crimson-text', fontSize: 34, color: '#690016', italic: true, y: 470,
     }),
   ]));
   await post('seed-ines', snapshot('#FF1A1A', [
-    el('WRITE A LINE.\nIT BECOMES\nA PAGE.', { fontFamily: 'arial-black', fontSize: 40, color: '#F8F8FF', y: 470 }),
+    el("Creative Mind's\nIdeas!", { fontFamily: 'arial-black', fontSize: 44, color: '#F8F8FF', y: 470 }),
   ]));
   console.log('seeded 9 posts');
 }
