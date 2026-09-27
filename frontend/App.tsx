@@ -31,6 +31,7 @@ import { useFonts } from 'expo-font';
 import { Colors } from './src/constants/colors';
 import { RootStackParamList, Post } from './src/types';
 import MainScreen from './src/screens/MainScreen';
+import { loadBootFeed } from './src/utils/bootFeed';
 import PostComposerScreen from './src/screens/PostComposerScreen';
 import PostDetailScreen from './src/screens/PostDetailScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
@@ -38,31 +39,39 @@ import SettingsScreen from './src/screens/SettingsScreen';
 
 const Stack = createStackNavigator<RootStackParamList>();
 
-// expo-updates downloads in the background and applies on the NEXT launch -
-// but iOS keeps a backgrounded app warm, so reopening it is not a launch and
-// the update can sit unapplied for days. Fetch and reload on our own terms
-// instead: at startup, and whenever the app returns to the foreground.
+// Updates must never restart the app while someone is looking at it: that
+// showed the feed, then the loading screen, then a feed with a different
+// masthead, and read as broken. So an update is fetched at launch and on
+// every return to the foreground, and applied the moment the app goes to the
+// background - a restart nobody sees. (A cold start also applies a fetched
+// update on its own; the background restart covers iOS keeping the app warm
+// for days, when no cold start comes.)
 const useAutoUpdates = () => {
   useEffect(() => {
     if (__DEV__ || !Updates.isEnabled) return;
 
-    let applying = false;
-    const sync = async () => {
-      if (applying) return;
+    let checking = false;
+    let ready = false;
+    const fetchIfAvailable = async () => {
+      if (checking || ready) return;
+      checking = true;
       try {
         const check = await Updates.checkForUpdateAsync();
-        if (!check.isAvailable) return;
-        applying = true;
-        await Updates.fetchUpdateAsync();
-        await Updates.reloadAsync();
+        if (check.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          ready = true;
+        }
       } catch {
-        applying = false; // offline or mid-publish; try again next foreground
+        // offline or mid-publish; try again next foreground
+      } finally {
+        checking = false;
       }
     };
 
-    sync();
+    fetchIfAvailable();
     const sub = AppState.addEventListener('change', state => {
-      if (state === 'active') sync();
+      if (state === 'active') fetchIfAvailable();
+      else if (state === 'background' && ready) Updates.reloadAsync().catch(() => {});
     });
     return () => sub.remove();
   }, []);
@@ -88,7 +97,14 @@ export default function App() {
     'CaveatBold': require('./assets/fonts/CaveatBold.ttf'),
   });
 
-  if (!fontsLoaded) {
+  // The cached first feed page is read before the first render, alongside
+  // the fonts, so the feed and its masthead paint once, already populated
+  const [bootReady, setBootReady] = useState(false);
+  useEffect(() => {
+    loadBootFeed().finally(() => setBootReady(true));
+  }, []);
+
+  if (!fontsLoaded || !bootReady) {
     return null;
   }
 

@@ -11,7 +11,7 @@ import {
   Animated,
 } from 'react-native';
 import Toast from 'react-native-toast-message';
-import LoadingScreen from './LoadingScreen';
+import { bootFeed, saveBootFeed } from '../utils/bootFeed';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
 import { api, endpoints } from '../config/api';
@@ -41,15 +41,18 @@ export default function Feed({
   scrollIndicatorInsets,
   contentInset 
 }: Props) {
-  const [posts, setPosts] = useState<Post[]>([]);
+  // A launch starts from the cached first page (utils/bootFeed); the fetch
+  // below refreshes it in place
+  const boot = useRef(bootFeed()).current;
+  const [posts, setPosts] = useState<Post[]>(boot?.posts ?? []);
   // Posts arriving over the WS buffer here; a tappable [N NEW POSTS]
   // banner releases them (Twitter-style) instead of shifting the feed
   // under the reader
   const [pendingPosts, setPendingPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!boot);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [nextUrl, setNextUrl] = useState<string | null>(null);
+  const [nextUrl, setNextUrl] = useState<string | null>(boot?.next ?? null);
   const [error, setError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [showConnectionStatus, setShowConnectionStatus] = useState(false);
@@ -120,9 +123,11 @@ export default function Feed({
           }
         });
       }
-      // First page in hand: the masthead picks its disguise from these
+      // First page in hand: the masthead picks its disguise from these, and
+      // the next launch opens on them
       if (!cursor) {
         feedLoadedRef.current?.(results);
+        saveBootFeed(results, next);
       }
 
       setNextUrl(next);
@@ -136,6 +141,8 @@ export default function Feed({
         text1: 'Error',
         text2: errorMessage,
       });
+      // settle the first-launch loading screen so the error is visible
+      if (!cursor) feedLoadedRef.current?.([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -452,8 +459,10 @@ export default function Feed({
     );
   };
 
+  // The first-launch loading screen is drawn full-screen by MainScreen (it
+  // covers the masthead too); the feed just waits underneath
   if (loading && posts.length === 0) {
-    return <LoadingScreen />;
+    return null;
   }
 
   return (

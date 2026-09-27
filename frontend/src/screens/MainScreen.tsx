@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Feed from '../components/Feed';
+import LoadingScreen from '../components/LoadingScreen';
+import { bootFeed } from '../utils/bootFeed';
 import { GUIDELINES_TEXT, TERMS_TEXT } from '../constants/legal';
 import { subscribeToPostCreated, PostEvent } from '../utils/postEvents';
 import { metricsFor, inkBaselineFor } from '../constants/fontMetrics';
@@ -92,7 +94,20 @@ export default function MainScreen() {
     } catch (error) {
       console.log('Masthead theme sampling failed (non-critical):', error);
     }
+    setFirstPageReady(true);
   };
+
+  // The loading screen belongs to the very first launch only. Any later
+  // launch opens on the cached page, and the masthead picks its costume from
+  // it before the first frame (a layout effect runs before anything paints),
+  // so it never changes under the reader; the network refresh only refills
+  // the pool it re-rolls from.
+  const [firstPageReady, setFirstPageReady] = useState(() => bootFeed() !== null);
+  useLayoutEffect(() => {
+    const boot = bootFeed();
+    if (boot) handleFeedLoaded(boot.posts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const buildThemePool = (posts: Post[]) => {
     // Every level on the page is a candidate, quoted ancestors included -
@@ -362,6 +377,12 @@ export default function MainScreen() {
           scrollIndicatorInsets={{ top: headerHeight }}
         />
       </View>
+
+      {!firstPageReady && (
+        <View style={StyleSheet.absoluteFill}>
+          <LoadingScreen />
+        </View>
+      )}
 
       {/* First-open handle picker */}
       <Modal visible={showOnboarding} transparent animationType="fade">

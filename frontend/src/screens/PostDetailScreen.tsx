@@ -15,7 +15,6 @@ import * as MediaLibrary from 'expo-media-library';
 import * as LegacyFS from 'expo-file-system/legacy';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { api, endpoints, absoluteUrl } from '../config/api';
-import LoadingScreen from '../components/LoadingScreen';
 import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
 import { displayCropBounds } from '../utils/displayCrop';
@@ -167,7 +166,7 @@ export default function PostDetailScreen() {
     <View style={[styles.container, { backgroundColor: background }]}>
       {!post && !error && (
         <View style={styles.loading}>
-          <LoadingScreen />
+          {/* blank in the post's colour: the loading animation is first-launch only */}
         </View>
       )}
       {error && (

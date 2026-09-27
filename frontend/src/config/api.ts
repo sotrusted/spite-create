@@ -1,6 +1,7 @@
 import axios from 'axios';
 import Constants from 'expo-constants';
 import * as LegacyFS from 'expo-file-system/legacy';
+import { clearBootFeed } from '../utils/bootFeed';
 
 // Anonymous identity = a UUID minted once per install and persisted.
 // (The old brand_yearClass_model scheme collided: every phone of the same
@@ -57,6 +58,8 @@ export const resetIdentity = async () => {
   cachedDeviceId = minted;
   deviceIdPromise = null;
   await LegacyFS.deleteAsync(ONBOARD_FLAG, { idempotent: true });
+  // the cached feed page belongs to the old identity's session
+  await clearBootFeed();
 };
 
 // Synchronous accessor for callers that run after startup (WS URL);

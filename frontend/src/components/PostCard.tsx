@@ -3,7 +3,6 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Image,
   StyleSheet,
   Dimensions,
   Alert,
@@ -12,6 +11,7 @@ import {
   Animated,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
+import { Image as ExpoImage } from 'expo-image';
 import { useNavigation } from '@react-navigation/native';
 import { FEATURES } from '../constants/features';
 import { SPACE, CHROME } from '../constants/layout';
@@ -66,7 +66,9 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
     const urls = [post.response_image_url, ...chain.map(level => level.strip.url)]
       .filter(Boolean)
       .map(u => absoluteUrl(u as string)!);
-    urls.forEach(u => Image.prefetch(u).catch(() => {}));
+    // Renders never change in place (a re-render gets a new URL), so the disk
+    // cache is always valid: a relaunch draws these without the network
+    if (urls.length) ExpoImage.prefetch(urls, 'memory-disk').catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id]);
 
@@ -276,14 +278,15 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
       if (height < 3) return null;
       return (
         <View key={key} style={{ width: '100%', height, overflow: 'hidden' }}>
-          <Image
+          <ExpoImage
             source={{ uri: absoluteUrl(url) }}
             style={{
               width: '100%',
               height: imageHeight * displayScale,
               transform: [{ translateY: -fromY * displayScale }],
             }}
-            resizeMode="cover"
+            contentFit="cover"
+            cachePolicy="memory-disk"
           />
         </View>
       );
@@ -410,14 +413,15 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
       const croppedHeight = Math.max(crop.bottomY - crop.topY, 1);
       return (
         <View style={[styles.postImageWrapper, { height: croppedHeight * scale }]}>
-          <Image
+          <ExpoImage
             source={{ uri: absoluteUrl(displayUri) }}
             style={[styles.postImage, {
               height: canvasHeight * scale,
               transform: [{ translateY: -crop.topY * scale }],
             }]}
-            resizeMode="cover"
-            onError={(error) => console.log('Post image error:', error.nativeEvent)}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            onError={(event) => console.log('Post image error:', event.error)}
           />
         </View>
       );
@@ -425,12 +429,13 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
 
     return (
       <View style={[styles.postImageWrapper, { aspectRatio: imageAspectRatio, maxHeight: screenWidth * 1.5 }]}>
-        <Image
+        <ExpoImage
           source={{ uri: absoluteUrl(displayUri) }}
           style={[styles.postImage, { aspectRatio: imageAspectRatio }]}
-          resizeMode="cover"
+          contentFit="cover"
+            cachePolicy="memory-disk"
           onLoad={(event) => {
-            const { width, height } = event.nativeEvent.source;
+            const { width, height } = event.source;
             setImageAspectRatio(width / height);
           }}
         />

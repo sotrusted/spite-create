@@ -12,7 +12,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import LoadingScreen from '../components/LoadingScreen';
 import { Colors, FontChoices } from '../constants/colors';
 import { FontChoice, User } from '../types';
 import { api, endpoints } from '../config/api';
@@ -84,7 +83,8 @@ export default function ProfileScreen() {
   };
 
   if (loading) {
-    return <LoadingScreen />;
+    // plain background while it loads; the loading animation is first-launch only
+    return <View style={styles.container} />;
   }
 
   return (
