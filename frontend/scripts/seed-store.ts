@@ -71,13 +71,13 @@ async function main() {
     backgroundGradient: ['#FF1A1A', '#FF9500', '#FFD700', '#32CD32', '#00CED1', '#9932CC'],
     textElements: [el('Text as\nimage!', { fontFamily: 'impact', fontSize: 76, color: '#F8F8FF', y: 470 })],
   }));
-  await post('seed-maru', snapshot('#FF90C2', [
-    el('i typed this at 3am\nand it looks incredible', {
-      fontFamily: 'caveat', fontSize: 36, color: '#0000EE', backgroundMode: 'white', hasBackground: true, y: 470,
+  await post('seed-maru', snapshot('#FF1493', [
+    el('Words, arranged\nbeautifully!', {
+      fontFamily: 'caveat', fontSize: 40, color: '#0000EE', backgroundMode: 'white', hasBackground: true, y: 470,
     }),
   ]));
-  await post('seed-otto', snapshot('#000000', [
-    el('colors from\nthe old internet', { fontFamily: 'arial-black', fontSize: 34, rainbow: true, y: 470 }),
+  await post('seed-otto', snapshot('#F0FF00', [
+    el('Big ideas in small print!', { fontFamily: 'courier-prime', fontSize: 17, color: '#000000', y: 470 }),
   ]));
   await post('seed-maru', snapshot('#FAEBD7', [
     el('Typography for everyone!', {

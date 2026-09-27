@@ -106,6 +106,10 @@ export default function App() {
           notification: Colors.accent,
         },
       }}>
+        {/* The app-wide default. Mounted BEFORE the screens: React Native lets
+            the last-mounted StatusBar win, so placed after the navigator this
+            overrode every screen's own (feed masthead, detail, composer) */}
+        <StatusBar style="dark" backgroundColor={Colors.background} />
         <Stack.Navigator
           screenOptions={{
             headerShown: false,
@@ -154,7 +158,6 @@ export default function App() {
             }}
           />
         </Stack.Navigator>
-        <StatusBar style="dark" backgroundColor={Colors.background} />
         <Toast config={toastConfig} />
       </NavigationContainer>
     </SafeAreaProvider>
