@@ -2331,9 +2331,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                     />
                   );
                 })}
-              </View>
+              {/* The extra cells flow on from the palette in the same grid,
+                  so they share its last row instead of starting new ones */}
               {colorGridMode === 'background' && (
-                <View style={styles.colorGrid}>
+                <>
                   {GRADIENT_PRESETS.map((preset, i) => {
                     const active = backgroundGradient.length > 0 && backgroundGradient[0] === preset[0]
                       && backgroundGradient[backgroundGradient.length - 1] === preset[preset.length - 1];
@@ -2350,12 +2351,12 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                       </TouchableOpacity>
                     );
                   })}
-                </View>
+                </>
               )}
-              {/* Text gets the per-letter cycles on their own row: rainbow,
-                  and a duo built from two taps on the palette above. */}
+              {/* Text gets the per-letter cycles: rainbow, and a duo built
+                  from two taps on the palette. */}
               {colorGridMode === 'text' && !duoPending && (
-                <View style={styles.colorGrid}>
+                <>
                   <TouchableOpacity onPress={() => { setSelectedElementRainbow(); closeColorGrid(); }}>
                     <LinearGradient
                       {...DIAGONAL}
@@ -2369,8 +2370,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                       <View style={[styles.duoHalf, { backgroundColor: duo ? duo[1] : '#000000' }]} />
                     </View>
                   </TouchableOpacity>
-                </View>
+                </>
               )}
+              </View>
             </View>
           </TouchableWithoutFeedback>
         </View>
@@ -2383,10 +2385,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     
     return (
       <View style={styles.topMenu}>
-        {/* Left - Close Button */}
-        <TouchableOpacity style={styles.topMenuButton} onPress={onClose}>
-          <Ionicons name="close" size={CHROME.iconSize} color="white" />
-        </TouchableOpacity>
+        {/* Left - Close Button (a spacer while typing keeps the right side put) */}
+        {isEditingText ? (
+          <View style={[styles.topMenuButton, { backgroundColor: "transparent" }]} pointerEvents="none" />
+        ) : (
+          <TouchableOpacity style={styles.topMenuButton} onPress={onClose}>
+            <Ionicons name="close" size={CHROME.iconSize} color="white" />
+          </TouchableOpacity>
+        )}
         
         {/* Right - Controls */}
         <View style={styles.topMenuRight}>
@@ -2767,7 +2773,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       })()}
 
       {/* Top Menu (hidden while editing text) */}
-      {!isEditingText && renderTopMenu()}
+      {/* Stays up while typing: the background can be changed mid-sentence.
+          Close and download hide then, so a stray tap cannot leave or export. */}
+      {renderTopMenu()}
       
       {/* Bottom Control Bar (when editing) */}
       {renderBottomControlBar()}

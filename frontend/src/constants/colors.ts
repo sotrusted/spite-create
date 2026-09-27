@@ -27,6 +27,7 @@ export const Colors = {
     '#FF1A1A', // Bright Red
     '#FF940A', // Bright Orange
     '#F0FF00', // Bright Yellow
+    '#F9FF4F', // Lemon
     '#CCFF00', // Highlighter
     '#32CD32', // Lime Green
     '#00CED1', // Dark Turquoise
