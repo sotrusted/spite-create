@@ -28,6 +28,11 @@ export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; wid
   CourierPrimeBoldItalic: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398 },
   Caveat: { ascent: 0.9600, inkDrop: 0.0450, widthPerPt: 1.933 },
   CaveatBold: { ascent: 0.9600, inkDrop: 0.0540, widthPerPt: 1.938 },
+  CabinSketch: { ascent: 0.8730, inkDrop: 0.0080, widthPerPt: 2.206 },
+  CabinSketchBold: { ascent: 0.8730, inkDrop: 0.0180, widthPerPt: 2.206 },
+  Freeride: { ascent: 0.9400, inkDrop: 0.0000, widthPerPt: 2.019 },
+  FrederickaTheGreat: { ascent: 0.9775, inkDrop: 0.0160, widthPerPt: 2.771 },
+  GrutchShaded: { ascent: 0.9230, inkDrop: 0.0850, widthPerPt: 2.726 },
 };
 
 export const metricsFor = (fontFamily: string) =>

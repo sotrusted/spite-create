@@ -104,6 +104,10 @@ class Post(models.Model):
         ('papyrus', 'Papyrus'),
         ('impact', 'Impact'),
         ('courier-prime', 'Courier Prime'),
+        ('cabin-sketch', 'Cabin Sketch'),
+        ('freeride', 'Freeride'),
+        ('fredericka', 'Fredericka the Great'),
+        ('grutch-shaded', 'Grutch Shaded'),
         ('caveat', 'Caveat'),
     ]
     
@@ -1150,6 +1154,10 @@ class Post(models.Model):
         'caveat': [
             os.path.join(_REPO_FONTS, 'Caveat.ttf'),
         ],
+        'cabin-sketch': [os.path.join(_REPO_FONTS, 'CabinSketch.ttf')],
+        'freeride': [os.path.join(_REPO_FONTS, 'Freeride.otf')],
+        'fredericka': [os.path.join(_REPO_FONTS, 'FrederickaTheGreat.ttf')],
+        'grutch-shaded': [os.path.join(_REPO_FONTS, 'GrutchShaded.ttf')],
     }
 
     # Real bold/italic faces per family - families without a face fall back
@@ -1162,6 +1170,7 @@ class Post(models.Model):
         ('crimson-text', 'italic'): [os.path.join(_REPO_FONTS, 'TimesNewRomanItalic.ttf')],
         ('crimson-text', 'bold_italic'): [os.path.join(_REPO_FONTS, 'TimesNewRomanBoldItalic.ttf')],
         ('caveat', 'bold'): [os.path.join(_REPO_FONTS, 'CaveatBold.ttf')],
+        ('cabin-sketch', 'bold'): [os.path.join(_REPO_FONTS, 'CabinSketchBold.ttf')],
     }
     _resolved_font_paths = {}
 

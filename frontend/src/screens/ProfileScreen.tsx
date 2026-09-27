@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import { Colors, FontChoices } from '../constants/colors';
+import { Colors, FontChoices, FONT_MENU } from '../constants/colors';
 import { FontChoice, User } from '../types';
 import { api, endpoints } from '../config/api';
 import { SPACE, CHROME } from '../constants/space';
@@ -183,7 +183,7 @@ export default function ProfileScreen() {
 
               {/* Font choices */}
               <View style={styles.signatureRow}>
-                {(Object.keys(FontChoices) as FontChoice[]).map(key => (
+                {(FONT_MENU as FontChoice[]).map(key => (
                   <TouchableOpacity
                     key={key}
                     style={[

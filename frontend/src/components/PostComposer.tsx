@@ -34,7 +34,7 @@ import AnimatedReanimated, {
   withTiming,
 } from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
-import { Colors, FontChoices, resolveFontFace, rainbowFor } from '../constants/colors';
+import { Colors, FontChoices, FONT_MENU, FONT_TOGGLE, resolveFontFace, rainbowFor } from '../constants/colors';
 import { FEATURES } from '../constants/features';
 import { SPACE, CHROME } from '../constants/space';
 import { inkBaselineFor } from '../constants/fontMetrics';
@@ -368,6 +368,8 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // Colours collected so far while building a two-colour letter cycle;
   // null means the grid is in its normal single-pick mode.
   const [duoPending, setDuoPending] = useState<string[] | null>(null);
+  // Hold the Aa button: every font at once, instead of tapping through them
+  const [fontGridOpen, setFontGridOpen] = useState(false);
   const canvasCaptureRef = useRef<View>(null);
 
   // The quoted strip is draggable like a text element; its position is
@@ -2376,6 +2378,58 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     );
   };
 
+  // Long-press the Aa button. Same plain card as the colour grid: each font
+  // drawn as Aa in its own face (with the element's bold/italic), all set on
+  // one baseline so they compare, name underneath, the current one marked.
+  const FONT_SAMPLE_SIZE = 34;
+  const FONT_SAMPLE_BASELINE = 56; // pt from the top of a cell
+  const renderFontGrid = () => {
+    const el = selectedElement();
+    const keys = FONT_MENU as FontChoice[];
+    const pick = (key: FontChoice) => {
+      if (el) {
+        updateTextElement(el.id, { fontFamily: key });
+        rememberFont(key);
+      }
+      setFontGridOpen(false);
+    };
+    return (
+      <Modal visible={fontGridOpen} transparent animationType="fade" onRequestClose={() => setFontGridOpen(false)}>
+        <TouchableWithoutFeedback onPress={() => setFontGridOpen(false)}>
+          <View style={styles.colorGridBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={styles.colorGridCard}>
+                <View style={styles.fontGrid}>
+                  {keys.map(key => {
+                    const face = resolveFontFace(key, !!el?.bold, !!el?.italic);
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        style={[styles.fontCell, el?.fontFamily === key && styles.colorCellActive]}
+                        onPress={() => pick(key)}
+                      >
+                        <Text
+                          style={[styles.fontCellSample, {
+                            fontFamily: face,
+                            fontWeight: FontChoices[key].fontWeight as any,
+                            top: FONT_SAMPLE_BASELINE - inkBaselineFor(face) * FONT_SAMPLE_SIZE,
+                          }]}
+                        >
+                          Aa
+                        </Text>
+                        <Text style={styles.fontCellName} numberOfLines={1}>{FontChoices[key].name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+    );
+  };
+
   const renderTopMenu = () => {
     
     return (
@@ -2455,11 +2509,17 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     const el = getCurrentTextElement();
     if (!el) return null;
 
-    const fontKeys = Object.keys(FontChoices) as FontChoice[];
     const fontConfig = FontChoices[el.fontFamily];
 
+    // Taps cycle the short list; a grid-only font steps on to the toggle font
+    // that follows it in the grid's order
     const cycleFont = () => {
-      const next = fontKeys[(fontKeys.indexOf(el.fontFamily) + 1) % fontKeys.length];
+      const toggle = FONT_TOGGLE as FontChoice[];
+      const at = toggle.indexOf(el.fontFamily);
+      const menuAt = FONT_MENU.indexOf(el.fontFamily);
+      const next = at >= 0
+        ? toggle[(at + 1) % toggle.length]
+        : toggle.find(k => FONT_MENU.indexOf(k) > menuAt) ?? toggle[0];
       updateTextElement(el.id, { fontFamily: next });
       rememberFont(next);
     };
@@ -2525,7 +2585,12 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
           keyboardShouldPersistTaps="always"
         >
           {/* Font: shows and cycles the typeface */}
-          <TouchableOpacity style={styles.controlOption} onPress={cycleFont}>
+          <TouchableOpacity
+            style={styles.controlOption}
+            onPress={cycleFont}
+            onLongPress={() => setFontGridOpen(true)}
+            delayLongPress={350}
+          >
             <Text
               style={[styles.controlFontLabel, onBarBaseline(fontConfig.fontFamily, 22), {
                 fontFamily: fontConfig.fontFamily,
@@ -2805,6 +2870,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
 
       </KeyboardAvoidingView>
       {renderColorGrid()}
+      {renderFontGrid()}
       {renderParityGhost()}
     </View>
   );
@@ -2883,6 +2949,37 @@ const styles = StyleSheet.create({
   },
   duoHalf: {
     flex: 1,
+  },
+  fontGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    width: 3 * (96 + 2 * SPACE.xs),
+  },
+  fontCell: {
+    width: 96,
+    height: 96,
+    margin: SPACE.xs,
+    borderWidth: 1,
+    borderColor: CHROME.hairline,
+  },
+  fontCellSample: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontSize: 34,
+    color: '#F9F9F9',
+    includeFontPadding: false,
+  },
+  fontCellName: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: SPACE.sm,
+    textAlign: 'center',
+    fontFamily: 'CourierPrime',
+    fontSize: 11,
+    color: '#B7BEC7',
   },
   colorGridLabel: {
     color: '#F9F9F9',

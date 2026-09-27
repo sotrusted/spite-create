@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
-import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
+import { Colors, FontChoices, FONT_MENU, resolveFontFace } from '../constants/colors';
 import { pickReadableColor, contrastRatio, hexToRgb } from '../utils/contrast';
 import { SPACE, CHROME } from '../constants/space';
 import { metricsFor } from '../constants/fontMetrics';
@@ -41,7 +41,7 @@ type Frame = {
   maxWidth: `${number}%`;
 };
 
-const FONT_KEYS = Object.keys(FontChoices) as (keyof typeof FontChoices)[];
+const FONT_KEYS = FONT_MENU;
 const PALETTE = Colors.postColors;
 
 // none / bold / italic / bold+italic / underline; families without a real

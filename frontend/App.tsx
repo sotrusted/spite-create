@@ -95,6 +95,11 @@ export default function App() {
     'TimesNewRomanItalic': require('./assets/fonts/TimesNewRomanItalic.ttf'),
     'TimesNewRomanBoldItalic': require('./assets/fonts/TimesNewRomanBoldItalic.ttf'),
     'CaveatBold': require('./assets/fonts/CaveatBold.ttf'),
+    'CabinSketch': require('./assets/fonts/CabinSketch.ttf'),
+    'CabinSketchBold': require('./assets/fonts/CabinSketchBold.ttf'),
+    'Freeride': require('./assets/fonts/Freeride.otf'),
+    'FrederickaTheGreat': require('./assets/fonts/FrederickaTheGreat.ttf'),
+    'GrutchShaded': require('./assets/fonts/GrutchShaded.ttf'),
   });
 
   // The cached first feed page is read before the first render, alongside

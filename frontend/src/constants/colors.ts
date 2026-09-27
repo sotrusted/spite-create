@@ -78,7 +78,7 @@ export const FontChoices = {
     fontWeight: 'normal' as const,
   },
   'crimson-text': {
-    name: 'Crimson Text',
+    name: 'Times', // the key is historical; the face is Times New Roman
     fontFamily: 'TimesNewRoman',
     fontWeight: 'normal' as const,
     variants: { bold: 'TimesNewRomanBold', italic: 'TimesNewRomanItalic', boldItalic: 'TimesNewRomanBoldItalic' },
@@ -101,14 +101,48 @@ export const FontChoices = {
     fontWeight: 'normal' as const,
     variants: { bold: 'CourierPrimeBold', italic: 'CourierPrimeItalic', boldItalic: 'CourierPrimeBoldItalic' },
   },
+  'cabin-sketch': {
+    // Pencil sketch; the bold is its own hatched face
+    name: 'Sketch',
+    fontFamily: 'CabinSketch',
+    fontWeight: 'normal' as const,
+    variants: { bold: 'CabinSketchBold' },
+  },
+  'freeride': {
+    name: 'Freeride',
+    fontFamily: 'Freeride',
+    fontWeight: 'normal' as const,
+  },
+  'fredericka': {
+    name: 'Fredericka',
+    fontFamily: 'FrederickaTheGreat',
+    fontWeight: 'normal' as const,
+  },
+  'grutch-shaded': {
+    name: 'Grutch',
+    fontFamily: 'GrutchShaded',
+    fontWeight: 'normal' as const,
+  },
   'caveat': {
-    // Handwritten register
+    // Retired from the menus; kept so older posts still edit and render
     name: 'Caveat',
     fontFamily: 'Caveat',
     fontWeight: 'normal' as const,
     variants: { bold: 'CaveatBold' },
   },
 };
+
+// The long-press grid: every font on offer, in grid order (3 x 3)
+export const FONT_MENU: (keyof typeof FontChoices)[] = [
+  'arial-black', 'crimson-text', 'courier-prime',
+  'impact', 'cabin-sketch', 'papyrus',
+  'freeride', 'fredericka', 'grutch-shaded',
+];
+
+// A tap on the font button cycles this shorter set; the rest live in the grid
+export const FONT_TOGGLE: (keyof typeof FontChoices)[] = [
+  'arial-black', 'crimson-text', 'courier-prime', 'impact', 'cabin-sketch',
+];
 
 // A rainbow letter whose colour sits this close (RGB distance) to a solid
 // background vanishes into it, so those colours are skipped for that post.

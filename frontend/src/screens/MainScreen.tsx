@@ -25,7 +25,7 @@ import { bootFeed } from '../utils/bootFeed';
 import { GUIDELINES_TEXT, TERMS_TEXT } from '../constants/legal';
 import { subscribeToPostCreated, PostEvent } from '../utils/postEvents';
 import { metricsFor, inkBaselineFor } from '../constants/fontMetrics';
-import { Colors, FontChoices, resolveFontFace } from '../constants/colors';
+import { Colors, FontChoices, FONT_MENU, resolveFontFace } from '../constants/colors';
 import { contrastRatio, hexToRgb } from '../utils/contrast';
 import { FontChoice, Post } from '../types';
 import { SPACE, CHROME } from '../constants/space';
@@ -162,10 +162,10 @@ export default function MainScreen() {
   };
   const rerollHeaderTheme = () => {
     const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)];
-    const fontKeys = (Object.keys(FontChoices) as FontChoice[]).filter(
+    const fontKeys = (FONT_MENU as FontChoice[]).filter(
       k => resolveFontFace(k, false, false) !== headerTheme.fontFamily,
     );
-    const fontKey = pick(fontKeys.length > 0 ? fontKeys : (Object.keys(FontChoices) as FontChoice[]));
+    const fontKey = pick(fontKeys.length > 0 ? fontKeys : (FONT_MENU as FontChoice[]));
     const variants = (FontChoices[fontKey] as any).variants || {};
     const bold = !!variants.bold && Math.random() < 0.4;
     const italic = !!variants.italic && Math.random() < 0.3;
