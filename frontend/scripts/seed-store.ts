@@ -80,8 +80,8 @@ async function main() {
     el('colors from\nthe old internet', { fontFamily: 'arial-black', fontSize: 34, rainbow: true, y: 470 }),
   ]));
   await post('seed-maru', snapshot('#FAEBD7', [
-    el("posting in times new roman\nlike it's 2003", {
-      fontFamily: 'crimson-text', fontSize: 34, color: '#690016', italic: true, y: 470,
+    el('Typography for everyone!', {
+      fontFamily: 'crimson-text', fontSize: 33, color: '#690016', italic: true, y: 470,
     }),
   ]));
   await post('seed-ines', snapshot('#FF1A1A', [

@@ -337,7 +337,7 @@ class PostListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'author', 'text_content', 'text_elements', 'sticker_elements', 'rendered_image_url',
             'created_at', 'view_count', 'is_repost', 'original_post',
-            'is_signed', 'signature_style', 'background_color', 'font_choice',
+            'is_signed', 'signature_style', 'background_color', 'background_gradient', 'font_choice',
             'response_image_url', 'response_top_y', 'response_bottom_y', 'quote', 'quote_chain',
             'repost_screenshot_url', 'image_width', 'image_height', 'top_y', 'bottom_y',
             'content_boxes', 'editable',

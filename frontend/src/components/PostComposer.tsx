@@ -44,6 +44,7 @@ import { captureRef } from 'react-native-view-shot';
 import { emitPostCreated } from '../utils/postEvents';
 import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { displayCropBounds } from '../utils/displayCrop';
+import { gradientBandPx } from '../utils/gradient';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
 import { CanvasState, CanvasTextElement } from '../types/canvas';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
@@ -54,9 +55,6 @@ import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
 // renders the same projection, so the preview and the post agree.
 const DIAGONAL = { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } } as const;
 
-// Canvas px. Mirrors GRADIENT_MIN_BAND on the server (see models.py for why
-// 500): the smallest band a background gradient is fitted to.
-const GRADIENT_MIN_BAND_PX = 500;
 
 // Highlighter padding: a fraction of the font size, never below a minimum in
 // canvas px. Mirrors CHIP_PAD_* on the server. Returned in the element's own
@@ -2093,13 +2091,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       const top = (screenHeight - maxHeight) / 2;
       bounds = { top, bottom: top + maxHeight };
     }
-    const need = Math.min((GRADIENT_MIN_BAND_PX * screenWidth) / CANVAS_WIDTH, screenHeight);
-    if (bounds.bottom - bounds.top >= need) return bounds;
-    const centre = (bounds.top + bounds.bottom) / 2;
-    let top = Math.max(0, centre - need / 2);
-    const bottom = Math.min(screenHeight, top + need);
-    top = Math.max(0, bottom - need);
-    return { top, bottom };
+    const k = CANVAS_WIDTH / screenWidth;
+    const band = gradientBandPx(bounds.top * k, bounds.bottom * k, screenHeight * k);
+    return { top: band.top / k, bottom: band.bottom / k };
   };
 
   // The card the feed will actually show: the projected content crop run

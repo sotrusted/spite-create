@@ -19,6 +19,8 @@ import LoadingScreen from '../components/LoadingScreen';
 import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
 import { displayCropBounds } from '../utils/displayCrop';
+import { gradientBandPx } from '../utils/gradient';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Post } from '../types';
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -33,6 +35,8 @@ export default function PostDetailScreen() {
   // Seeded from the feed when there is one - no fetch, no loading frame
   const [post, setPost] = useState<Post | null>(seed ?? null);
   const [error, setError] = useState(false);
+  // The stage's height, to line a gradient background up with the image
+  const [stageHeight, setStageHeight] = useState(0);
 
   useEffect(() => {
     if (!postId) return;
@@ -132,6 +136,33 @@ export default function PostDetailScreen() {
   const background = post?.background_color || Colors.background;
   const chrome = chromeColor(background);
 
+  // A gradient post's image is only the cropped band of its gradient, so a
+  // flat full-bleed colour around it showed a hard edge. Instead the same
+  // gradient fills the stage: its line (the band's top-left to bottom-right,
+  // canvas px) is mapped to screen points with the image's own scale and
+  // vertical centring, so where they overlap they are the same pixels.
+  const renderGradient = () => {
+    const stops = post?.background_gradient;
+    const canvasWidth = post?.image_width || 0;
+    const canvasHeight = post?.image_height || 0;
+    if (!post || !stops || stops.length < 2 || !stageHeight || !canvasWidth || !canvasHeight) return null;
+    if (typeof post.top_y !== 'number' || typeof post.bottom_y !== 'number') return null;
+    const scale = screenWidth / canvasWidth;
+    const crop = displayCropBounds(post.top_y, post.bottom_y, canvasWidth, canvasHeight, screenWidth);
+    const imageTop = (stageHeight - (crop.bottomY - crop.topY) * scale) / 2;
+    const band = gradientBandPx(post.top_y, post.bottom_y, canvasHeight);
+    const toUnitY = (canvasY: number) => (imageTop + (canvasY - crop.topY) * scale) / stageHeight;
+    return (
+      <LinearGradient
+        pointerEvents="none"
+        colors={stops as [string, string, ...string[]]}
+        start={{ x: 0, y: toUnitY(band.top) }}
+        end={{ x: 1, y: toUnitY(band.bottom) }}
+        style={StyleSheet.absoluteFill}
+      />
+    );
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: background }]}>
       {!post && !error && (
@@ -151,7 +182,10 @@ export default function PostDetailScreen() {
               as the buttons, or the clock vanishes on a black post */}
           <StatusBar barStyle={chrome === '#FFFFFF' ? 'light-content' : 'dark-content'} animated />
           {/* Full bleed: the post floats in its own colour, vertically centred */}
-          <View style={styles.stage}>{renderImage()}</View>
+          <View style={styles.stage} onLayout={e => setStageHeight(e.nativeEvent.layout.height)}>
+            {renderGradient()}
+            {renderImage()}
+          </View>
 
           <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
             <Ionicons name="close" size={CHROME.iconSize} color={chrome} />
