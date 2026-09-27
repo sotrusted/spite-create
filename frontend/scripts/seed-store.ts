@@ -55,14 +55,14 @@ async function quote(device: string, original: any, background: string, caption:
 }
 
 async function main() {
-  // Oldest first: the feed shows the last one on top.
+  // Oldest first: the feed shows the last one on top. The quote chain's
+  // inner pages are old; its outer page is recent, so the feed shot opens
+  // on a post nested three deep.
   const a = await post('seed-ines', snapshot('#F0FF00', [
     el('Quote anything!', { fontFamily: 'courier-prime', fontSize: 34, color: '#000000', y: 430 }),
   ]));
   const b = await quote('seed-otto', a, '#0000EE',
     el('Quote the quote!', { fontFamily: 'arial-black', fontSize: 32, color: '#F8F8FF' }));
-  await quote('seed-maru', b, '#FAEBD7',
-    el('Quotes all the way down!', { fontFamily: 'crimson-text', fontSize: 34, color: '#FF1A1A', italic: true }));
 
   await post('seed-otto', snapshot('#F0FF00', [
     el('yes, papyrus.', { fontFamily: 'papyrus', fontSize: 44, alternateColors: ['#FF1493', '#0000EE'], y: 460 }),
@@ -71,6 +71,11 @@ async function main() {
     backgroundGradient: ['#FF1A1A', '#FF9500', '#FFD700', '#32CD32', '#00CED1', '#9932CC'],
     textElements: [el('Text as\nimage!', { fontFamily: 'impact', fontSize: 76, color: '#F8F8FF', y: 470 })],
   }));
+  await post('seed-maru', snapshot('#FAEBD7', [
+    el('Typography for everyone!', {
+      fontFamily: 'crimson-text', fontSize: 33, color: '#690016', italic: true, y: 470,
+    }),
+  ]));
   await post('seed-maru', snapshot('#FF1493', [
     el('Words, arranged\nbeautifully!', {
       fontFamily: 'caveat', fontSize: 40, color: '#0000EE', backgroundMode: 'white', hasBackground: true, y: 470,
@@ -79,11 +84,8 @@ async function main() {
   await post('seed-otto', snapshot('#F0FF00', [
     el('Big ideas in small print!', { fontFamily: 'courier-prime', fontSize: 17, color: '#000000', y: 470 }),
   ]));
-  await post('seed-maru', snapshot('#FAEBD7', [
-    el('Typography for everyone!', {
-      fontFamily: 'crimson-text', fontSize: 33, color: '#690016', italic: true, y: 470,
-    }),
-  ]));
+  await quote('seed-maru', b, '#FAEBD7',
+    el('Quotes all the way down!', { fontFamily: 'crimson-text', fontSize: 34, color: '#FF1A1A', italic: true }));
   await post('seed-ines', snapshot('#FF1A1A', [
     el("Creative Mind's\nIdeas!", { fontFamily: 'arial-black', fontSize: 44, color: '#F8F8FF', y: 470 }),
   ]));
