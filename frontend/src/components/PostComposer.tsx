@@ -45,6 +45,7 @@ import { emitPostCreated } from '../utils/postEvents';
 import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
+import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
 import { CanvasState, CanvasTextElement } from '../types/canvas';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
@@ -1095,10 +1096,28 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       repostData,
       repostStripRect: stripRect,
     };
+
+    // Close up dead space between the pieces (see compactGaps). The post
+    // renders the compacted layout; "Edit again" keeps the one as placed.
+    // Image backgrounds and stickers pin content to places, so they opt out.
+    const compacted = compactLayout(snapshot);
+    if (compacted.closed > 0) {
+      setTextElements(prev => prev.map(el => {
+        const moved = compacted.snapshot.textElements.find(c => c.id === el.id);
+        return moved ? { ...el, y: moved.y } : el;
+      }));
+      if (compacted.snapshot.repostStripRect) {
+        const { left, top } = compacted.snapshot.repostStripRect;
+        setStripPosition({ x: left, y: top });
+      }
+      // The optimistic snapshot captures the canvas: let it redraw first
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+
     // The render payload, plus the canvas itself so "Edit again" can bring
     // this exact state back
     const postData: PostCreate = {
-      ...buildPostPayload(snapshot),
+      ...buildPostPayload(compacted.snapshot),
       canvas_state: toCanvasState(snapshot),
     };
 
@@ -1127,7 +1146,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     // Eager post: snapshot the canvas, drop it into the feed immediately, and
     // let the request finish in the background. The server render replaces
     // the snapshot when it lands, so the feed never shows a gap or a spinner.
-    const optimistic = await buildOptimisticPost(postData);
+    const optimistic = await buildOptimisticPost(postData, compacted.closed);
     setIsPosting(false);
     finishPost(null);
     if (optimistic) emitPostCreated(optimistic);
@@ -1136,8 +1155,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
 
   // A local snapshot of the canvas, shaped like a feed post. Crop bounds come
   // from the same projection the crop guides draw, so it lands in the feed at
-  // the height the real render will occupy.
-  const buildOptimisticPost = async (payload: PostCreate): Promise<any | null> => {
+  // the height the real render will occupy. `closed` is the dead space just
+  // compacted away: the projection still reads this render's (pre-compaction)
+  // layout, whose top piece stayed put and whose bottom rose by exactly that.
+  const buildOptimisticPost = async (payload: PostCreate, closed = 0): Promise<any | null> => {
     try {
       const captured = await captureRef(canvasCaptureRef, { format: 'png', quality: 1 });
       // captureRef hands back a bare path on iOS; without a scheme the feed
@@ -1155,7 +1176,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         image_width: CANVAS_WIDTH,
         image_height: canvasHeight,
         top_y: bounds ? Math.round(bounds.top * k) : 0,
-        bottom_y: bounds ? Math.round(bounds.bottom * k) : canvasHeight,
+        bottom_y: bounds ? Math.round((bounds.bottom - closed) * k) : canvasHeight,
         created_at: new Date().toISOString(),
         is_repost: !!repostData,
         author: { handle: '', avatar_color: Colors.accent },
@@ -2096,6 +2117,37 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     const k = CANVAS_WIDTH / screenWidth;
     const band = gradientBandPx(bounds.top * k, bounds.bottom * k, screenHeight * k);
     return { top: band.top / k, bottom: band.bottom / k };
+  };
+
+  // The snapshot with its dead vertical space closed up (compactGaps): each
+  // text block's measured ink and the quoted strip are the pieces. `closed`
+  // is the total height removed, 0 when nothing moved.
+  const compactLayout = <S extends { textElements: CanvasTextElement[]; repostStripRect: typeof stripRect }>(
+    snap: S,
+  ): { snapshot: S; closed: number } => {
+    if (backgroundImage || stickerElements.length > 0) return { snapshot: snap, closed: 0 };
+    const pieces: { band: Band; id: string | null }[] = [];
+    for (const el of snap.textElements) {
+      const ink = textInkSizes[el.id];
+      if (!el.content.trim() || !ink) continue;
+      const h = ink.height * el.scale;
+      pieces.push({ band: { top: el.y - h / 2, bottom: el.y + h / 2 }, id: el.id });
+    }
+    const strip = snap.repostStripRect;
+    if (strip) pieces.push({ band: { top: strip.top, bottom: strip.top + strip.height }, id: null });
+    const shifts = compactGaps(pieces.map(p => p.band), screenWidth * MAX_GAP_FRACTION);
+    const closed = -Math.min(0, ...shifts);
+    if (closed === 0) return { snapshot: snap, closed: 0 };
+    const shiftFor = new Map(pieces.map((p, i) => [p.id, shifts[i]]));
+    return {
+      closed,
+      snapshot: {
+        ...snap,
+        textElements: snap.textElements.map(el =>
+          shiftFor.has(el.id) ? { ...el, y: el.y + shiftFor.get(el.id)! } : el),
+        repostStripRect: strip ? { ...strip, top: strip.top + (shiftFor.get(null) ?? 0) } : strip,
+      },
+    };
   };
 
   // The card the feed will actually show: the projected content crop run
