@@ -57,12 +57,12 @@ async function quote(device: string, original: any, background: string, caption:
 async function main() {
   // Oldest first: the feed shows the last one on top.
   const a = await post('seed-ines', snapshot('#F0FF00', [
-    el('every post is a page\nin one long magazine', { fontFamily: 'courier-prime', fontSize: 26, color: '#000000', y: 430 }),
+    el('Quote anything!', { fontFamily: 'courier-prime', fontSize: 34, color: '#000000', y: 430 }),
   ]));
   const b = await quote('seed-otto', a, '#0000EE',
-    el('AND EVERY QUOTE\nIS A PAGE INSIDE\nA PAGE', { fontFamily: 'arial-black', fontSize: 28, color: '#F8F8FF' }));
+    el('Quote the quote!', { fontFamily: 'arial-black', fontSize: 32, color: '#F8F8FF' }));
   await quote('seed-maru', b, '#FAEBD7',
-    el('pages all the way down', { fontFamily: 'crimson-text', fontSize: 34, color: '#FF1A1A', italic: true }));
+    el('Quotes all the way down!', { fontFamily: 'crimson-text', fontSize: 34, color: '#FF1A1A', italic: true }));
 
   await post('seed-otto', snapshot('#F0FF00', [
     el('yes, papyrus.', { fontFamily: 'papyrus', fontSize: 44, alternateColors: ['#FF1493', '#0000EE'], y: 460 }),
