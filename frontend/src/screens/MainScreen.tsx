@@ -12,6 +12,7 @@ import {
   Pressable,
   Keyboard,
   TouchableWithoutFeedback,
+  StatusBar,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { api, endpoints, ONBOARD_FLAG } from '../config/api';
@@ -290,6 +291,17 @@ export default function MainScreen() {
 
   return (
     <View style={styles.container}>
+      {/* The status bar sits on the masthead, whose colours re-roll: pick its
+          ink against the masthead background, or the clock can vanish into it */}
+      <StatusBar
+        barStyle={
+          contrastRatio(hexToRgb(headerTheme.background), [255, 255, 255]) >=
+          contrastRatio(hexToRgb(headerTheme.background), [0, 0, 0])
+            ? 'light-content'
+            : 'dark-content'
+        }
+        animated
+      />
       {/* Collapsible Header */}
       <Animated.View
         onLayout={(e) => {

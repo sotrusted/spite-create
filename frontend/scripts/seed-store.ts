@@ -72,7 +72,7 @@ async function main() {
     }),
   ]));
   await post('seed-otto', snapshot('#000000', [
-    el('colours from\nthe old internet', { fontFamily: 'arial-black', fontSize: 34, rainbow: true, y: 470 }),
+    el('colors from\nthe old internet', { fontFamily: 'arial-black', fontSize: 34, rainbow: true, y: 470 }),
   ]));
   await post('seed-maru', snapshot('#FAEBD7', [
     el('no likes. no followers.\nno algorithm.\nthe newest page is on top.', {
