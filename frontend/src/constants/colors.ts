@@ -31,7 +31,7 @@ export const Colors = {
     '#32CD32', // Lime Green
     '#00CED1', // Dark Turquoise
     '#0000EE', // Link Blue
-    '#4169E1', // Royal Blue
+    '#2749F5', // Royal Blue
     '#AB00FF', // Electric Violet
     '#9932CC', // Dark Orchid
     '#FF1493', // Deep Pink
