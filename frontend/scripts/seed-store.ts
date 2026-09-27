@@ -50,7 +50,10 @@ async function post(device: string, snap: ReturnType<typeof snapshot>) {
 async function quote(device: string, original: any, background: string, caption: CanvasTextElement) {
   const repostData = { originalPost: original, screenshotUri: original.rendered_image_url };
   const strip = getRepostStripRect(original, W, H)!;
-  caption.y = Math.min(H * 0.34, strip.top - 32); // where the composer seeds a caption
+  // Sit the caption just above the quote: its line's bottom a gutter above the
+  // strip (the caption is centred on y, so half a line plus the gutter)
+  const halfLine = (caption.fontSize * 1.15) / 2;
+  caption.y = strip.top - 24 - halfLine;
   return post(device, snapshot(background, [caption], { repostData, repostStripRect: strip }));
 }
 
