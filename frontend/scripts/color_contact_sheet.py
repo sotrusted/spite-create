@@ -1,14 +1,28 @@
 """Regenerate brand/color-contact-sheet.png from src/constants/colors.ts.
 
     backend/venv/bin/python frontend/scripts/color_contact_sheet.py   (from the repo root)
+
+Try a colour without touching the palette (writes a separate preview file):
+
+    ... color_contact_sheet.py --replace '#2749F5=#378FFA'
 """
 import re
+import sys
 from PIL import Image, ImageDraw, ImageFont
+
+replacements = {}
+args = sys.argv[1:]
+while args:
+    flag = args.pop(0)
+    if flag == '--replace':
+        old_hex, new_hex = args.pop(0).upper().split('=')
+        replacements[old_hex] = new_hex
 
 src = open('frontend/src/constants/colors.ts').read()
 block = src[src.index('postColors: ['):]
 block = block[:block.index(']')]
-colors = re.findall(r"'(#[0-9A-Fa-f]{6})',\s*//\s*([^\n]+)", block)
+colors = [(replacements.get(hx.upper(), hx), name)
+          for hx, name in re.findall(r"'(#[0-9A-Fa-f]{6})',\s*//\s*([^\n]+)", block)]
 rainbow = re.findall(r"#[0-9A-Fa-f]{6}", src[src.index('rainbowPalette:'):].split(']')[0])
 
 F = 'frontend/assets/fonts/'
@@ -36,7 +50,10 @@ W = COLS * SW + (COLS + 1) * PAD
 H = 110 + rows * (SH + 110) + 260
 sheet = Image.new('RGB', (W, H), '#F8F8FF')
 d = ImageDraw.Draw(sheet)
-d.text((PAD, 30), f'Type colors ({len(colors)})', font=title_f, fill='#000000')
+title = f'Type colors ({len(colors)})'
+if replacements:
+    title += '  -  preview: ' + ', '.join(f'{a} -> {b}' for a, b in replacements.items())
+d.text((PAD, 30), title, font=title_f, fill='#000000')
 for i, (hx, name) in enumerate(colors):
     x = PAD + (i % COLS) * (SW + PAD)
     y = 110 + (i // COLS) * (SH + 110)
@@ -67,5 +84,7 @@ sheet.paste(grad, (gx, y0 + 44))
 d.rectangle((gx, y0 + 44, gx + gw, y0 + 44 + gh), outline='#88888A', width=2)
 
 out = 'frontend/assets/brand/color-contact-sheet.png'
+if replacements:
+    out = out.replace('.png', '-preview-' + '-'.join(b.lstrip('#') for b in replacements.values()) + '.png')
 sheet.save(out)
 print(out, sheet.size, f'{len(colors)} colors, {len(rainbow)} rainbow')
