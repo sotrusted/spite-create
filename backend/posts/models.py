@@ -108,6 +108,8 @@ class Post(models.Model):
         ('freeride', 'Freeride'),
         ('fredericka', 'Fredericka the Great'),
         ('grutch-shaded', 'Grutch Shaded'),
+        ('petit-formal', 'Petit Formal Script'),
+        ('lexend-exa', 'Lexend Exa'),
         ('caveat', 'Caveat'),
     ]
     
@@ -1158,6 +1160,8 @@ class Post(models.Model):
         'freeride': [os.path.join(_REPO_FONTS, 'Freeride.otf')],
         'fredericka': [os.path.join(_REPO_FONTS, 'FrederickaTheGreat.ttf')],
         'grutch-shaded': [os.path.join(_REPO_FONTS, 'GrutchShaded.ttf')],
+        'petit-formal': [os.path.join(_REPO_FONTS, 'PetitFormalScript.ttf')],
+        'lexend-exa': [os.path.join(_REPO_FONTS, 'LexendExaLight.ttf')],
     }
 
     # Real bold/italic faces per family - families without a face fall back
@@ -1171,6 +1175,7 @@ class Post(models.Model):
         ('crimson-text', 'bold_italic'): [os.path.join(_REPO_FONTS, 'TimesNewRomanBoldItalic.ttf')],
         ('caveat', 'bold'): [os.path.join(_REPO_FONTS, 'CaveatBold.ttf')],
         ('cabin-sketch', 'bold'): [os.path.join(_REPO_FONTS, 'CabinSketchBold.ttf')],
+        ('lexend-exa', 'bold'): [os.path.join(_REPO_FONTS, 'LexendExaSemiBold.ttf')],
     }
     _resolved_font_paths = {}
 

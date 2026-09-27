@@ -15,7 +15,7 @@ export interface User {
   signature_color?: string;
 }
 
-export type FontChoice = 'arial-black' | 'crimson-text' | 'papyrus' | 'impact' | 'courier-prime' | 'cabin-sketch' | 'freeride' | 'fredericka' | 'grutch-shaded' | 'caveat';
+export type FontChoice = 'arial-black' | 'crimson-text' | 'papyrus' | 'impact' | 'courier-prime' | 'cabin-sketch' | 'freeride' | 'fredericka' | 'grutch-shaded' | 'petit-formal' | 'lexend-exa' | 'caveat';
 
 export interface Author {
   handle: string;

@@ -123,6 +123,19 @@ export const FontChoices = {
     fontFamily: 'GrutchShaded',
     fontWeight: 'normal' as const,
   },
+  'petit-formal': {
+    // Cursive register (replaces Caveat)
+    name: 'Cursive',
+    fontFamily: 'PetitFormalScript',
+    fontWeight: 'normal' as const,
+  },
+  'lexend-exa': {
+    // Wide and light; static instances cut from the variable font (OFL)
+    name: 'Exa',
+    fontFamily: 'LexendExaLight',
+    fontWeight: 'normal' as const,
+    variants: { bold: 'LexendExaSemiBold' },
+  },
   'caveat': {
     // Retired from the menus; kept so older posts still edit and render
     name: 'Caveat',
@@ -132,11 +145,12 @@ export const FontChoices = {
   },
 };
 
-// The long-press grid: every font on offer, in grid order (3 x 3)
+// The long-press grid: every font on offer, in grid order (3 across)
 export const FONT_MENU: (keyof typeof FontChoices)[] = [
   'arial-black', 'crimson-text', 'courier-prime',
-  'impact', 'cabin-sketch', 'papyrus',
-  'freeride', 'fredericka', 'grutch-shaded',
+  'impact', 'cabin-sketch', 'petit-formal',
+  'lexend-exa', 'papyrus', 'freeride',
+  'fredericka', 'grutch-shaded',
 ];
 
 // A tap on the font button cycles this shorter set; the rest live in the grid

@@ -99,6 +99,9 @@ export default function App() {
     'CabinSketchBold': require('./assets/fonts/CabinSketchBold.ttf'),
     'Freeride': require('./assets/fonts/Freeride.otf'),
     'FrederickaTheGreat': require('./assets/fonts/FrederickaTheGreat.ttf'),
+    'PetitFormalScript': require('./assets/fonts/PetitFormalScript.ttf'),
+    'LexendExaLight': require('./assets/fonts/LexendExaLight.ttf'),
+    'LexendExaSemiBold': require('./assets/fonts/LexendExaSemiBold.ttf'),
     'GrutchShaded': require('./assets/fonts/GrutchShaded.ttf'),
   });
 

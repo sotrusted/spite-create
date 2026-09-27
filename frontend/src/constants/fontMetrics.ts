@@ -32,6 +32,9 @@ export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; wid
   CabinSketchBold: { ascent: 0.8730, inkDrop: 0.0180, widthPerPt: 2.206 },
   Freeride: { ascent: 0.9400, inkDrop: 0.0000, widthPerPt: 2.019 },
   FrederickaTheGreat: { ascent: 0.9775, inkDrop: 0.0160, widthPerPt: 2.771 },
+  PetitFormalScript: { ascent: 0.9927, inkDrop: 0.0200, widthPerPt: 3.063 },
+  LexendExaLight: { ascent: 1.0000, inkDrop: 0.0100, widthPerPt: 2.901 },
+  LexendExaSemiBold: { ascent: 1.0000, inkDrop: 0.0100, widthPerPt: 3.087 },
   GrutchShaded: { ascent: 0.9230, inkDrop: 0.0850, widthPerPt: 2.726 },
 };
 
