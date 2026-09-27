@@ -87,7 +87,7 @@ async function main() {
   await quote('seed-maru', b, '#FAEBD7',
     el('Quotes all the way down!', { fontFamily: 'crimson-text', fontSize: 34, color: '#FF1A1A', italic: true }));
   await post('seed-ines', snapshot('#FF1A1A', [
-    el("Creative Mind's\nIdeas!", { fontFamily: 'arial-black', fontSize: 44, color: '#F8F8FF', y: 470 }),
+    el("Creative mind's\nideas!", { fontFamily: 'arial-black', fontSize: 44, color: '#F8F8FF', y: 470 }),
   ]));
   console.log('seeded 9 posts');
 }
