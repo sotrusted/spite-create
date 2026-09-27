@@ -64,11 +64,11 @@ async function main() {
   ]));
   await post('seed-ines', snapshot('#FF1A1A', [], {
     backgroundGradient: ['#FF1A1A', '#FF9500', '#FFD700', '#32CD32', '#00CED1', '#9932CC'],
-    textElements: [el('TYPE', { fontFamily: 'impact', fontSize: 96, color: '#F8F8FF', y: 470 })],
+    textElements: [el('TEXT AS\nIMAGE!', { fontFamily: 'impact', fontSize: 72, color: '#F8F8FF', y: 470 })],
   }));
   await post('seed-maru', snapshot('#FF90C2', [
-    el('i typed this at 3am\nand it looks incredible', {
-      fontFamily: 'caveat', fontSize: 36, color: '#0000EE', backgroundMode: 'white', hasBackground: true, y: 470,
+    el("Creative Mind's Ideas!", {
+      fontFamily: 'caveat', fontSize: 44, color: '#0000EE', backgroundMode: 'white', hasBackground: true, y: 470,
     }),
   ]));
   await post('seed-otto', snapshot('#000000', [
