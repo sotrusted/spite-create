@@ -148,6 +148,18 @@ api.interceptors.request.use(
   }
 );
 
+// Waits before each retry of a read that got no response (see below)
+const READ_RETRY_DELAYS_MS = [700, 2000, 5000];
+
+// No response at all (offline, timeout, dropped connection) on a GET.
+// Anything the server answered - even with an error - is final.
+export const isRetryableRead = (error: any) =>
+  !error?.response && error?.code !== 'ERR_CANCELED' &&
+  (error?.config?.method ?? 'get').toLowerCase() === 'get';
+
+// A failure the user should read as "no connection" rather than a fault
+export const isOfflineError = (error: any) => !!error && !error.response;
+
 // Response interceptor for error handling and logging
 api.interceptors.response.use(
   (response) => {
@@ -158,7 +170,19 @@ api.interceptors.response.use(
     });
     return response;
   },
-  (error) => {
+  async (error) => {
+    // Out and about the connection drops for a moment - a weak signal, a
+    // Wi-Fi to cellular handoff, a request fired as the app wakes before the
+    // radio has. Reads that never got a response are retried quietly; the
+    // server log shows these requests never arrived, so nothing is repeated
+    // there. Writes are not retried here: a post may have landed.
+    const config = error.config;
+    if (config && isRetryableRead(error) && (config.__retries ?? 0) < READ_RETRY_DELAYS_MS.length) {
+      const attempt = config.__retries ?? 0;
+      config.__retries = attempt + 1;
+      await new Promise(resolve => setTimeout(resolve, READ_RETRY_DELAYS_MS[attempt]));
+      return api(config);
+    }
     console.error('🔴 API Error Details:', {
       message: error.message,
       code: error.code,

@@ -9,12 +9,13 @@ import {
   Text,
   Alert,
   Animated,
+  AppState,
 } from 'react-native';
 import Toast from 'react-native-toast-message';
 import { bootFeed, saveBootFeed } from '../utils/bootFeed';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
-import { api, endpoints } from '../config/api';
+import { api, endpoints, isOfflineError } from '../config/api';
 import PostCard from './PostCard';
 import { screenWidth } from '../constants/layout';
 import websocketService, { WebSocketMessage } from '../services/websocket';
@@ -73,6 +74,11 @@ export default function Feed({
   // sprung back to 1 only when a new post arrives over the WebSocket.
   const [newPostAnimation] = useState(new Animated.Value(1));
   const listRef = useRef<FlatList<Post>>(null);
+  // Read inside fetchFeed (a stable callback): is there a feed on screen?
+  const postsRef = useRef(posts);
+  postsRef.current = posts;
+  // The last first-page fetch died offline: coming back to the app retries it
+  const firstPageFailedRef = useRef(false);
 
   // Topmost visible post drives the header theme. FlatList needs stable
   // refs for viewability callbacks.
@@ -105,6 +111,7 @@ export default function Feed({
 
       const response = await api.get<FeedResponse>(endpoints.getFeed, { params });
       const { results, next } = response.data;
+      if (!cursor) firstPageFailedRef.current = false;
 
       if (__DEV__) {
         console.log('🪵 Feed fetch results (first 3):',
@@ -146,12 +153,21 @@ export default function Feed({
       setNextUrl(next);
     } catch (error: any) {
       console.error('Error fetching feed:', error);
-      const errorMessage = error.response?.data?.detail || 'Failed to load feed';
+      const offline = isOfflineError(error);
+      if (!cursor) firstPageFailedRef.current = offline;
+      // A dropped connection (already retried in the API client) with a feed
+      // on screen - the cached page, or older pages - is not worth an alarm:
+      // the reader keeps what they have. Only a pull to refresh, which asked
+      // for news, hears that none came.
+      if (offline && postsRef.current.length > 0 && !isRefresh) return;
+      const errorMessage = offline
+        ? 'Check your connection and pull down to try again'
+        : error.response?.data?.detail || 'Could not load the feed';
       setError(errorMessage);
-      
+
       Toast.show({
         type: 'error',
-        text1: 'Error',
+        text1: offline ? 'No connection' : 'Something went wrong',
         text2: errorMessage,
       });
       // settle the first-launch loading screen so the error is visible
@@ -403,6 +419,15 @@ export default function Feed({
   // Initial load
   useEffect(() => {
     fetchFeed();
+  }, [fetchFeed]);
+
+  // The first page never arrived (offline): try again when the app comes
+  // back to the foreground - usually with a connection by then
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active' && firstPageFailedRef.current) fetchFeed();
+    });
+    return () => sub.remove();
   }, [fetchFeed]);
 
   const renderPost = ({ item, index }: { item: Post; index: number }) => {

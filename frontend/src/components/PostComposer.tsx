@@ -128,6 +128,9 @@ type TextElement = CanvasTextElement;
 
 const LIST_STYLES = ['none', 'bullet', 'dash', 'star', 'number'] as const;
 const LIST_MARKERS: Record<string, string> = { bullet: '\u2022 ', dash: '- ', star: '* ' };
+// Creating a post renders it server-side before answering
+const POST_TIMEOUT_MS = 30000;
+
 const LAST_FONT_KEY = 'last-font.json';
 
 const TEXT_ALIGNMENTS = ['left', 'center', 'right'] as const;
@@ -1191,14 +1194,17 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
 
   const submitInBackground = async (payload: PostCreate, optimisticId?: string) => {
     try {
-      const response = await api.post(endpoints.createPost, payload);
+      // Rendering plus a slow uplink can outlast the client's default 10s
+      const response = await api.post(endpoints.createPost, payload, { timeout: POST_TIMEOUT_MS });
       emitPostCreated(response.data, optimisticId);
       onPost?.(response.data);
     } catch (error: any) {
       console.error('Error creating post:', error);
-      const errorMessage = error.response?.data?.detail ||
-                           error.response?.data?.error ||
-                           'Failed to create post';
+      const errorMessage = !error.response
+        ? 'No connection. Your post is kept - tap Retry when you have signal.'
+        : error.response?.data?.detail ||
+          error.response?.data?.error ||
+          'Failed to create post';
       Alert.alert('Post failed', errorMessage, [
         { text: 'Discard', style: 'destructive' },
         { text: 'Retry', onPress: () => submitInBackground(payload) },
