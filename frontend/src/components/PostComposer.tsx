@@ -18,6 +18,7 @@ import {
   Platform,
   Share,
   Modal,
+  Pressable,
   AppState,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
@@ -133,6 +134,9 @@ type TextElement = CanvasTextElement;
 
 const LIST_STYLES = ['none', 'bullet', 'dash', 'star', 'number'] as const;
 const LIST_MARKERS: Record<string, string> = { bullet: '\u2022 ', dash: '- ', star: '* ' };
+// Below the top menu: where the text being edited may start
+const EDITING_STAGE_TOP = 90;
+
 // Creating a post renders it server-side before answering
 const POST_TIMEOUT_MS = 30000;
 
@@ -2030,6 +2034,28 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // TextInput overlays it to handle typing and the caret. The element's real
   // canvas (x, y) is untouched; display text returns there on commit.
   const EDITING_STAGE_BOTTOM = 395; // top edge of the config row area
+  // Typing past the height of the space above the config bar: the editing
+  // stage scrolls, keeping the caret's line in view - at the end while you
+  // type on, around where you are when you move back into the text.
+  const editScrollRef = useRef<ScrollView>(null);
+  const editViewHeight = useRef(0);
+  const editContentHeight = useRef(0);
+  const editSelection = useRef({ start: 0, end: 0 });
+  const [configBarTop, setConfigBarTop] = useState<number | null>(null);
+  const configBarRef = useRef<View>(null);
+  const keepCaretInView = (length: number) => {
+    const view = editViewHeight.current;
+    const content = editContentHeight.current;
+    if (!view || content <= view) return;
+    const caret = editSelection.current.end;
+    if (caret >= length) {
+      editScrollRef.current?.scrollToEnd({ animated: false });
+      return;
+    }
+    const y = (caret / Math.max(1, length)) * content - view / 2;
+    editScrollRef.current?.scrollTo({ y: Math.max(0, Math.min(content - view, y)), animated: false });
+  };
+
   const renderEditingInput = () => {
     if (!isEditingText || !selectedTextId) return null;
     const element = textElements.find(el => el.id === selectedTextId);
@@ -2048,9 +2074,29 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
 
     return (
       <View
-        style={[styles.editingStage, { left: (screenWidth - inputWidth) / 2, width: inputWidth }]}
+        style={[styles.editingStage, {
+          left: (screenWidth - inputWidth) / 2,
+          width: inputWidth,
+          // down to just above the config bar, wherever the keyboard put it
+          // (the stage's parent starts at the top of the screen)
+          ...(configBarTop ? { bottom: undefined, height: configBarTop - EDITING_STAGE_TOP - SPACE.sm } : {}),
+        }]}
         pointerEvents="box-none"
       >
+        <ScrollView
+          ref={editScrollRef}
+          contentContainerStyle={styles.editingScrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="always"
+          onLayout={e => { editViewHeight.current = e.nativeEvent.layout.height; }}
+          onContentSizeChange={(_w, h) => {
+            editContentHeight.current = h;
+            keepCaretInView(content.length);
+          }}
+        >
+        {/* The stage covers the canvas while typing, so it passes a tap off
+            the text on as a canvas tap: that is what finishes editing */}
+        <Pressable style={styles.editingScrollContent} onPress={handleCanvasTap}>
         <View style={{ alignItems: wrapperAlign }} pointerEvents="box-none">
           {/* Styled mirror - the source of visual truth while editing */}
           <Text
@@ -2078,11 +2124,18 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
             selectionColor={element.rainbow ? Colors.accent : element.color}
             value={content}
             onChangeText={(text) => handleTextInputChange(element.id, text)}
+            onSelectionChange={e => {
+              editSelection.current = e.nativeEvent.selection;
+              keepCaretInView(content.length);
+            }}
             autoFocus
             multiline={true}
+            scrollEnabled={false}
             textAlign={element.align}
           />
         </View>
+        </Pressable>
+        </ScrollView>
       </View>
     );
   };
@@ -2846,7 +2899,11 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     };
 
     return (
-      <View style={styles.bottomControlContainer}>
+      <View
+        ref={configBarRef}
+        style={styles.bottomControlContainer}
+        onLayout={() => configBarRef.current?.measureInWindow((_x, y) => setConfigBarTop(y))}
+      >
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -3514,10 +3571,14 @@ const styles = StyleSheet.create({
   // Staged editing area: centered in the free space above the config row
   editingStage: {
     position: 'absolute',
-    top: 90,
-    bottom: 395,
-    justifyContent: 'center',
+    top: EDITING_STAGE_TOP,
+    bottom: 395, // until the config bar has measured itself
     zIndex: 30,
+  },
+  // Short text sits centred in the stage; long text scrolls within it
+  editingScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   cropOutsideDim: {
     position: 'absolute',
