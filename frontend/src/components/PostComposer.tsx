@@ -18,6 +18,7 @@ import {
   Platform,
   Share,
   Modal,
+  AppState,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -47,6 +48,7 @@ import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
+import { Draft, saveDraft, saveDraftThumb, removeDraft, clearCurrentDraft, listDrafts, onDraftsChanged } from '../utils/drafts';
 import { CanvasState, CanvasTextElement } from '../types/canvas';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
 
@@ -146,8 +148,12 @@ interface Props {
   onPost?: (post: any) => void;
   onClose?: () => void;
   repostData?: RepostData;
-  // "Edit again": the canvas exactly as it was when the post was made
+  // "Edit again" or a draft: the canvas exactly as it was left
   restoreState?: CanvasState;
+  // The draft this session saves itself into (utils/drafts)
+  draftId: string;
+  // Switch to another draft, or to a blank canvas (null)
+  onOpenDraft?: (draft: Draft | null) => void;
 }
 // Heuristic: normalize and provide fallbacks iOS sometimes needs
 const buildImageCandidates = (raw?: string) => {
@@ -221,7 +227,7 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
   );
 };
 
-export default function PostComposer({ onPost, onClose, repostData, restoreState }: Props) {
+export default function PostComposer({ onPost, onClose, repostData, restoreState, draftId, onOpenDraft }: Props) {
   // A restore replaces every default below; rescaled if this screen differs
   // from the one it was composed on. Read once - it seeds initial state only.
   const restored = useRef(restoreState ? fromCanvasState(restoreState, screenWidth) : null).current;
@@ -374,6 +380,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   const [duoPending, setDuoPending] = useState<string[] | null>(null);
   // Hold the Aa button: every font at once, instead of tapping through them
   const [fontGridOpen, setFontGridOpen] = useState(false);
+  // The drafts grid: New, then every kept canvas (newest first)
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  useEffect(() => {
+    if (!draftsOpen) return;
+    setDrafts(listDrafts());
+    return onDraftsChanged(() => setDrafts(listDrafts()));
+  }, [draftsOpen]);
   const canvasCaptureRef = useRef<View>(null);
 
   // The quoted strip is draggable like a text element; its position is
@@ -412,9 +426,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
           ));
         }
         const savedBg = JSON.parse(raw)?.background;
-        // Reposts pick their color from the parent; plain posts resume the
-        // last background
-        if (savedBg && !repostData && Colors.postColors.includes(savedBg)) {
+        // Reposts pick their color from the parent and a reopened canvas
+        // keeps its own; only a new plain post resumes the last background
+        if (savedBg && !repostData && !restored && Colors.postColors.includes(savedBg)) {
           lastBgRef.current = savedBg;
           setBackgroundColor(savedBg);
           setCurrentBgIndex(Colors.postColors.indexOf(savedBg));
@@ -1034,6 +1048,81 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     return { prefersSigned, style };
   };
 
+  // The canvas as it stands, text being typed included
+  const currentSnapshot = () => {
+    const shouldSign = FEATURES.signatures && signPost;
+    return {
+      screenWidth,
+      screenHeight,
+      textElements: textElements.map(el => ({
+        ...el,
+        content: localTextContent[el.id] !== undefined ? localTextContent[el.id] : el.content,
+      })),
+      stickerElements,
+      backgroundColor,
+      backgroundGradient,
+      backgroundImage,
+      imageBackgroundScale,
+      imageBackgroundPosition,
+      imageCoverScale,
+      cropTop,
+      cropBottom,
+      isSigned: shouldSign,
+      signatureStyle: shouldSign ? resolveSignaturePreference().style : undefined,
+      repostData,
+      repostStripRect: stripRect,
+    };
+  };
+
+  // Drafts (utils/drafts): this canvas saves itself as you work, so leaving
+  // it - the X, the app going to the background, another draft - loses
+  // nothing. Once posted, discarded or deleted it stops saving.
+  const draftDoneRef = useRef(false);
+  const saveDraftNow = () => {
+    if (draftDoneRef.current) return;
+    saveDraft(draftId, toCanvasState(currentSnapshot()), repostData);
+  };
+  const saveDraftRef = useRef(saveDraftNow);
+  saveDraftRef.current = saveDraftNow;
+  useEffect(() => {
+    const timer = setTimeout(() => saveDraftRef.current(), 600);
+    return () => clearTimeout(timer);
+  }, [textElements, localTextContent, stickerElements, backgroundColor, backgroundGradient,
+      backgroundImage, imageBackgroundScale, imageBackgroundPosition, cropTop, cropBottom,
+      signPost, stripPosition, stripScale]);
+  useEffect(() => () => saveDraftRef.current(), []);
+
+  // A small picture of the canvas for the drafts grid, taken on the way out
+  const saveDraftThumbNow = async () => {
+    saveDraftRef.current();
+    if (draftDoneRef.current || !listDrafts().some(d => d.id === draftId)) return;
+    try {
+      const captured = await captureRef(canvasCaptureRef, {
+        format: 'jpg', quality: 0.7, width: 600, height: Math.round((600 * screenHeight) / screenWidth),
+      });
+      await saveDraftThumb(
+        draftId,
+        /^[a-z][a-z0-9+.-]*:/i.test(captured) ? captured : `file://${captured}`,
+        getProjectedCropBounds() ?? undefined,
+      );
+    } catch (error) {
+      console.log('Draft thumbnail capture failed (non-critical):', error);
+    }
+  };
+  const saveDraftThumbRef = useRef(saveDraftThumbNow);
+  saveDraftThumbRef.current = saveDraftThumbNow;
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      if (state !== 'active') saveDraftThumbRef.current();
+    });
+    return () => sub.remove();
+  }, []);
+
+  const closeComposer = async () => {
+    await saveDraftThumbNow();
+    onClose?.();
+  };
+
   const handlePost = async () => {
     if (isPosting) {
       return;
@@ -1045,13 +1134,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     });
 
     
-    // Wait for state update to complete, then check content
-    // Use local content for immediate validation, but state will be updated for the actual post
-    const currentElements = textElements.map(el => ({
-      ...el,
-      content: localTextContent[el.id] !== undefined ? localTextContent[el.id] : el.content
-    }));
-    
+    // Local content counts immediately, though the state update lands later
+    const snapshot = currentSnapshot();
+    const currentElements = snapshot.textElements;
+
     const allText = currentElements
       .filter(el => el.content.trim())
       .map(el => el.content)
@@ -1073,32 +1159,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     postButtonOpacity.value = withTiming(0.7, { duration: 100 });
     
     setIsPosting(true);
+    // Posted: + no longer reopens it. The draft itself goes once the server
+    // has the post, so a failed post is still there to retry.
+    draftDoneRef.current = true;
+    clearCurrentDraft();
 
-    // Signing is the visible topbar toggle, previewed on the canvas
-    const shouldSign = FEATURES.signatures && signPost;
-    const signatureStyle = shouldSign ? resolveSignaturePreference().style : undefined;
-
-    // Pure payload construction: maps screen points onto the fixed logical
-    // canvas. Kept in buildPostPayload so the payload contract is testable
-    // from fixtures (npm test in frontend, contract test in backend).
-    const snapshot = {
-      screenWidth,
-      screenHeight,
-      textElements: currentElements,
-      stickerElements,
-      backgroundColor,
-      backgroundGradient,
-      backgroundImage,
-      imageBackgroundScale,
-      imageBackgroundPosition,
-      imageCoverScale,
-      cropTop,
-      cropBottom,
-      isSigned: shouldSign,
-      signatureStyle,
-      repostData,
-      repostStripRect: stripRect,
-    };
+    // Pure payload construction (buildPostPayload) maps the snapshot's screen
+    // points onto the fixed logical canvas, so the payload contract is
+    // testable from fixtures (npm test in frontend, contract test in backend).
 
     // Close up dead space between the pieces (see compactGaps). The post
     // renders the compacted layout; "Edit again" keeps the one as placed.
@@ -1130,6 +1198,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       // same eager path that ships.
       try {
         const response = await api.post(endpoints.createPost, postData);
+        removeDraft(draftId);
         setIsPosting(false);
         if (response.data?.rendered_image_url) {
           setParityGhost({ uri: response.data.rendered_image_url, post: response.data });
@@ -1196,17 +1265,18 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     try {
       // Rendering plus a slow uplink can outlast the client's default 10s
       const response = await api.post(endpoints.createPost, payload, { timeout: POST_TIMEOUT_MS });
+      removeDraft(draftId);
       emitPostCreated(response.data, optimisticId);
       onPost?.(response.data);
     } catch (error: any) {
       console.error('Error creating post:', error);
       const errorMessage = !error.response
-        ? 'No connection. Your post is kept - tap Retry when you have signal.'
+        ? 'No connection. Tap Retry when you have signal - it is also kept in Drafts.'
         : error.response?.data?.detail ||
           error.response?.data?.error ||
           'Failed to create post';
       Alert.alert('Post failed', errorMessage, [
-        { text: 'Discard', style: 'destructive' },
+        { text: 'Discard', style: 'destructive', onPress: () => removeDraft(draftId) },
         { text: 'Retry', onPress: () => submitInBackground(payload) },
       ]);
     }
@@ -2488,6 +2558,107 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     );
   };
 
+  const openDraftsGrid = async () => {
+    setDraftsOpen(true);
+    // this canvas joins the grid with an up-to-date picture
+    await saveDraftThumbNow();
+  };
+
+  // A draft as the feed would show it: the content band, edge to edge
+  const DRAFT_CARD_WIDTH = Math.min(screenWidth - 2 * 48, 340);
+  const DRAFT_CARD_MAX_HEIGHT = 200;
+  const renderDraftCard = (draft: Draft) => {
+    const { state, thumb, focus } = draft;
+    const scale = DRAFT_CARD_WIDTH / state.screenWidth;
+    if (!thumb || !focus) {
+      // no picture yet (the app quit mid-draft): its colour and words
+      const words = state.textElements.find(el => el.content.trim())?.content;
+      return (
+        <View style={[styles.draftFallback, { backgroundColor: state.backgroundColor }]}>
+          <Text style={[styles.draftFallbackText, { color: readableDefaultInk(state.backgroundColor) }]} numberOfLines={3}>
+            {words}
+          </Text>
+        </View>
+      );
+    }
+    const pad = 12;
+    const band = (focus.bottom - focus.top) * scale;
+    const height = Math.min(band + 2 * pad, DRAFT_CARD_MAX_HEIGHT);
+    const offset = focus.top * scale - (height - band) / 2;
+    return (
+      <View style={{ height, overflow: 'hidden', backgroundColor: state.backgroundColor }}>
+        <Image
+          source={{ uri: thumb }}
+          style={{ width: DRAFT_CARD_WIDTH, height: state.screenHeight * scale, transform: [{ translateY: -offset }] }}
+        />
+      </View>
+    );
+  };
+
+  const renderDraftsGrid = () => {
+    const pick = async (draft: Draft | null) => {
+      if (draft?.id === draftId) {
+        setDraftsOpen(false);
+        return;
+      }
+      setDraftsOpen(false);
+      await saveDraftThumbNow();
+      if (!draft) clearCurrentDraft();
+      onOpenDraft?.(draft);
+    };
+    const confirmDelete = (draft: Draft) => {
+      Alert.alert('Delete this draft?', undefined, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            if (draft.id === draftId) {
+              // the open canvas: stop saving it, and start over blank
+              draftDoneRef.current = true;
+              removeDraft(draft.id);
+              setDraftsOpen(false);
+              onOpenDraft?.(null);
+            } else {
+              removeDraft(draft.id);
+            }
+          },
+        },
+      ]);
+    };
+    return (
+      <Modal visible={draftsOpen} transparent animationType="fade" onRequestClose={() => setDraftsOpen(false)}>
+        <TouchableWithoutFeedback onPress={() => setDraftsOpen(false)}>
+          <View style={styles.colorGridBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={styles.colorGridCard}>
+                <Text style={styles.draftsTitle}>Drafts</Text>
+                <ScrollView style={styles.draftsScroll} contentContainerStyle={styles.draftsList}>
+                  <TouchableOpacity style={styles.draftNew} onPress={() => pick(null)}>
+                    <Ionicons name="add" size={22} color="white" />
+                    <Text style={styles.draftNewText}>New</Text>
+                  </TouchableOpacity>
+                  {drafts.map(draft => (
+                    <TouchableOpacity
+                      key={draft.id}
+                      style={[styles.draftCard, draft.id === draftId && styles.draftCardActive]}
+                      onPress={() => pick(draft)}
+                      onLongPress={() => confirmDelete(draft)}
+                      delayLongPress={350}
+                    >
+                      {renderDraftCard(draft)}
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <Text style={styles.draftsHint}>Hold a draft to delete it</Text>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+    );
+  };
+
   const renderTopMenu = () => {
     
     return (
@@ -2496,13 +2667,20 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         {isEditingText ? (
           <View style={[styles.topMenuButton, { backgroundColor: "transparent" }]} pointerEvents="none" />
         ) : (
-          <TouchableOpacity style={styles.topMenuButton} onPress={onClose}>
+          <TouchableOpacity style={styles.topMenuButton} onPress={closeComposer}>
             <Ionicons name="close" size={CHROME.iconSize} color="white" />
           </TouchableOpacity>
         )}
         
         {/* Right - Controls */}
         <View style={styles.topMenuRight}>
+          {/* Drafts: start a new canvas or pick up a kept one */}
+          {!isEditingText && (
+            <TouchableOpacity style={styles.topMenuButton} onPress={openDraftsGrid}>
+              <Ionicons name="albums-outline" size={CHROME.iconSize - 2} color="white" />
+            </TouchableOpacity>
+          )}
+
           {FEATURES.imageUploads && (
             <>
               {/* Image Background Button (also reachable via swipe up) */}
@@ -2929,6 +3107,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       </KeyboardAvoidingView>
       {renderColorGrid()}
       {renderFontGrid()}
+      {renderDraftsGrid()}
       {renderParityGhost()}
     </View>
   );
@@ -3012,6 +3191,59 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     width: 3 * (96 + 2 * SPACE.xs),
+  },
+  draftsTitle: {
+    fontFamily: 'CourierPrime',
+    fontSize: 13,
+    color: 'white',
+    textAlign: 'center',
+    marginBottom: SPACE.xs,
+  },
+  draftsScroll: {
+    flexGrow: 0,
+    maxHeight: screenHeight * 0.6,
+  },
+  draftsList: {
+    width: Math.min(screenWidth - 2 * 48, 340),
+    gap: SPACE.sm,
+  },
+  draftNew: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 44,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  draftNewText: {
+    fontFamily: 'CourierPrime',
+    fontSize: 14,
+    color: 'white',
+  },
+  draftCard: {
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  draftCardActive: {
+    borderColor: 'white',
+  },
+  draftFallback: {
+    height: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACE.sm,
+  },
+  draftFallbackText: {
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  draftsHint: {
+    fontFamily: 'CourierPrime',
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.5)',
+    textAlign: 'center',
+    marginTop: SPACE.xs,
   },
   fontCell: {
     width: 96,

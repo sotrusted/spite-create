@@ -1,7 +1,7 @@
 // "Edit again" must bring back EXACTLY what was posted.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toCanvasState, fromCanvasState } from './canvasState';
+import { toCanvasState, fromCanvasState, hasDraftContent } from './canvasState';
 import { buildPostPayload, ComposerSnapshot } from './buildPostPayload';
 import { CanvasTextElement } from '../types/canvas';
 
@@ -46,4 +46,12 @@ test('restoring on another width renders the same post', () => {
 test('unknown versions are refused rather than half-restored', () => {
   const state = { ...toCanvasState(snapshot(402, 874, element)), version: 99 } as any;
   assert.throws(() => fromCanvasState(state, 402));
+});
+
+test('a draft needs some text or an image', () => {
+  const blank = { textElements: [{ content: '  \n' } as any], backgroundImage: null };
+  assert.equal(hasDraftContent(blank), false);
+  assert.equal(hasDraftContent({ textElements: [], backgroundImage: null }), false);
+  assert.equal(hasDraftContent({ ...blank, backgroundImage: 'file:///bg.jpg' }), true);
+  assert.equal(hasDraftContent({ textElements: [{ content: 'hi' } as any], backgroundImage: null }), true);
 });

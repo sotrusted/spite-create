@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, StyleSheet, StatusBar } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import PostComposer from '../components/PostComposer';
 import { Post, RepostData, RootStackParamList } from '../types';
 import { CanvasState } from '../types/canvas';
+import { currentDraft, newDraftId, Draft } from '../utils/drafts';
 
 interface Props {
   onPost?: (post: Post) => void;
@@ -20,7 +21,24 @@ type PostComposerScreenNavigationProp = StackNavigationProp<RootStackParamList, 
 export default function PostComposerScreen({ onPost }: Props) {
   const navigation = useNavigation<PostComposerScreenNavigationProp>();
   const route = useRoute();
-  const { repostData, restoreState } = (route.params as RouteParams) || {};
+  const params = (route.params as RouteParams) || {};
+
+  // Which canvas is open. A quote or "Edit again" brings its own; the plain
+  // + button reopens the canvas you last walked away from, if any. Picking
+  // another draft (or New) from the drafts grid swaps the session, and the
+  // key remounts the composer onto it.
+  const [session, setSession] = useState(() => {
+    if (params.repostData || params.restoreState) {
+      return { draftId: newDraftId(), repostData: params.repostData, restoreState: params.restoreState };
+    }
+    const draft = currentDraft();
+    return draft
+      ? { draftId: draft.id, repostData: draft.repostData, restoreState: draft.state }
+      : { draftId: newDraftId(), repostData: undefined, restoreState: undefined };
+  });
+  const openDraft = (draft: Draft | null) => setSession(draft
+    ? { draftId: draft.id, repostData: draft.repostData, restoreState: draft.state }
+    : { draftId: newDraftId(), repostData: undefined, restoreState: undefined });
 
   // goBack pops the composer and returns to the EXISTING feed. A
   // navigation.reset here rebuilt MainScreen from scratch, which meant every
@@ -47,11 +65,14 @@ export default function PostComposerScreen({ onPost }: Props) {
   return (
     <View style={styles.container}>
       <StatusBar hidden />
-      <PostComposer 
-        onPost={handlePost} 
+      <PostComposer
+        key={session.draftId}
+        draftId={session.draftId}
+        onPost={handlePost}
         onClose={handleClose}
-        repostData={repostData}
-        restoreState={restoreState}
+        onOpenDraft={openDraft}
+        repostData={session.repostData}
+        restoreState={session.restoreState}
       />
     </View>
   );

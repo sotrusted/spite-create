@@ -32,6 +32,7 @@ import { Colors } from './src/constants/colors';
 import { RootStackParamList, Post } from './src/types';
 import MainScreen from './src/screens/MainScreen';
 import { loadBootFeed } from './src/utils/bootFeed';
+import { loadDrafts } from './src/utils/drafts';
 import PostComposerScreen from './src/screens/PostComposerScreen';
 import PostDetailScreen from './src/screens/PostDetailScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
@@ -106,10 +107,11 @@ export default function App() {
   });
 
   // The cached first feed page is read before the first render, alongside
-  // the fonts, so the feed and its masthead paint once, already populated
+  // the fonts, so the feed and its masthead paint once, already populated.
+  // Drafts too: the composer opens straight onto an unfinished canvas.
   const [bootReady, setBootReady] = useState(false);
   useEffect(() => {
-    loadBootFeed().finally(() => setBootReady(true));
+    Promise.all([loadBootFeed(), loadDrafts()]).finally(() => setBootReady(true));
   }, []);
 
   if (!fontsLoaded || !bootReady) {

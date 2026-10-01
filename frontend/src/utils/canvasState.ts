@@ -62,3 +62,8 @@ export const fromCanvasState = (state: CanvasState, screenWidth: number): Canvas
     repost: state.repost ? { ...state.repost, stripRect: rect(state.repost.stripRect) } : null,
   };
 };
+
+// Worth keeping as a draft: some text, or an image background. A blank
+// canvas - or a quote opened and abandoned without a word - is not.
+export const hasDraftContent = (state: Pick<CanvasState, 'textElements' | 'backgroundImage'>) =>
+  !!state.backgroundImage || state.textElements.some(el => el.content.trim().length > 0);
