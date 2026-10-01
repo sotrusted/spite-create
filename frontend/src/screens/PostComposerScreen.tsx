@@ -5,7 +5,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import PostComposer from '../components/PostComposer';
 import { Post, RepostData, RootStackParamList } from '../types';
 import { CanvasState } from '../types/canvas';
-import { currentDraft, newDraftId, Draft } from '../utils/drafts';
+import { Draft, DraftTarget, getScratch, stashScratch } from '../utils/drafts';
 
 interface Props {
   onPost?: (post: Post) => void;
@@ -18,27 +18,37 @@ interface RouteParams {
 
 type PostComposerScreenNavigationProp = StackNavigationProp<RootStackParamList, 'PostComposer'>;
 
+type Session = {
+  key: string;
+  target: DraftTarget;
+  repostData?: RepostData;
+  restoreState?: CanvasState;
+};
+
 export default function PostComposerScreen({ onPost }: Props) {
   const navigation = useNavigation<PostComposerScreenNavigationProp>();
   const route = useRoute();
   const params = (route.params as RouteParams) || {};
 
-  // Which canvas is open. A quote or "Edit again" brings its own; the plain
-  // + button reopens the canvas you last walked away from, if any. Picking
-  // another draft (or New) from the drafts grid swaps the session, and the
-  // key remounts the composer onto it.
-  const [session, setSession] = useState(() => {
+  // Which canvas is open (utils/drafts). The + button reopens the scratch
+  // canvas you walked away from, if any. A quote or "Edit again" starts a
+  // new scratch canvas - the old one, if it had anything on it, moves to the
+  // drafts drawer first. A draft picked from the drawer swaps the session,
+  // and the key remounts the composer onto it.
+  const [session, setSession] = useState<Session>(() => {
     if (params.repostData || params.restoreState) {
-      return { draftId: newDraftId(), repostData: params.repostData, restoreState: params.restoreState };
+      stashScratch();
+      return { key: 'scratch', target: { kind: 'scratch' }, ...params };
     }
-    const draft = currentDraft();
-    return draft
-      ? { draftId: draft.id, repostData: draft.repostData, restoreState: draft.state }
-      : { draftId: newDraftId(), repostData: undefined, restoreState: undefined };
+    const scratch = getScratch();
+    return { key: 'scratch', target: { kind: 'scratch' }, repostData: scratch?.repostData, restoreState: scratch?.state };
   });
-  const openDraft = (draft: Draft | null) => setSession(draft
-    ? { draftId: draft.id, repostData: draft.repostData, restoreState: draft.state }
-    : { draftId: newDraftId(), repostData: undefined, restoreState: undefined });
+  const openDraft = (draft: Draft) => setSession({
+    key: draft.id,
+    target: { kind: 'draft', id: draft.id },
+    repostData: draft.repostData,
+    restoreState: draft.state,
+  });
 
   // goBack pops the composer and returns to the EXISTING feed. A
   // navigation.reset here rebuilt MainScreen from scratch, which meant every
@@ -66,8 +76,8 @@ export default function PostComposerScreen({ onPost }: Props) {
     <View style={styles.container}>
       <StatusBar hidden />
       <PostComposer
-        key={session.draftId}
-        draftId={session.draftId}
+        key={session.key}
+        draftTarget={session.target}
         onPost={handlePost}
         onClose={handleClose}
         onOpenDraft={openDraft}

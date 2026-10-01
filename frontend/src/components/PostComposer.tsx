@@ -48,7 +48,10 @@ import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
-import { Draft, saveDraft, saveDraftThumb, removeDraft, clearCurrentDraft, listDrafts, onDraftsChanged } from '../utils/drafts';
+import {
+  Draft, DraftTarget, saveDraft, saveDraftThumb, removeDraft, listDrafts, onDraftsChanged,
+  saveScratch, clearScratch, newDraftId,
+} from '../utils/drafts';
 import { CanvasState, CanvasTextElement } from '../types/canvas';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
 
@@ -150,10 +153,10 @@ interface Props {
   repostData?: RepostData;
   // "Edit again" or a draft: the canvas exactly as it was left
   restoreState?: CanvasState;
-  // The draft this session saves itself into (utils/drafts)
-  draftId: string;
-  // Switch to another draft, or to a blank canvas (null)
-  onOpenDraft?: (draft: Draft | null) => void;
+  // Where this session keeps itself: the scratch canvas or a saved draft
+  draftTarget: DraftTarget;
+  // Switch to a draft from the drawer
+  onOpenDraft?: (draft: Draft) => void;
 }
 // Heuristic: normalize and provide fallbacks iOS sometimes needs
 const buildImageCandidates = (raw?: string) => {
@@ -227,7 +230,7 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
   );
 };
 
-export default function PostComposer({ onPost, onClose, repostData, restoreState, draftId, onOpenDraft }: Props) {
+export default function PostComposer({ onPost, onClose, repostData, restoreState, draftTarget, onOpenDraft }: Props) {
   // A restore replaces every default below; rescaled if this screen differs
   // from the one it was composed on. Read once - it seeds initial state only.
   const restored = useRef(restoreState ? fromCanvasState(restoreState, screenWidth) : null).current;
@@ -380,14 +383,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   const [duoPending, setDuoPending] = useState<string[] | null>(null);
   // Hold the Aa button: every font at once, instead of tapping through them
   const [fontGridOpen, setFontGridOpen] = useState(false);
-  // The drafts grid: New, then every kept canvas (newest first)
+  // The drafts drawer: every saved draft but the one open here, newest first
   const [draftsOpen, setDraftsOpen] = useState(false);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
-  useEffect(() => {
-    if (!draftsOpen) return;
-    setDrafts(listDrafts());
-    return onDraftsChanged(() => setDrafts(listDrafts()));
-  }, [draftsOpen]);
+  const [allDrafts, setAllDrafts] = useState<Draft[]>(listDrafts);
+  useEffect(() => onDraftsChanged(() => setAllDrafts(listDrafts())), []);
   const canvasCaptureRef = useRef<View>(null);
 
   // The quoted strip is draggable like a text element; its position is
@@ -1074,34 +1073,36 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     };
   };
 
-  // Drafts (utils/drafts): this canvas saves itself as you work, so leaving
-  // it - the X, the app going to the background, another draft - loses
-  // nothing. Once posted, discarded or deleted it stops saving.
+  // Drafts (utils/drafts): this canvas keeps itself as you work - into the
+  // scratch canvas, or into the draft it was opened from - so leaving it (the
+  // X, the app going to the background) loses nothing. Once posted, saved
+  // away or moved to the drawer, it stops.
+  const openDraftId = draftTarget.kind === 'draft' ? draftTarget.id : null;
   const draftDoneRef = useRef(false);
-  const saveDraftNow = () => {
+  const keepCanvasNow = () => {
     if (draftDoneRef.current) return;
-    saveDraft(draftId, toCanvasState(currentSnapshot()), repostData);
+    const state = toCanvasState(currentSnapshot());
+    if (openDraftId) saveDraft(openDraftId, state, repostData);
+    else saveScratch(state, repostData);
   };
-  const saveDraftRef = useRef(saveDraftNow);
-  saveDraftRef.current = saveDraftNow;
+  const keepCanvasRef = useRef(keepCanvasNow);
+  keepCanvasRef.current = keepCanvasNow;
   useEffect(() => {
-    const timer = setTimeout(() => saveDraftRef.current(), 600);
+    const timer = setTimeout(() => keepCanvasRef.current(), 600);
     return () => clearTimeout(timer);
   }, [textElements, localTextContent, stickerElements, backgroundColor, backgroundGradient,
       backgroundImage, imageBackgroundScale, imageBackgroundPosition, cropTop, cropBottom,
       signPost, stripPosition, stripScale]);
-  useEffect(() => () => saveDraftRef.current(), []);
+  useEffect(() => () => keepCanvasRef.current(), []);
 
-  // A small picture of the canvas for the drafts grid, taken on the way out
-  const saveDraftThumbNow = async () => {
-    saveDraftRef.current();
-    if (draftDoneRef.current || !listDrafts().some(d => d.id === draftId)) return;
+  // The drawer's picture of a draft: the canvas as it looks right now
+  const snapDraftThumb = async (id: string) => {
     try {
       const captured = await captureRef(canvasCaptureRef, {
         format: 'jpg', quality: 0.7, width: 600, height: Math.round((600 * screenHeight) / screenWidth),
       });
       await saveDraftThumb(
-        draftId,
+        id,
         /^[a-z][a-z0-9+.-]*:/i.test(captured) ? captured : `file://${captured}`,
         getProjectedCropBounds() ?? undefined,
       );
@@ -1109,17 +1110,45 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       console.log('Draft thumbnail capture failed (non-critical):', error);
     }
   };
-  const saveDraftThumbRef = useRef(saveDraftThumbNow);
-  saveDraftThumbRef.current = saveDraftThumbNow;
+
+  // Leaving an open draft refreshes its picture in the drawer
+  const keepAndSnap = async () => {
+    keepCanvasNow();
+    if (openDraftId && !draftDoneRef.current) await snapDraftThumb(openDraftId);
+  };
+  const keepAndSnapRef = useRef(keepAndSnap);
+  keepAndSnapRef.current = keepAndSnap;
   useEffect(() => {
     const sub = AppState.addEventListener('change', state => {
-      if (state !== 'active') saveDraftThumbRef.current();
+      if (state !== 'active') keepAndSnapRef.current();
     });
     return () => sub.remove();
   }, []);
 
+  const canvasHasContent = () => {
+    const snap = currentSnapshot();
+    return !!snap.backgroundImage || snap.textElements.some(el => el.content.trim());
+  };
+
+  // Into the drawer and back to the feed; the scratch canvas is now free
+  const moveToDrafts = async (): Promise<string | null> => {
+    if (!canvasHasContent()) return null;
+    const id = openDraftId ?? newDraftId();
+    saveDraft(id, toCanvasState(currentSnapshot()), repostData);
+    await snapDraftThumb(id);
+    if (!openDraftId) clearScratch();
+    draftDoneRef.current = true;
+    return id;
+  };
+
+  const handleSaveToDrafts = async () => {
+    if (!(await moveToDrafts())) return;
+    onClose?.();
+    Toast.show({ type: 'success', text1: 'Saved to drafts', position: 'bottom', visibilityTime: 1500 });
+  };
+
   const closeComposer = async () => {
-    await saveDraftThumbNow();
+    await keepAndSnap();
     onClose?.();
   };
 
@@ -1159,10 +1188,11 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     postButtonOpacity.value = withTiming(0.7, { duration: 100 });
     
     setIsPosting(true);
-    // Posted: + no longer reopens it. The draft itself goes once the server
-    // has the post, so a failed post is still there to retry.
+    // Posted: it stops keeping itself, and + starts blank. An open draft
+    // leaves the drawer once the server has the post; a failed post lands
+    // in the drawer, so nothing is lost.
     draftDoneRef.current = true;
-    clearCurrentDraft();
+    if (!openDraftId) clearScratch();
 
     // Pure payload construction (buildPostPayload) maps the snapshot's screen
     // points onto the fixed logical canvas, so the payload contract is
@@ -1198,7 +1228,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       // same eager path that ships.
       try {
         const response = await api.post(endpoints.createPost, postData);
-        removeDraft(draftId);
+        if (openDraftId) removeDraft(openDraftId);
         setIsPosting(false);
         if (response.data?.rendered_image_url) {
           setParityGhost({ uri: response.data.rendered_image_url, post: response.data });
@@ -1222,7 +1252,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     setIsPosting(false);
     finishPost(null);
     if (optimistic) emitPostCreated(optimistic);
-    submitInBackground(postData, optimistic?.id);
+    submitInBackground(postData, optimistic?.id, openDraftId ?? newDraftId());
   };
 
   // A local snapshot of the canvas, shaped like a feed post. Crop bounds come
@@ -1261,23 +1291,26 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     }
   };
 
-  const submitInBackground = async (payload: PostCreate, optimisticId?: string) => {
+  // keptId: the drawer entry this post lives in until the server has it
+  // (its own draft, or a new one if it fails from the scratch canvas)
+  const submitInBackground = async (payload: PostCreate, optimisticId: string | undefined, keptId: string) => {
     try {
       // Rendering plus a slow uplink can outlast the client's default 10s
       const response = await api.post(endpoints.createPost, payload, { timeout: POST_TIMEOUT_MS });
-      removeDraft(draftId);
+      removeDraft(keptId);
       emitPostCreated(response.data, optimisticId);
       onPost?.(response.data);
     } catch (error: any) {
       console.error('Error creating post:', error);
+      if (payload.canvas_state) saveDraft(keptId, payload.canvas_state as CanvasState, repostData);
       const errorMessage = !error.response
         ? 'No connection. Tap Retry when you have signal - it is also kept in Drafts.'
         : error.response?.data?.detail ||
           error.response?.data?.error ||
           'Failed to create post';
       Alert.alert('Post failed', errorMessage, [
-        { text: 'Discard', style: 'destructive', onPress: () => removeDraft(draftId) },
-        { text: 'Retry', onPress: () => submitInBackground(payload) },
+        { text: 'Discard', style: 'destructive', onPress: () => removeDraft(keptId) },
+        { text: 'Retry', onPress: () => submitInBackground(payload, undefined, keptId) },
       ]);
     }
   };
@@ -2558,90 +2591,90 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     );
   };
 
-  const openDraftsGrid = async () => {
-    setDraftsOpen(true);
-    // this canvas joins the grid with an up-to-date picture
-    await saveDraftThumbNow();
-  };
-
-  // A draft as the feed would show it: the content band, edge to edge
+  // A draft as the feed would show it: the content band, edge to edge. A
+  // tall one shows its beginning, cut off at the card's height.
   const DRAFT_CARD_WIDTH = Math.min(screenWidth - 2 * 48, 340);
-  const DRAFT_CARD_MAX_HEIGHT = 200;
+  const DRAFT_CARD_MAX_HEIGHT = 180;
   const renderDraftCard = (draft: Draft) => {
     const { state, thumb, focus } = draft;
     const scale = DRAFT_CARD_WIDTH / state.screenWidth;
     if (!thumb || !focus) {
-      // no picture yet (the app quit mid-draft): its colour and words
-      const words = state.textElements.find(el => el.content.trim())?.content;
+      // no picture yet (saved by a quote or a failed post): its first words
+      // in their own face and colour, on its background
+      const el = state.textElements.find(e => e.content.trim());
       return (
         <View style={[styles.draftFallback, { backgroundColor: state.backgroundColor }]}>
-          <Text style={[styles.draftFallbackText, { color: readableDefaultInk(state.backgroundColor) }]} numberOfLines={3}>
-            {words}
-          </Text>
+          {el && (
+            <Text
+              style={[styles.draftFallbackText, {
+                fontFamily: resolveFontFace(el.fontFamily, el.bold, el.italic),
+                color: el.color,
+              }]}
+              numberOfLines={3}
+            >
+              {el.capsLock ? el.content.toUpperCase() : el.content}
+            </Text>
+          )}
         </View>
       );
     }
     const pad = 12;
     const band = (focus.bottom - focus.top) * scale;
     const height = Math.min(band + 2 * pad, DRAFT_CARD_MAX_HEIGHT);
-    const offset = focus.top * scale - (height - band) / 2;
+    const cut = band + 2 * pad > DRAFT_CARD_MAX_HEIGHT;
+    const offset = cut ? focus.top * scale - pad : focus.top * scale - (height - band) / 2;
     return (
       <View style={{ height, overflow: 'hidden', backgroundColor: state.backgroundColor }}>
         <Image
           source={{ uri: thumb }}
           style={{ width: DRAFT_CARD_WIDTH, height: state.screenHeight * scale, transform: [{ translateY: -offset }] }}
         />
+        {/* a cut-off draft fades out rather than stopping mid-line (a
+            gradient background fades to its last colour) */}
+        {cut && (
+          <LinearGradient
+            pointerEvents="none"
+            colors={[`${fadeBase(state)}00`, fadeBase(state)]}
+            style={styles.draftCutFade}
+          />
+        )}
       </View>
     );
   };
 
-  const renderDraftsGrid = () => {
-    const pick = async (draft: Draft | null) => {
-      if (draft?.id === draftId) {
-        setDraftsOpen(false);
-        return;
-      }
+  const fadeBase = (state: CanvasState) =>
+    (state.backgroundGradient.length > 0
+      ? state.backgroundGradient[state.backgroundGradient.length - 1]
+      : state.backgroundColor).slice(0, 7);
+
+  const renderDraftsDrawer = () => {
+    const drafts = allDrafts.filter(d => d.id !== openDraftId);
+    const pick = async (draft: Draft) => {
       setDraftsOpen(false);
-      await saveDraftThumbNow();
-      if (!draft) clearCurrentDraft();
+      // What's on the canvas now is kept: an open draft updates in place,
+      // unsaved writing goes into the drawer
+      if (openDraftId) await keepAndSnap();
+      else await moveToDrafts();
       onOpenDraft?.(draft);
     };
     const confirmDelete = (draft: Draft) => {
       Alert.alert('Delete this draft?', undefined, [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            if (draft.id === draftId) {
-              // the open canvas: stop saving it, and start over blank
-              draftDoneRef.current = true;
-              removeDraft(draft.id);
-              setDraftsOpen(false);
-              onOpenDraft?.(null);
-            } else {
-              removeDraft(draft.id);
-            }
-          },
-        },
+        { text: 'Delete', style: 'destructive', onPress: () => removeDraft(draft.id) },
       ]);
     };
     return (
-      <Modal visible={draftsOpen} transparent animationType="fade" onRequestClose={() => setDraftsOpen(false)}>
+      <Modal visible={draftsOpen && drafts.length > 0} transparent animationType="fade" onRequestClose={() => setDraftsOpen(false)}>
         <TouchableWithoutFeedback onPress={() => setDraftsOpen(false)}>
           <View style={styles.colorGridBackdrop}>
             <TouchableWithoutFeedback>
               <View style={styles.colorGridCard}>
                 <Text style={styles.draftsTitle}>Drafts</Text>
                 <ScrollView style={styles.draftsScroll} contentContainerStyle={styles.draftsList}>
-                  <TouchableOpacity style={styles.draftNew} onPress={() => pick(null)}>
-                    <Ionicons name="add" size={22} color="white" />
-                    <Text style={styles.draftNewText}>New</Text>
-                  </TouchableOpacity>
                   {drafts.map(draft => (
                     <TouchableOpacity
                       key={draft.id}
-                      style={[styles.draftCard, draft.id === draftId && styles.draftCardActive]}
+                      style={styles.draftCard}
                       onPress={() => pick(draft)}
                       onLongPress={() => confirmDelete(draft)}
                       delayLongPress={350}
@@ -2674,9 +2707,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         
         {/* Right - Controls */}
         <View style={styles.topMenuRight}>
-          {/* Drafts: start a new canvas or pick up a kept one */}
-          {!isEditingText && (
-            <TouchableOpacity style={styles.topMenuButton} onPress={openDraftsGrid}>
+          {/* The drafts drawer, when there is anything in it */}
+          {!isEditingText && allDrafts.some(d => d.id !== openDraftId) && (
+            <TouchableOpacity style={styles.topMenuButton} onPress={() => setDraftsOpen(true)}>
               <Ionicons name="albums-outline" size={CHROME.iconSize - 2} color="white" />
             </TouchableOpacity>
           )}
@@ -3090,6 +3123,11 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         {/* Post Button */}
         {!isEditingText && (
           <View style={styles.postActionCluster}>
+            {canvasHasContent() && !isPosting && (
+              <TouchableOpacity style={styles.saveDraftButton} onPress={handleSaveToDrafts}>
+                <Text style={styles.saveDraftButtonText}>Save to drafts</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={styles.postButton}
               onPress={() => handlePost()}
@@ -3107,7 +3145,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       </KeyboardAvoidingView>
       {renderColorGrid()}
       {renderFontGrid()}
-      {renderDraftsGrid()}
+      {renderDraftsDrawer()}
       {renderParityGhost()}
     </View>
   );
@@ -3207,26 +3245,9 @@ const styles = StyleSheet.create({
     width: Math.min(screenWidth - 2 * 48, 340),
     gap: SPACE.sm,
   },
-  draftNew: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    height: 44,
+  draftCard: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.35)',
-  },
-  draftNewText: {
-    fontFamily: 'CourierPrime',
-    fontSize: 14,
-    color: 'white',
-  },
-  draftCard: {
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  draftCardActive: {
-    borderColor: 'white',
   },
   draftFallback: {
     height: 88,
@@ -3235,8 +3256,15 @@ const styles = StyleSheet.create({
     padding: SPACE.sm,
   },
   draftFallbackText: {
-    fontSize: 16,
+    fontSize: 18,
     textAlign: 'center',
+  },
+  draftCutFade: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 36,
   },
   draftsHint: {
     fontFamily: 'CourierPrime',
@@ -3358,10 +3386,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  // Quieter than Post: the same size, on the chrome scrim
+  saveDraftButton: {
+    backgroundColor: CHROME.scrim,
+    borderWidth: 1,
+    borderColor: CHROME.hairline,
+    paddingHorizontal: SPACE.lg,
+    paddingVertical: SPACE.md,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  saveDraftButtonText: {
+    color: 'white',
+    fontSize: 16,
+  },
   postActionCluster: {
     position: 'absolute',
     bottom: CHROME.bottomInset,
     right: CHROME.inset,
+    flexDirection: 'row',
     alignItems: 'flex-end',
     gap: SPACE.md,
     zIndex: 100,

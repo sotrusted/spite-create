@@ -3,19 +3,20 @@ import { CanvasState } from '../types/canvas';
 import { RepostData } from '../types';
 import { hasDraftContent } from './canvasState';
 
-// Drafts: canvases kept on this device until they are posted or deleted.
+// Two kinds of kept canvas, both on this device only:
 //
-// Every composer session is a draft. It saves itself as you work, so walking
-// away loses nothing, and the "current" draft - the one you last walked away
-// from - is what the + button reopens. Opening "New" from the drafts grid
-// leaves it in the list and starts a blank canvas instead.
+// - The scratch canvas: whatever you were working on and walked away from
+//   without posting or saving. One at a time, never listed; + reopens it.
+// - Drafts: canvases you saved on purpose ("Save to drafts"), listed in the
+//   composer's drafts drawer. Opening one edits it in place; posting it
+//   removes it.
 //
 // Read once before the first render (App waits for it, like the boot feed),
-// so the composer can open straight onto a draft; writes go to disk in the
-// background, one at a time.
+// so the composer opens straight onto the scratch canvas; writes go to disk
+// in the background, one at a time.
 const DIR = LegacyFS.documentDirectory + 'drafts/';
 const INDEX = DIR + 'index.json';
-const VERSION = 1;
+const VERSION = 2;
 
 export interface Draft {
   id: string;
@@ -24,18 +25,24 @@ export interface Draft {
   // A quote keeps the post it quotes, so reopening needs no network
   repostData?: RepostData;
   thumb?: string; // file:// snapshot of the whole canvas
-  // Where the content sits in it (screen points), so the list can show the
+  // Where the content sits in it (screen points), so the drawer can show the
   // post's band the way the feed would rather than a mostly empty screen
   focus?: { top: number; bottom: number };
 }
 
-type Stored = { version: typeof VERSION; current: string | null; drafts: Draft[] };
+export type Scratch = Pick<Draft, 'state' | 'repostData'>;
 
-let store: Stored = { version: VERSION, current: null, drafts: [] };
+// Which kept canvas a composer session saves itself into
+export type DraftTarget = { kind: 'scratch' } | { kind: 'draft'; id: string };
+
+type Stored = { version: typeof VERSION; scratch: Scratch | null; drafts: Draft[] };
+
+let store: Stored = { version: VERSION, scratch: null, drafts: [] };
 const listeners = new Set<() => void>();
 
 let writing: Promise<void> = Promise.resolve();
-const persist = () => {
+const commit = (next: Stored) => {
+  store = next;
   const snapshot = JSON.stringify(store);
   writing = writing
     .then(() => LegacyFS.makeDirectoryAsync(DIR, { intermediates: true }))
@@ -44,12 +51,21 @@ const persist = () => {
   listeners.forEach(fn => fn());
 };
 
+const deleteFile = (uri?: string) => {
+  if (uri) LegacyFS.deleteAsync(uri, { idempotent: true }).catch(() => {});
+};
+
 export const loadDrafts = async () => {
   try {
     const info = await LegacyFS.getInfoAsync(INDEX);
     if (!info.exists) return;
     const data = JSON.parse(await LegacyFS.readAsStringAsync(INDEX));
-    if (data?.version === VERSION && Array.isArray(data.drafts)) store = data;
+    if (data?.version === VERSION && Array.isArray(data.drafts)) {
+      store = data;
+    } else if (data?.version === 1 && Array.isArray(data.drafts)) {
+      // v1 kept every canvas as a draft; they all belong in the drawer
+      store = { version: VERSION, scratch: null, drafts: data.drafts };
+    }
   } catch {
     // unreadable index: start with no drafts rather than not at all
   }
@@ -60,20 +76,35 @@ export const onDraftsChanged = (fn: () => void) => {
   return () => { listeners.delete(fn); };
 };
 
-// Newest first
+// The drawer, newest first
 export const listDrafts = (): Draft[] =>
   [...store.drafts].sort((a, b) => b.updatedAt - a.updatedAt);
 
-export const getDraft = (id: string) => store.drafts.find(d => d.id === id) ?? null;
-
-// The canvas the + button reopens, if one was left unfinished
-export const currentDraft = () => (store.current ? getDraft(store.current) : null);
+const getDraft = (id: string) => store.drafts.find(d => d.id === id) ?? null;
 
 export const newDraftId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-// Save a canvas as you work: a canvas with nothing on it is not a draft, so
-// emptying one deletes it. Saving also makes it the one + reopens.
+// --- the scratch canvas ---
+
+export const getScratch = () => store.scratch;
+
+// A canvas with nothing on it is not worth keeping: emptying it clears it
+export const saveScratch = (state: CanvasState, repostData?: RepostData) => {
+  if (!hasDraftContent(state)) {
+    clearScratch();
+    return;
+  }
+  commit({ ...store, scratch: { state, repostData } });
+};
+
+export const clearScratch = () => {
+  if (store.scratch) commit({ ...store, scratch: null });
+};
+
+// --- drafts ---
+
+// Save into the drawer (a new id adds one). Emptying a draft deletes it.
 export const saveDraft = (id: string, state: CanvasState, repostData?: RepostData) => {
   if (!hasDraftContent(state)) {
     removeDraft(id);
@@ -81,23 +112,20 @@ export const saveDraft = (id: string, state: CanvasState, repostData?: RepostDat
   }
   const existing = getDraft(id);
   const draft: Draft = { ...existing, id, updatedAt: Date.now(), state, repostData };
-  store = {
+  commit({
     ...store,
-    current: id,
     drafts: existing ? store.drafts.map(d => (d.id === id ? draft : d)) : [...store.drafts, draft],
-  };
-  persist();
+  });
 };
 
-// Keep a fresh snapshot for the drafts list. Each gets its own file name, so the
+// Keep a fresh snapshot for the drawer. Each gets its own file name, so the
 // image cache never shows a stale one.
 export const saveDraftThumb = async (
   id: string,
   capturedUri: string,
   focus?: { top: number; bottom: number },
 ) => {
-  const draft = getDraft(id);
-  if (!draft) return;
+  if (!getDraft(id)) return;
   const to = `${DIR}${id}-${Date.now()}.jpg`;
   try {
     await LegacyFS.makeDirectoryAsync(DIR, { intermediates: true });
@@ -107,27 +135,30 @@ export const saveDraftThumb = async (
     console.log('Draft thumbnail failed:', error);
     return;
   }
-  const old = draft.thumb;
-  store = { ...store, drafts: store.drafts.map(d => (d.id === id ? { ...d, thumb: to, focus } : d)) };
-  persist();
-  if (old) LegacyFS.deleteAsync(old, { idempotent: true }).catch(() => {});
+  const draft = getDraft(id); // may have been deleted meanwhile
+  if (!draft) {
+    deleteFile(to);
+    return;
+  }
+  commit({ ...store, drafts: store.drafts.map(d => (d.id === id ? { ...d, thumb: to, focus } : d)) });
+  deleteFile(draft.thumb);
 };
 
 export const removeDraft = (id: string) => {
   const draft = getDraft(id);
-  if (!draft && store.current !== id) return;
-  store = {
-    ...store,
-    current: store.current === id ? null : store.current,
-    drafts: store.drafts.filter(d => d.id !== id),
-  };
-  persist();
-  if (draft?.thumb) LegacyFS.deleteAsync(draft.thumb, { idempotent: true }).catch(() => {});
+  if (!draft) return;
+  commit({ ...store, drafts: store.drafts.filter(d => d.id !== id) });
+  deleteFile(draft.thumb);
 };
 
-// Nothing to reopen: + starts blank (a draft stays in the list)
-export const clearCurrentDraft = () => {
-  if (store.current === null) return;
-  store = { ...store, current: null };
-  persist();
+// The scratch canvas, if it has anything on it, moves into the drawer (a
+// quote or another draft is about to take its place)
+export const stashScratch = () => {
+  const scratch = store.scratch;
+  if (!scratch || !hasDraftContent(scratch.state)) return;
+  commit({
+    ...store,
+    scratch: null,
+    drafts: [...store.drafts, { id: newDraftId(), updatedAt: Date.now(), ...scratch }],
+  });
 };
