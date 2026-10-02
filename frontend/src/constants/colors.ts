@@ -114,6 +114,7 @@ export const FontChoices = {
     fontWeight: 'normal' as const,
   },
   'fredericka': {
+    // Retired from the menus; kept so older posts still edit and render
     name: 'Fredericka',
     fontFamily: 'FrederickaTheGreat',
     fontWeight: 'normal' as const,
@@ -150,7 +151,7 @@ export const FONT_MENU: (keyof typeof FontChoices)[] = [
   'arial-black', 'crimson-text', 'courier-prime',
   'impact', 'cabin-sketch', 'petit-formal',
   'lexend-exa', 'papyrus', 'freeride',
-  'fredericka', 'grutch-shaded',
+  'grutch-shaded',
 ];
 
 // A tap on the font button cycles this shorter set; the rest live in the grid
