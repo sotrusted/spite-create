@@ -1257,3 +1257,62 @@ class InboundEmailTests(TestCase):
         event = {'type': 'email.sent', 'data': {}}
         response = self.post(event, self.sign(json.dumps(event).encode()))
         self.assertEqual(response.status_code, 200)
+
+
+class ColorRunTests(RenderTestCase):
+    """Colour for selected text: ranges over the typed text, carried through
+    sanitizing, list markers and wrapping to the right letters."""
+
+    def visible_colors(self, element):
+        post = Post(author=self.user, image_width=CANVAS_WIDTH, image_height=CANVAS_HEIGHT,
+                    background_color='#F8F8FF')
+        post._text_elements_data = [element]
+        (normalized,) = post._collect_text_elements()
+        return normalized.get('charColors')
+
+    def test_ranges_map_to_visible_letters(self):
+        colors = self.visible_colors(text_element(
+            'ab cd', colorRuns=[{'start': 1, 'end': 4, 'color': '#ff1a1a'}]))
+        # a b c d: the space is not counted
+        self.assertEqual(colors, [None, '#FF1A1A', '#FF1A1A', None])
+
+    def test_list_markers_and_invisibles_do_not_shift_colours(self):
+        colors = self.visible_colors(text_element(
+            'x​y\nz', listStyle='dash',
+            colorRuns=[{'start': 2, 'end': 3, 'color': '#0000EE'}]))
+        # "- xy\n- z": the dashes and the dropped zero-width space stay out of it
+        self.assertEqual(colors, [None, None, '#0000EE', None, None])
+
+    def test_malformed_ranges_are_dropped(self):
+        self.assertIsNone(self.visible_colors(text_element('hello', colorRuns=[
+            {'start': 0, 'end': 3, 'color': '#123456'},  # not a palette colour
+            {'start': 'a', 'end': 2, 'color': '#FF1A1A'},
+            {'start': 4, 'end': 2, 'color': '#FF1A1A'},
+            'nonsense',
+        ])))
+
+    def test_range_renders_in_its_colour(self):
+        post = self.make_post([text_element('AAAA BBBB', colorRuns=[{'start': 5, 'end': 9, 'color': '#0000EE'}])])
+        img = self.open_render(post)
+        colors = {c for _n, c in img.getcolors(maxcolors=1 << 20) if _n > 200}
+        self.assertIn((0, 0, 0), colors)
+        self.assertIn((0, 0, 238), colors)
+
+
+class WrapSpacingTests(RenderTestCase):
+    """Wrapping keeps spaces as typed, like the composer's text view; only
+    the spaces at a wrap point go."""
+
+    def wrap(self, content, max_width=10_000):
+        post = Post(author=self.user, image_width=CANVAS_WIDTH, image_height=CANVAS_HEIGHT)
+        font = post._load_font('arial-black', 60)
+        return post._wrap_text_to_width(content, font, max_width)
+
+    def test_leading_and_repeated_spaces_survive(self):
+        self.assertEqual(self.wrap('  a  b\n c'), '  a  b\n c')
+
+    def test_spaces_at_a_wrap_point_go(self):
+        wrapped = self.wrap('aaaa bbbb cccc', max_width=400)
+        self.assertNotIn(' \n', wrapped)
+        self.assertNotIn('\n ', wrapped)
+        self.assertEqual(wrapped.replace('\n', ' '), 'aaaa bbbb cccc')

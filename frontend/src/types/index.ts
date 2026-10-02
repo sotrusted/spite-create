@@ -96,6 +96,8 @@ export interface TextElement {
   glow?: boolean;
   rainbow?: boolean;
   alternateColors?: string[];
+  // Colour ranges, code points into content (server shape)
+  colorRuns?: { start: number; end: number; color: string }[];
   align?: 'left' | 'center' | 'right';
   bold?: boolean;
   italic?: boolean;

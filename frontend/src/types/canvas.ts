@@ -13,6 +13,7 @@
 // fromCanvasState to read the old shape - saved posts live forever. The
 // server accepts only the versions it lists (CANVAS_STATE_VERSIONS).
 import { FontChoice, StickerElement } from './index';
+import type { ColorRun } from '../utils/colorRuns';
 
 export const CANVAS_STATE_VERSION = 1 as const;
 
@@ -40,6 +41,8 @@ export interface CanvasTextElement {
   rainbow: boolean;
   // Two palette colours cycled per letter; wins over rainbow when set
   alternateColors?: string[];
+  // Colour for selected text (utils/colorRuns): UTF-16 offsets into content
+  colorRuns?: ColorRun[];
   align: 'left' | 'center' | 'right';
   bold: boolean;
   italic: boolean;

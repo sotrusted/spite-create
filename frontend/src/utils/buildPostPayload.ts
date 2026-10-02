@@ -1,4 +1,5 @@
 import type { Post, PostCreate, RepostData, StickerElement } from '../types';
+import { ColorRun, runsToCodePoints } from './colorRuns';
 
 // Fixed logical canvas width. Posts are composed in screen points and mapped
 // onto this canvas at submit time, so the server render is identical on every
@@ -26,6 +27,7 @@ export interface ComposerTextElement {
   rainbow?: boolean;
   // Two palette colours cycled per letter; wins over rainbow when set
   alternateColors?: string[];
+  colorRuns?: ColorRun[];
   align?: 'left' | 'center' | 'right';
   bold?: boolean;
   italic?: boolean;
@@ -124,6 +126,8 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       glow: !!el.glow,
       rainbow: !!el.rainbow,
       alternateColors: el.alternateColors?.length === 2 ? el.alternateColors : null,
+      // Only when there are any, so payloads without them are unchanged
+      ...(el.colorRuns?.length ? { colorRuns: runsToCodePoints(el.content, el.colorRuns) } : {}),
       align: el.align || 'center',
       bold: !!el.bold,
       italic: !!el.italic,

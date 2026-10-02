@@ -48,6 +48,7 @@ import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/bui
 import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
+import { applyColorToRange, adjustRuns, colorSpans } from '../utils/colorRuns';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
 import {
   Draft, DraftTarget, saveDraft, saveDraftThumb, removeDraft, listDrafts, onDraftsChanged,
@@ -381,7 +382,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // Dev-only WYSIWYG check: after posting, overlay the server render on the
   // live canvas at half opacity so any drift is immediately visible
   const [parityGhost, setParityGhost] = useState<{ uri: string; post: any } | null>(null);
-  const [colorGridMode, setColorGridMode] = useState<'background' | 'text' | null>(null);
+  // 'range': colour for the text selected while typing (colorRuns)
+  const [colorGridMode, setColorGridMode] = useState<'background' | 'text' | 'range' | null>(null);
+  const [textSelection, setTextSelection] = useState<{ start: number; end: number } | null>(null);
+  const rangeTarget = useRef<{ id: string; start: number; end: number } | null>(null);
   // Colours collected so far while building a two-colour letter cycle;
   // null means the grid is in its normal single-pick mode.
   const [duoPending, setDuoPending] = useState<string[] | null>(null);
@@ -897,8 +901,21 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // Handle text input changes with only local updates (no state updates until editing stops)
   const handleTextInputChange = useCallback((id: string, text: string) => {
     // Only update local state for immediate UI feedback
+    const element = textElementsRef.current.find(el => el.id === id);
+    const before = typedTextRef.current[id] ?? element?.content ?? '';
+    typedTextRef.current[id] = text;
     setLocalTextContent(prev => ({ ...prev, [id]: text }));
+    // Colour ranges follow their letters through the edit
+    if (element?.colorRuns?.length && before !== text) {
+      const colorRuns = adjustRuns(before, text, element.colorRuns);
+      element.colorRuns = colorRuns; // the ref sees it before the next render
+      setTextElements(prev => prev.map(el => (el.id === id ? { ...el, colorRuns } : el)));
+    }
   }, []);
+  // Read by handleTextInputChange, which is stable across renders
+  const textElementsRef = useRef(textElements);
+  textElementsRef.current = textElements;
+  const typedTextRef = useRef<Record<string, string>>({});
 
   // Get the current display text (local if available, otherwise from state)
   const getDisplayText = useCallback((element: TextElement) => {
@@ -1368,6 +1385,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     // Initialize local text content and font size with current element
     const element = textElements.find(el => el.id === id);
     if (element) {
+      typedTextRef.current[id] = element.content;
       setLocalTextContent(prev => ({ ...prev, [id]: element.content }));
       setCurrentFontSize(element.fontSize);
     }
@@ -1568,25 +1586,28 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   const renderDisplayContent = (element: TextElement) => {
     const showPlaceholder = !getDisplayText(element) && element.id === '1' && !isEditingText && !anyElementHasInk();
     if (showPlaceholder) return placeholderNode(element);
-    const raw = getDisplayText(element) || '';
-    const text = applyListPrefixes(raw, element.listStyle);
-    let content: React.ReactNode = text;
+    // Outside the editor, trailing blank lines and spaces are not drawn: the
+    // server drops them, and a trailing newline drawn as an empty last line
+    // made the block taller here, so it sat half a line higher than it posts
+    const typed = getDisplayText(element) || '';
+    const editingThis = isEditingText && selectedTextId === element.id;
+    const raw = editingThis ? typed : typed.replace(/\s+$/, '');
     // Same rule as the server: one palette advanced per non-space character,
-    // with an explicit pair taking precedence over rainbow.
+    // with an explicit pair taking precedence over rainbow, and colour
+    // ranges (colour for selected text) on top of both
     const cyclePalette = cycleColorsFor(element);
-    if (cyclePalette && text) {
-      let colorIndex = 0;
-      content = text.split('').map((ch, i) => {
-        if (/\s/.test(ch)) return ch;
-        const color = cyclePalette[colorIndex++ % cyclePalette.length];
-        return (
-          <Text key={i} style={{ color }}>
-            {ch}
-          </Text>
-        );
-      });
+    if (!raw || (!cyclePalette && !element.colorRuns?.length)) {
+      return applyListPrefixes(raw, element.listStyle);
     }
-    return content;
+    let counter = 0;
+    const prefix = (line: string) => {
+      if (element.listStyle === 'none' || !line.trim()) return '';
+      if (element.listStyle === 'number') return `${++counter}. `;
+      return LIST_MARKERS[element.listStyle];
+    };
+    return colorSpans(raw, element.colorRuns, cyclePalette, prefix).map((span, i) =>
+      span.color ? <Text key={i} style={{ color: span.color }}>{span.text}</Text> : span.text,
+    );
   };
 
   // Keep the start positions per element (text and stickers)
@@ -1731,14 +1752,20 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   const handlePinchGesture = (event: any, elementId: string) => {
     const { state, scale } = event.nativeEvent;
     if (isEditingText) return;
+    const element = textElements.find(el => el.id === elementId);
     if (state === State.BEGAN) {
-      const element = textElements.find(el => el.id === elementId);
       textPinchBase.current[elementId] = element?.scale ?? 1;
     } else if (state === State.ACTIVE) {
-      const base = textPinchBase.current[elementId] ?? 1;
+      // A pinch whose BEGAN went to another handler starts from here
+      if (textPinchBase.current[elementId] === undefined) {
+        textPinchBase.current[elementId] = (element?.scale ?? 1) / (scale || 1);
+      }
+      const base = textPinchBase.current[elementId];
       updateTextElement(elementId, {
         scale: Math.max(0.3, Math.min(5.0, base * scale)),
       });
+    } else if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+      delete textPinchBase.current[elementId];
     }
   };
 
@@ -1868,6 +1895,16 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         }
       }
       
+      // Anywhere on the canvas, a pinch resizes the selected text - two
+      // fingers on a short line of text is too fiddly to ask for
+      const pinchedText = !isEditingText && !selectedStickerId
+        ? textElements.find(el => el.id === selectedTextId && el.content.trim())
+        : undefined;
+      if (pinchedText) {
+        handlePinchGesture(event, pinchedText.id);
+        return;
+      }
+
       // Check if we're pinching the image background
       if (backgroundImage && state === State.ACTIVE && !selectedStickerId) {
         // Auto-deselect text when pinching background
@@ -2126,6 +2163,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
             onChangeText={(text) => handleTextInputChange(element.id, text)}
             onSelectionChange={e => {
               editSelection.current = e.nativeEvent.selection;
+              setTextSelection(e.nativeEvent.selection);
               keepCaretInView(content.length);
             }}
             autoFocus
@@ -2503,13 +2541,45 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       closeColorGrid();
       return;
     }
-    if (colorGridMode === 'text') setSelectedElementColor(color);
+    if (colorGridMode === 'range') applyRangeColor(color);
+    else if (colorGridMode === 'text') setSelectedElementColor(color);
     else applyBackground(color);
     closeColorGrid();
   };
 
+  // Colour for selected text: with letters selected while typing, the colour
+  // button colours just those (null gives them back to the text's colour)
+  const selectedRange = () => {
+    const el = selectedElement();
+    if (!isEditingText || !el || !textSelection) return null;
+    const start = Math.min(textSelection.start, textSelection.end);
+    const end = Math.max(textSelection.start, textSelection.end);
+    return end > start ? { id: el.id, start, end } : null;
+  };
+  const openRangeColors = () => {
+    const range = selectedRange();
+    if (!range) return false;
+    rangeTarget.current = range;
+    setColorGridMode('range');
+    return true;
+  };
+  const applyRangeColor = (color: string | null) => {
+    const range = rangeTarget.current;
+    if (!range) return;
+    setTextElements(prev => prev.map(el => (el.id === range.id
+      ? { ...el, colorRuns: applyColorToRange(el.colorRuns, range.start, range.end, color) }
+      : el)));
+  };
+
   const renderColorGrid = () => {
-    const el = colorGridMode === 'text' ? selectedElement() : null;
+    const el = colorGridMode === 'text' || colorGridMode === 'range' ? selectedElement() : null;
+    // A selection already in one colour shows it as current
+    const rangeColor = (() => {
+      const range = rangeTarget.current;
+      if (colorGridMode !== 'range' || !range || !el) return null;
+      const run = el.colorRuns?.find(r => r.start <= range.start && r.end >= range.end);
+      return run?.color ?? null;
+    })();
     const duo = el?.alternateColors?.length === 2 ? el.alternateColors : null;
     return (
     <Modal visible={colorGridMode !== null} transparent animationType="fade" onRequestClose={closeColorGrid}>
@@ -2522,10 +2592,15 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                   {duoPending.length === 0 ? 'PICK FIRST COLOR' : 'PICK SECOND COLOR'}
                 </Text>
               )}
+              {colorGridMode === 'range' && (
+                <Text style={styles.colorGridLabel}>COLOR FOR SELECTION</Text>
+              )}
               <View style={styles.colorGrid}>
                 {Colors.postColors.map(color => {
                   const current = duoPending
                     ? null
+                    : colorGridMode === 'range'
+                      ? rangeColor
                     : colorGridMode === 'text'
                       ? (el?.rainbow || duo ? null : selectedElementColor())
                       : (backgroundGradient.length === 0 ? backgroundColor : null);
@@ -2566,6 +2641,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               )}
               {/* Text gets the per-letter cycles: rainbow, and a duo built
                   from two taps on the palette. */}
+              {/* The selection back to the text's own colour */}
+              {colorGridMode === 'range' && el && (
+                <TouchableOpacity onPress={() => { applyRangeColor(null); closeColorGrid(); }}>
+                  <View style={[styles.colorCell, styles.rangeResetCell]}>
+                    <Ionicons name="refresh" size={20} color="white" />
+                  </View>
+                </TouchableOpacity>
+              )}
               {colorGridMode === 'text' && !duoPending && (
                 <>
                   <TouchableOpacity onPress={() => { setSelectedElementRainbow(); closeColorGrid(); }}>
@@ -2956,9 +3039,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
           </TouchableOpacity>
           {/* Color: swatch shows current, tap cycles palette then rainbow */}
           <TouchableOpacity
-            style={styles.controlOption}
-            onPress={cycleColor}
-            onLongPress={() => setColorGridMode('text')}
+            style={[styles.controlOption, selectedRange() && styles.controlOptionActive]}
+            onPress={() => { if (!openRangeColors()) cycleColor(); }}
+            onLongPress={() => { if (!openRangeColors()) setColorGridMode('text'); }}
             delayLongPress={350}
           >
             {el.alternateColors?.length === 2 ? (
@@ -3274,6 +3357,11 @@ const styles = StyleSheet.create({
     margin: 2,
     borderWidth: 1,
     borderColor: CHROME.hairline,
+  },
+  rangeResetCell: {
+    backgroundColor: '#3D3D42',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   colorCellActive: {
     borderWidth: 3,

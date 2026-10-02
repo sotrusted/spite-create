@@ -38,21 +38,28 @@ REPLY_EDGE_MARGIN = 48
 # the button sitting on it. Canvas px; MIN_CROP_CANVAS_PX mirrors it client side.
 
 
-def _sanitize_glyphs(text):
-    if not text:
-        return text
-    text = _INVISIBLES.sub('', text)
-    out = []
+def _sanitize_kept(text):
+    """Indices of the characters _sanitize_glyphs keeps, so per-character
+    data (colour ranges) can follow the text through it."""
+    kept = []
     marks_on_base = 0
-    for ch in text:
+    for i, ch in enumerate(text or ''):
+        if _INVISIBLES.match(ch):
+            continue
         if unicodedata.combining(ch):
             marks_on_base += 1
             if marks_on_base > 2:
                 continue
         else:
             marks_on_base = 0
-        out.append(ch)
-    return ''.join(out)
+        kept.append(i)
+    return kept
+
+
+def _sanitize_glyphs(text):
+    if not text:
+        return text
+    return ''.join(text[i] for i in _sanitize_kept(text))
 
 # Per-character palette for rainbow text. Must match rainbowPalette in
 # frontend/src/constants/colors.ts so the preview cycles identically.
@@ -383,9 +390,20 @@ class Post(models.Model):
 
         normalized = []
         for element in elements:
-            content = _sanitize_glyphs((element.get('content') or '').rstrip())
+            raw = (element.get('content') or '').rstrip()
+            kept = _sanitize_kept(raw)
+            content = ''.join(raw[i] for i in kept)
             if not content:
                 continue
+            # Colour ranges (offsets into the typed text) become one colour
+            # per character, None where the element's own colour applies
+            runs = self._normalize_color_runs(element.get('colorRuns'), len(raw))
+            char_colors = None
+            if runs:
+                per_char = [None] * len(raw)
+                for start, end, color in runs:
+                    per_char[start:end] = [color] * (end - start)
+                char_colors = [per_char[i] for i in kept]
 
             normalized_element = {
                 'content': content,
@@ -417,18 +435,36 @@ class Post(models.Model):
                 counter = 0
                 prefixed = []
                 markers = {'bullet': '\u2022 ', 'dash': '- ', 'star': '* '}
+                prefixed_colors = [] if char_colors is not None else None
+                offset = 0
                 for line in lines:
+                    line_colors = char_colors[offset:offset + len(line)] if char_colors is not None else None
+                    offset += len(line) + 1  # the newline
                     if not line.strip():
                         prefixed.append(line)
-                        continue
-                    if normalized_element['listStyle'] == 'number':
+                        marker = ''
+                    elif normalized_element['listStyle'] == 'number':
                         counter += 1
-                        prefixed.append(f'{counter}. ' + line)
+                        marker = f'{counter}. '
+                        prefixed.append(marker + line)
                     else:
-                        prefixed.append(markers[normalized_element['listStyle']] + line)
+                        marker = markers[normalized_element['listStyle']]
+                        prefixed.append(marker + line)
+                    if prefixed_colors is not None:
+                        if prefixed_colors:
+                            prefixed_colors.append(None)  # the newline
+                        prefixed_colors.extend([None] * len(marker) + line_colors)
                 content = '\n'.join(prefixed)
+                char_colors = prefixed_colors
                 normalized_element['content'] = content
                 normalized_element['align'] = 'left'
+
+            # Wrapping below only turns spaces into line breaks, so colours are
+            # kept per visible (non-space) character: the drawing loop counts
+            # those the same way, whatever the wrapping did
+            if char_colors is not None:
+                visible = [c for ch, c in zip(content, char_colors) if not ch.isspace()]
+                normalized_element['charColors'] = visible if any(visible) else None
 
             # The composer displays text in an input that is 90 percent of the
             # canvas width and wraps it. PIL only breaks on explicit newlines,
@@ -457,18 +493,23 @@ class Post(models.Model):
         dummy = Image.new('RGB', (1, 1))
         draw = ImageDraw.Draw(dummy)
 
+        # Spaces are kept as typed - leading ones, and runs of several - the
+        # way the composer's text view draws them; only the spaces at a wrap
+        # point go (they would hang off the line end there too)
         wrapped_lines = []
         for line in content.split('\n'):
-            words = line.split(' ')
             current = ''
-            for word in words:
-                candidate = f"{current} {word}".strip()
-                if not current or self._spaced_text_width(draw, candidate, font, letter_spacing) <= max_width:
+            for token in re.findall(r' +|[^ ]+', line):
+                if token.startswith(' '):
+                    current += token
+                    continue
+                candidate = current + token
+                if not current.strip() or self._spaced_text_width(draw, candidate, font, letter_spacing) <= max_width:
                     current = candidate
                 else:
-                    wrapped_lines.append(current)
-                    current = word
-            wrapped_lines.append(current)
+                    wrapped_lines.append(current.rstrip())
+                    current = token
+            wrapped_lines.append(current.rstrip())
 
         return '\n'.join(wrapped_lines)
 
@@ -893,6 +934,32 @@ class Post(models.Model):
             return None
         return colors
 
+    MAX_COLOR_RUNS = 200
+
+    @classmethod
+    def _normalize_color_runs(cls, value, length):
+        """Colour ranges from the composer: [{start, end, color}] over the
+        typed text (code points, end exclusive). Palette colours only, like
+        the duo; anything malformed is dropped."""
+        if not isinstance(value, list):
+            return []
+        presets = {c.upper() for c in cls.COLOR_PRESETS}
+        runs = []
+        for entry in value[:cls.MAX_COLOR_RUNS]:
+            if not isinstance(entry, dict):
+                continue
+            color = entry.get('color')
+            if not isinstance(color, str) or color.strip().upper() not in presets:
+                continue
+            try:
+                start, end = int(entry.get('start')), int(entry.get('end'))
+            except (TypeError, ValueError):
+                continue
+            start, end = max(0, start), min(length, end)
+            if end > start:
+                runs.append((start, end, color.strip().upper()))
+        return runs
+
     def _rainbow_palette(self):
         """The rainbow minus colours that would vanish into a solid
         background. Gradients and images vary under each letter, so they keep
@@ -927,7 +994,7 @@ class Post(models.Model):
         return bool(
             element.get('rainbow') or element.get('letterSpacing')
             or element.get('underline') or element.get('hasBackground')
-            or element.get('alternateColors')
+            or element.get('alternateColors') or element.get('charColors')
         )
 
     def _glow_radius(self, element):
@@ -1062,18 +1129,26 @@ class Post(models.Model):
             draw.rectangle(self._chip_rect(element, max_width, top, total_height),
                            fill=element.get('backgroundColor', '#FFFFFF'))
 
+        # Colour ranges are counted per visible character (see
+        # _collect_text_elements) and win over the element's colour, the
+        # rainbow and the duo
+        char_colors = element.get('charColors') or None
         color_index = 0
+        visible_index = 0
         for i, (line, width) in enumerate(lines):
             x = line_x(width)
             y = top + i * (line_height + gap)
             line_start_x = x
-            if cycle_palette or spacing:
+            if cycle_palette or spacing or char_colors:
                 for ch in line:
-                    if cycle_palette and not ch.isspace():
-                        fill = cycle_palette[color_index % len(cycle_palette)]
-                        color_index += 1
-                    else:
-                        fill = element['color']
+                    fill = element['color']
+                    if not ch.isspace():
+                        if cycle_palette:
+                            fill = cycle_palette[color_index % len(cycle_palette)]
+                            color_index += 1
+                        if char_colors and visible_index < len(char_colors) and char_colors[visible_index]:
+                            fill = char_colors[visible_index]
+                        visible_index += 1
                     draw.text((x, y), ch, font=font, fill=fill)
                     x += draw.textlength(ch, font=font) + spacing
             else:
