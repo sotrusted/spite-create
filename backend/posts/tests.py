@@ -1190,3 +1190,70 @@ class AccountDeletionTests(RenderTestCase):
         self.assertEqual(self.client.delete('/api/users/me/', HTTP_X_DEVICE_ID='leaver-device').status_code, 204)
         self.assertEqual(self.client.delete('/api/users/me/', HTTP_X_DEVICE_ID='leaver-device').status_code, 204)
         self.assertEqual(self.client.delete('/api/users/me/').status_code, 400)
+
+
+class InboundEmailTests(TestCase):
+    """The support inbox webhook: signed requests only, forwarded with the
+    sender as Reply-To."""
+    SECRET = 'whsec_' + __import__('base64').b64encode(b'0123456789abcdef0123456789abcdef').decode()
+
+    def sign(self, body, msg_id='msg_1', timestamp=None):
+        import base64, hashlib, hmac, time
+        timestamp = str(int(timestamp or time.time()))
+        key = base64.b64decode(self.SECRET.split('_', 1)[1])
+        sig = base64.b64encode(hmac.new(key, f'{msg_id}.{timestamp}.'.encode() + body, hashlib.sha256).digest()).decode()
+        return {'HTTP_SVIX_ID': msg_id, 'HTTP_SVIX_TIMESTAMP': timestamp, 'HTTP_SVIX_SIGNATURE': f'v1,bogus v1,{sig}'}
+
+    def post(self, event, headers):
+        return self.client.post('/api/inbound-email/', data=json.dumps(event).encode(),
+                                content_type='application/json', **headers)
+
+    def test_signature_checks(self):
+        from posts.inbound_email import signature_valid
+        body = b'{"a":1}'
+        h = self.sign(body)
+        args = (h['HTTP_SVIX_ID'], h['HTTP_SVIX_TIMESTAMP'], body)
+        self.assertTrue(signature_valid(self.SECRET, *args, h['HTTP_SVIX_SIGNATURE']))
+        self.assertFalse(signature_valid(self.SECRET, *args[:2], b'{"a":2}', h['HTTP_SVIX_SIGNATURE']))
+        self.assertFalse(signature_valid('', *args, h['HTTP_SVIX_SIGNATURE']))
+        stale = self.sign(body, timestamp=1_000_000)
+        self.assertFalse(signature_valid(self.SECRET, stale['HTTP_SVIX_ID'], stale['HTTP_SVIX_TIMESTAMP'],
+                                         body, stale['HTTP_SVIX_SIGNATURE']))
+
+    @override_settings(RESEND_WEBHOOK_SECRET=SECRET)
+    def test_unsigned_requests_are_refused(self):
+        response = self.client.post('/api/inbound-email/', data='{}', content_type='application/json')
+        self.assertEqual(response.status_code, 401)
+
+    @override_settings(RESEND_WEBHOOK_SECRET=SECRET, RESEND_API_KEY='re_test',
+                       SUPPORT_FROM_EMAIL='Support <support@example.com>', SUPPORT_FORWARD_TO=['me@example.com'])
+    def test_received_email_is_forwarded_with_reply_to_the_sender(self):
+        from unittest import mock
+        received = {'from': 'Reader <reader@example.org>', 'to': ['support@example.com'],
+                    'subject': 'Hello', 'text': 'Love the app', 'html': '<p>Love the app</p>', 'attachments': []}
+        calls = []
+
+        def fake_request(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            response = mock.Mock(status_code=200)
+            response.json.return_value = received if method == 'GET' else {'id': 'sent_1'}
+            return response
+
+        event = {'type': 'email.received', 'data': {'email_id': 'abc-123'}}
+        body = json.dumps(event).encode()
+        with mock.patch('posts.inbound_email.requests.request', side_effect=fake_request):
+            response = self.post(event, self.sign(body))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls[0][:2], ('GET', 'https://api.resend.com/emails/receiving/abc-123'))
+        sent = calls[1][2]['json']
+        self.assertEqual(sent['to'], ['me@example.com'])
+        self.assertEqual(sent['reply_to'], 'Reader <reader@example.org>')
+        self.assertEqual(sent['subject'], '[Support] Hello')
+        self.assertIn('Love the app', sent['text'])
+        self.assertEqual(calls[1][2]['headers']['Authorization'], 'Bearer re_test')
+
+    @override_settings(RESEND_WEBHOOK_SECRET=SECRET)
+    def test_other_events_are_ignored(self):
+        event = {'type': 'email.sent', 'data': {}}
+        response = self.post(event, self.sign(json.dumps(event).encode()))
+        self.assertEqual(response.status_code, 200)

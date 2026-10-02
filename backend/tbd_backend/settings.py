@@ -303,6 +303,16 @@ EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='magazine@localhost')
 REPORT_DIGEST_EMAIL = config('REPORT_DIGEST_EMAIL', default='tsargentmoore@gmail.com')
 
+# Support inbox (posts/inbound_email.py): Resend receives mail at the domain
+# and calls the webhook, which forwards it here. The API key is the same
+# Resend key the SMTP backend uses.
+RESEND_API_KEY = config('RESEND_API_KEY', default=EMAIL_HOST_PASSWORD)
+RESEND_WEBHOOK_SECRET = config('RESEND_WEBHOOK_SECRET', default='')
+SUPPORT_FROM_EMAIL = config(
+    'SUPPORT_FROM_EMAIL', default='Type Magazine Support <support@creativemindsideasmagazine.com>')
+SUPPORT_FORWARD_TO = [a.strip() for a in config(
+    'SUPPORT_FORWARD_TO', default=REPORT_DIGEST_EMAIL).split(',') if a.strip()]
+
 # Feature gate: image posts (backgrounds + stickers) are banked for a
 # post-launch release. Matches FEATURES.imageUploads on the frontend.
 ALLOW_IMAGE_POSTS = config('ALLOW_IMAGE_POSTS', default=False, cast=bool)

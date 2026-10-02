@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from .inbound_email import resend_inbound_webhook
 
 app_name = 'posts'
 
@@ -25,4 +26,5 @@ urlpatterns = [
     path('users/me/', views.delete_account, name='delete-account'),
     path('notifications/', views.notifications_list, name='notifications'),
     path('notifications/read/', views.notifications_mark_read, name='notifications-read'),
+    path('inbound-email/', resend_inbound_webhook, name='inbound-email'),
 ]
