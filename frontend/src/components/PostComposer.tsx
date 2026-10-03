@@ -1748,25 +1748,32 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // Pinch scale is computed from the scale at gesture start (base), not from
   // the last frame's value - compounding per-frame caused jitter and stuck
   // clamping at the extremes
-  const textPinchBase = useRef<Record<string, number>>({});
+  //
+  // Like the drag's minDist, a pinch has to mean it: fingers resting or
+  // wobbling on the canvas change nothing until the spread has changed by
+  // PINCH_DEAD_ZONE, and from there scaling runs from that point, so the size
+  // never jumps by the dead zone it just crossed.
+  const PINCH_DEAD_ZONE = 0.06;
+  const textPinch = useRef<Record<string, { base: number; engagedAt: number | null }>>({});
   const handlePinchGesture = (event: any, elementId: string) => {
     const { state, scale } = event.nativeEvent;
     if (isEditingText) return;
     const element = textElements.find(el => el.id === elementId);
-    if (state === State.BEGAN) {
-      textPinchBase.current[elementId] = element?.scale ?? 1;
-    } else if (state === State.ACTIVE) {
-      // A pinch whose BEGAN went to another handler starts from here
-      if (textPinchBase.current[elementId] === undefined) {
-        textPinchBase.current[elementId] = (element?.scale ?? 1) / (scale || 1);
-      }
-      const base = textPinchBase.current[elementId];
-      updateTextElement(elementId, {
-        scale: Math.max(0.3, Math.min(5.0, base * scale)),
-      });
-    } else if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
-      delete textPinchBase.current[elementId];
+    if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+      delete textPinch.current[elementId];
+      return;
     }
+    // BEGAN, or the first ACTIVE of a pinch whose BEGAN went elsewhere
+    const pinch = textPinch.current[elementId] ??= { base: element?.scale ?? 1, engagedAt: null };
+    if (state !== State.ACTIVE || !scale) return;
+    if (pinch.engagedAt === null) {
+      if (Math.abs(Math.log(scale)) < Math.log(1 + PINCH_DEAD_ZONE)) return;
+      pinch.engagedAt = scale;
+    }
+    const engagedAt = pinch.engagedAt ?? scale;
+    updateTextElement(elementId, {
+      scale: Math.max(0.3, Math.min(5.0, pinch.base * (scale / engagedAt))),
+    });
   };
 
 
