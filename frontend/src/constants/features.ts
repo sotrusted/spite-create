@@ -11,4 +11,8 @@ export const FEATURES = {
   // reconsidered; the whole recursive renderer stays in PostCard, so
   // flipping this back to true restores it.
   collapsePosts: false,
+  // Post page draws text as real text over a text-free render (sharp when
+  // zoomed). Off until it is driven by the server's draw list and passes
+  // the parity checks; until then the post page shows the server's image.
+  vectorPostText: false,
 };

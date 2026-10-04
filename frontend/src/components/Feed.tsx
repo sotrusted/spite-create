@@ -26,6 +26,8 @@ interface Props {
   newPost?: Post | null;
   onNewPostDisplayed?: () => void;
   onFeedLoaded?: (posts: Post[]) => void;
+  // the feed is refreshing the cached page it opened on (the masthead shows it)
+  onSyncingChange?: (syncing: boolean) => void;
   postEvent?: { post: Post; replacesId?: string } | null;
   onScroll?: any;
   contentInsetAdjustmentBehavior?: 'automatic' | 'scrollableAxes' | 'never' | 'always';
@@ -37,6 +39,7 @@ export default function Feed({
   newPost, 
   onNewPostDisplayed, 
   onFeedLoaded,
+  onSyncingChange,
   postEvent,
   onScroll,
   contentInsetAdjustmentBehavior,
@@ -65,6 +68,8 @@ export default function Feed({
     const timer = setTimeout(() => setShowSyncSpinner(true), 300);
     return () => clearTimeout(timer);
   }, [syncing]);
+  // shown in the masthead, never over a post
+  useEffect(() => { onSyncingChange?.(showSyncSpinner); }, [showSyncSpinner, onSyncingChange]);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextUrl, setNextUrl] = useState<string | null>(boot?.next ?? null);
@@ -519,11 +524,6 @@ export default function Feed({
 
   return (
     <View style={styles.container}>
-      {showSyncSpinner && (
-        <View style={[styles.syncSpinner, { top: headerClearance + SPACE.md }]} pointerEvents="none">
-          <ActivityIndicator size="small" color={Colors.secondary} />
-        </View>
-      )}
       {pendingPosts.length > 0 && (
         <TouchableOpacity style={[styles.newPostsBanner, { top: headerClearance + 8 }]} onPress={releasePendingPosts}>
           <Text style={styles.newPostsBannerText}>

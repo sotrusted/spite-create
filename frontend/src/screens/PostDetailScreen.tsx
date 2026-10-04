@@ -19,9 +19,11 @@ import { api, endpoints, absoluteUrl } from '../config/api';
 import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Image as ExpoImage } from 'expo-image';
 import { TapGestureHandler, PinchGestureHandler, State as GestureState } from 'react-native-gesture-handler';
 import PostText from '../components/PostText';
-import { clampZoom, offsetAfterZoom } from '../utils/zoom';
+import { clampPinch, offsetAfterPinch } from '../utils/zoom';
+import { FEATURES } from '../constants/features';
 import { Post } from '../types';
 import { fullPostLayout, gradientEndpoints, canvasPointIn, CardLayout } from '../utils/cardLayout';
 import { quotedPostAt } from '../utils/hitTest';
@@ -103,7 +105,7 @@ export default function PostDetailScreen() {
         />
       );
     }
-    const vector = !!post.textless_image_url;
+    const vector = FEATURES.vectorPostText && !!post.textless_image_url;
     const { scale } = layout;
     const solid = post.background_gradient?.length ? null : post.background_color ?? null;
     // visible quoted levels, outermost first; a hidden (blocked) one hides
@@ -127,7 +129,9 @@ export default function PostDetailScreen() {
           }}
         >
           <View style={{ width: layout.width, height: layout.height, overflow: 'hidden' }}>
-            <Image
+            {/* the feed's own image component and cache: the post is already
+                on disk from the feed, so it is there on the first frame */}
+            <ExpoImage
               source={{ uri: absoluteUrl(vector ? post.textless_image_url! : post.rendered_image_url) }}
               style={{
                 position: 'absolute',
@@ -136,7 +140,9 @@ export default function PostDetailScreen() {
                 width: layout.imageWidth,
                 height: layout.imageHeight,
               }}
-              resizeMode="cover"
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={0}
             />
             {vector && levels.map((level, i) => {
               const width = level.strip.image_width;
@@ -224,12 +230,17 @@ export default function PostDetailScreen() {
       setPinchOrigin({ x: scrollOffset.current.x + focalX, y: scrollOffset.current.y + focalY });
     }
     if (state === GestureState.END || state === GestureState.CANCELLED) {
-      const next = clampZoom(zoom * scale, GESTURES.zoom.maxScale);
-      pendingOffset.current = offsetAfterZoom(scrollOffset.current, { x: focalX, y: focalY }, zoom, next);
+      const s = clampPinch(scale, zoom, GESTURES.zoom.maxScale);
+      pendingOffset.current = offsetAfterPinch(scrollOffset.current, pinchOrigin, s);
       pinchScale.setValue(1);
-      setZoom(next);
+      setZoom(zoom * s);
     }
   };
+  // the live scale, held to the same limits the release commits to
+  const liveScale = pinchScale.interpolate({
+    inputRange: [0, 1 / zoom, GESTURES.zoom.maxScale / zoom, 100],
+    outputRange: [1 / zoom, 1 / zoom, GESTURES.zoom.maxScale / zoom, GESTURES.zoom.maxScale / zoom],
+  });
   // after the re-layout at the new zoom, scroll the focal point back under
   // the fingers
   useEffect(() => {
@@ -239,10 +250,15 @@ export default function PostDetailScreen() {
     requestAnimationFrame(() => scrollRef.current?.scrollTo({ ...offset, animated: false }));
   }, [zoom]);
 
+  // Everything at zoom z is the zoom-1 layout scaled by z - box, centring
+  // margin, content height - so a release commits exactly what the pinch
+  // showed (utils/zoom)
+  const base = post ? fullPostLayout(post, screenWidth) : null;
   const layout = post ? fullPostLayout(post, screenWidth * zoom) : null;
   // Short posts sit centred in the stage; taller ones start at its top
-  const boxTop = layout && stageHeight ? Math.max(0, (stageHeight - layout.height) / 2) : 0;
-  const contentHeight = Math.max(stageHeight, (layout?.height ?? 0) + 2 * boxTop);
+  const baseTop = base && stageHeight ? Math.max(0, (stageHeight - base.height) / 2) : 0;
+  const boxTop = baseTop * zoom;
+  const contentHeight = Math.max(stageHeight, (base?.height ?? 0) + 2 * baseTop) * zoom;
 
   // A gradient post's image is only its band of the gradient, so the same
   // gradient fills the content around it, mapped through the image's
@@ -299,7 +315,7 @@ export default function PostDetailScreen() {
                       // a short post sits centred (boxTop), a tall one starts at the top
                       paddingTop: boxTop,
                       transformOrigin: [pinchOrigin.x, pinchOrigin.y, 0],
-                      transform: [{ scale: pinchScale }],
+                      transform: [{ scale: liveScale }],
                     }}
                   >
                     {renderGradient()}

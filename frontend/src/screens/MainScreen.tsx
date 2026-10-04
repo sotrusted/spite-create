@@ -29,6 +29,7 @@ import { Colors, FontChoices, FONT_MENU, resolveFontFace } from '../constants/co
 import { contrastRatio, hexToRgb } from '../utils/contrast';
 import { FontChoice, Post } from '../types';
 import { SPACE, CHROME } from '../constants/space';
+import { ActivityIndicator } from 'react-native';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -233,6 +234,7 @@ export default function MainScreen() {
   // composer hiding the status bar), and a fixed 100 left a gap whenever the
   // header came out shorter.
   const [headerHeight, setHeaderHeight] = useState(100);
+  const [syncing, setSyncing] = useState(false);
 
   // Header rides the scroll 1:1 (Safari-style): diffClamp accumulates
   // scroll deltas into [0, HEADER_HIDE], so any downward motion tucks the
@@ -358,9 +360,14 @@ export default function MainScreen() {
             Type
           </Text>
           </View>
-          <TouchableOpacity onPress={openProfile} style={styles.profileButton}>
-            <Ionicons name="person-circle-outline" size={28} color={headerTheme.text} />
-          </TouchableOpacity>
+          <View style={styles.headerRight}>
+            {/* the feed refreshing its cached page: here, in the masthead's
+                own ink, rather than over the top post */}
+            {syncing && <ActivityIndicator size="small" color={headerTheme.text} style={styles.syncSpinner} />}
+            <TouchableOpacity onPress={openProfile} style={styles.profileButton}>
+              <Ionicons name="person-circle-outline" size={28} color={headerTheme.text} />
+            </TouchableOpacity>
+          </View>
         </SafeAreaView>
         </Pressable>
       </Animated.View>
@@ -371,6 +378,7 @@ export default function MainScreen() {
           newPost={newPost}
           onNewPostDisplayed={handleNewPostDisplayed}
           onFeedLoaded={handleFeedLoaded}
+          onSyncingChange={setSyncing}
           postEvent={newPostEvent}
           onScroll={handleScroll}
           contentInsetAdjustmentBehavior="never"
@@ -451,6 +459,13 @@ export default function MainScreen() {
 }
 
 const styles = StyleSheet.create({
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  syncSpinner: {
+    marginRight: SPACE.sm,
+  },
   container: {
     flex: 1,
     backgroundColor: Colors.background,
