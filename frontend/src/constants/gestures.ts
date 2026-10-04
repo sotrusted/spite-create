@@ -35,6 +35,8 @@ export interface GesturePolicy {
   zoom: {
     // Pinch-zoom limit on the post page
     maxScale: number;
+    // a zoom counts as settled (text redrawn sharp) after this still time
+    settleMs: number;
   };
   longPress: {
     // Composer buttons: hold for the grid (fonts, colours, background)
@@ -49,6 +51,6 @@ export const GESTURES: GesturePolicy = {
   pinch: { deadZone: 0.06, minScale: 0.3, maxScale: 5, minTargetWidth: 180, minTargetHeight: 120 },
   touch: { minElementTarget: 120 },
   tap: { doubleTapWindowMs: 260 },
-  zoom: { maxScale: 4 },
+  zoom: { maxScale: 4, settleMs: 120 },
   longPress: { controlMs: 350, cardMs: 400 },
 };

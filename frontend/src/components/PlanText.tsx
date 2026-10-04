@@ -15,21 +15,34 @@ import type { PlanElement, TextPlan } from '../types/textPlan';
 
 interface Props {
   plan: TextPlan;
+  // draw the text this many times larger and scale it back down: the same
+  // positions, rasterised sharp for a view zoomed by about this much
+  resolution?: number;
   scale: number;
   offsetX: number;
   offsetY: number;
   selectable?: boolean;
 }
 
-export default function PlanText({ plan, ...placement }: Props) {
+export default function PlanText({ plan, resolution = 1, scale, offsetX, offsetY, selectable }: Props) {
+  const r = resolution;
   return (
-    <>
-      {plan.elements.map((el, i) => <PlanElementView key={i} el={el} {...placement} />)}
-    </>
+    // r times the parent's size, scaled back by 1/r about the top-left: it
+    // exactly covers the parent, and has a real frame (a zero-size one hid
+    // the text from VoiceOver)
+    <View pointerEvents="box-none" style={[styles.hiRes, { width: `${100 * r}%`, height: `${100 * r}%`, transform: [{ scale: 1 / r }] }]}>
+      {plan.elements.map((el, i) => (
+        <PlanElementView key={i} el={el} scale={scale * r} offsetX={offsetX * r} offsetY={offsetY * r} selectable={selectable} />
+      ))}
+    </View>
   );
 }
 
-function PlanElementView({ el, scale, offsetX, offsetY, selectable }: Omit<Props, 'plan'> & { el: PlanElement }) {
+const styles = StyleSheet.create({
+  hiRes: { position: 'absolute', left: 0, top: 0, transformOrigin: [0, 0, 0] },
+});
+
+function PlanElementView({ el, scale, offsetX, offsetY, selectable }: Omit<Props, 'plan' | 'resolution'> & { el: PlanElement }) {
   const X = (x: number) => offsetX + x * scale;
   const Y = (y: number) => offsetY + y * scale;
   const stroke = el.outline ? el.stroke * scale : 0;

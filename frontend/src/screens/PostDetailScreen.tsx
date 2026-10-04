@@ -20,10 +20,10 @@ import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
-import { TapGestureHandler, PinchGestureHandler, State as GestureState } from 'react-native-gesture-handler';
+import { TapGestureHandler, State as GestureState } from 'react-native-gesture-handler';
 import PlanText from '../components/PlanText';
 import { isTextPlan } from '../types/textPlan';
-import { clampPinch, offsetAfterPinch } from '../utils/zoom';
+import { textResolutionFor } from '../utils/zoom';
 import { FEATURES } from '../constants/features';
 import { Post } from '../types';
 import { fullPostLayout, gradientEndpoints, canvasPointIn, CardLayout } from '../utils/cardLayout';
@@ -39,8 +39,8 @@ const { width: screenWidth } = Dimensions.get('window');
 export default function PostDetailScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const { postId, post: seed, textMode: textModeParam } =
-    (route.params as { postId: string; post?: Post; textMode?: 'plan' | 'image' }) || {};
+  const { postId, post: seed, textMode: textModeParam, zoomTest } =
+    (route.params as { postId: string; post?: Post; textMode?: 'plan' | 'image'; zoomTest?: string }) || {};
   // 'plan': text drawn from the draw list over the text-free render; 'image':
   // the server's render. Development can force either (the parity check
   // opens each post both ways)
@@ -55,6 +55,7 @@ export default function PostDetailScreen() {
     if (!postId) return;
     // the screen can be handed another post (a link): start clean
     setError(false);
+    setTextResolution(1);
     if (post && post.id !== postId) setPost(seed?.id === postId ? seed : null);
     api.get<Post>(endpoints.getPost(postId))
       .then(response => setPost(response.data))
@@ -175,6 +176,7 @@ export default function PostDetailScreen() {
                 >
                   <PlanText
                     plan={level.text_plan}
+                    resolution={textResolution}
                     scale={scale * levelScale}
                     offsetX={0}
                     offsetY={-(level.crop_top ?? 0) * levelScale * scale}
@@ -186,6 +188,7 @@ export default function PostDetailScreen() {
             {vector && isTextPlan(post.text_plan) && (
               <PlanText
                 plan={post.text_plan}
+                resolution={textResolution}
                 scale={scale}
                 offsetX={layout.imageLeft}
                 offsetY={layout.imageTop}
@@ -221,51 +224,35 @@ export default function PostDetailScreen() {
   const background = post?.background_color || Colors.background;
   const chrome = chromeColor(background);
 
-  // Zoom: the committed level lays the post out again at that size (text
-  // stays text); during a pinch the content is only scaled, then committed
-  // on release with the point under the fingers kept in place (utils/zoom)
-  const [zoom, setZoom] = useState(1);
-  const pinchScale = useRef(new Animated.Value(1)).current;
-  const [pinchOrigin, setPinchOrigin] = useState({ x: 0, y: 0 });
-  const scrollRef = useRef<ScrollView>(null);
-  const scrollOffset = useRef({ x: 0, y: 0 });
-  const pendingOffset = useRef<{ x: number; y: number } | null>(null);
-  const onPinch = Animated.event([{ nativeEvent: { scale: pinchScale } }], { useNativeDriver: true });
-  const onPinchState = (e: any) => {
-    const { state, scale, focalX, focalY } = e.nativeEvent;
-    if (state === GestureState.BEGAN) {
-      setPinchOrigin({ x: scrollOffset.current.x + focalX, y: scrollOffset.current.y + focalY });
-    }
-    if (state === GestureState.END || state === GestureState.CANCELLED) {
-      const s = clampPinch(scale, zoom, GESTURES.zoom.maxScale);
-      pendingOffset.current = offsetAfterPinch(scrollOffset.current, pinchOrigin, s);
-      pinchScale.setValue(1);
-      setZoom(zoom * s);
-    }
+  // Zoom is iOS's own (the scroll view's pinch): smooth, and nothing is laid
+  // out again, so nothing can jump. Once a zoom settles the real text is
+  // redrawn at that resolution (PlanText `resolution`: the same positions,
+  // rasterised for the zoom), so it sharpens rather than staying a
+  // magnified picture. Resolution steps are whole numbers to keep redraws few.
+  const [textResolution, setTextResolution] = useState(1);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onZoomScroll = (zoomScale: number) => {
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => {
+      setTextResolution(textResolutionFor(zoomScale, GESTURES.zoom.maxScale));
+    }, GESTURES.zoom.settleMs);
   };
-  // the live scale, held to the same limits the release commits to
-  const liveScale = pinchScale.interpolate({
-    inputRange: [0, 1 / zoom, GESTURES.zoom.maxScale / zoom, 100],
-    outputRange: [1 / zoom, 1 / zoom, GESTURES.zoom.maxScale / zoom, GESTURES.zoom.maxScale / zoom],
-  });
-  // after the re-layout at the new zoom, scroll the focal point back under
-  // the fingers
-  useEffect(() => {
-    const offset = pendingOffset.current;
-    if (!offset) return;
-    pendingOffset.current = null;
-    requestAnimationFrame(() => scrollRef.current?.scrollTo({ ...offset, animated: false }));
-  }, [zoom]);
+  useEffect(() => () => { if (settleTimer.current) clearTimeout(settleTimer.current); }, []);
 
-  // Everything at zoom z is the zoom-1 layout scaled by z - box, centring
-  // margin, content height - so a release commits exactly what the pinch
-  // showed (utils/zoom)
-  const base = post ? fullPostLayout(post, screenWidth) : null;
-  const layout = post ? fullPostLayout(post, screenWidth * zoom) : null;
+  // Development only: zoom in by itself (the flicker check records it)
+  const scrollRef = useRef<ScrollView>(null);
+  useEffect(() => {
+    if (!__DEV__ || !zoomTest || !stageHeight) return;
+    const t = setTimeout(() => (scrollRef.current as any)?.scrollResponderZoomTo?.({
+      x: screenWidth * 0.3, y: stageHeight * 0.4, width: screenWidth * 0.4, height: stageHeight * 0.2, animated: true,
+    }), 1200);
+    return () => clearTimeout(t);
+  }, [zoomTest, stageHeight, postId]);
+
+  const layout = post ? fullPostLayout(post, screenWidth) : null;
   // Short posts sit centred in the stage; taller ones start at its top
-  const baseTop = base && stageHeight ? Math.max(0, (stageHeight - base.height) / 2) : 0;
-  const boxTop = baseTop * zoom;
-  const contentHeight = Math.max(stageHeight, (base?.height ?? 0) + 2 * baseTop) * zoom;
+  const boxTop = layout && stageHeight ? Math.max(0, (stageHeight - layout.height) / 2) : 0;
+  const contentHeight = Math.max(stageHeight, (layout?.height ?? 0) + 2 * boxTop);
 
   // A gradient post's image is only its band of the gradient, so the same
   // gradient fills the content around it, mapped through the image's
@@ -303,34 +290,23 @@ export default function PostDetailScreen() {
           <StatusBar barStyle={chrome === '#FFFFFF' ? 'light-content' : 'dark-content'} animated />
           {/* Full bleed: the post floats in its own colour, vertically centred */}
           <View style={styles.stage} onLayout={e => setStageHeight(e.nativeEvent.layout.height)}>
-            <PinchGestureHandler onGestureEvent={onPinch} onHandlerStateChange={onPinchState}>
-              <Animated.View style={StyleSheet.absoluteFill}>
-                <ScrollView
-                  ref={scrollRef}
-                  style={StyleSheet.absoluteFill}
-                  // both directions once zoomed past the screen width
-                  contentContainerStyle={{ width: layout?.width ?? screenWidth, minHeight: contentHeight }}
-                  directionalLockEnabled={false}
-                  onScroll={e => { scrollOffset.current = e.nativeEvent.contentOffset; }}
-                  scrollEventThrottle={16}
-                  showsVerticalScrollIndicator={false}
-                  showsHorizontalScrollIndicator={false}
-                >
-                  <Animated.View
-                    style={{
-                      minHeight: contentHeight,
-                      // a short post sits centred (boxTop), a tall one starts at the top
-                      paddingTop: boxTop,
-                      transformOrigin: [pinchOrigin.x, pinchOrigin.y, 0],
-                      transform: [{ scale: liveScale }],
-                    }}
-                  >
-                    {renderGradient()}
-                    {renderImage(layout)}
-                  </Animated.View>
-                </ScrollView>
-              </Animated.View>
-            </PinchGestureHandler>
+            <ScrollView
+              // a new post starts unzoomed
+              key={post.id}
+              ref={scrollRef}
+              style={StyleSheet.absoluteFill}
+              contentContainerStyle={{ minHeight: contentHeight, paddingTop: boxTop }}
+              maximumZoomScale={GESTURES.zoom.maxScale}
+              minimumZoomScale={1}
+              bouncesZoom
+              onScroll={e => onZoomScroll(e.nativeEvent.zoomScale ?? 1)}
+              scrollEventThrottle={32}
+              showsVerticalScrollIndicator={false}
+              showsHorizontalScrollIndicator={false}
+            >
+              {renderGradient()}
+              {renderImage(layout)}
+            </ScrollView>
           </View>
 
           <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>

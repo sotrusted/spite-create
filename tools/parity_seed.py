@@ -42,8 +42,10 @@ def make(label, elements, **kw):
              background_color=kw.pop('background_color', '#00CED1'), font_choice='arial-black', **kw)
     p._text_elements_data = elements
     p.save()
-    # the first word drawn: the check looks for it as real text on screen
-    first = next(w for e in elements for w in e['content'].split() if w.isalpha() or w.rstrip('.,!').isalpha())
+    # a word drawn: the check looks for it as real text on screen
+    # a distinctive word (4+ letters), so it cannot match by accident
+    first = next(w.rstrip('.,!') for e in elements for w in e['content'].split()
+                 if len(w.rstrip('.,!')) >= 4 and w.rstrip('.,!').isalpha())
     print(f'{p.id}\t{label}\t{first}')
     return p
 
