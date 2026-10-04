@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useMemo, useState, useRef, useEffect, useLayoutEffect } from 'react';
 import {
   View,
   Text,
@@ -228,11 +228,19 @@ export default function MainScreen() {
     }
   };
 
+  // The feed's top clearance is the header's real height, measured - not a
+  // guess. It changes with the safe-area inset (notch vs island, and the
+  // composer hiding the status bar), and a fixed 100 left a gap whenever the
+  // header came out shorter.
+  const [headerHeight, setHeaderHeight] = useState(100);
+
   // Header rides the scroll 1:1 (Safari-style): diffClamp accumulates
   // scroll deltas into [0, HEADER_HIDE], so any downward motion tucks the
   // header proportionally and any upward motion immediately returns it.
-  // Native driver keeps it glued to the finger.
-  const HEADER_HIDE = 100;
+  // Native driver keeps it glued to the finger. It tucks by its own measured
+  // height: a fixed 100 left a sliver showing on phones whose header (status
+  // bar inset included) is taller than that.
+  const HEADER_HIDE = headerHeight;
   // Dead zone: the first SLOP points of downward scroll do nothing, so
   // micro-scrolls and re-grips don't tuck the header. Once committed the
   // ride is 1:1, and revealing on scroll-up is instant (the interpolation
@@ -249,20 +257,19 @@ export default function MainScreen() {
       extrapolateLeft: 'clamp',
     })
   ).current;
-  const tuckedTranslateY = useRef(
+  const tuckedTranslateY = useMemo(() =>
     Animated.diffClamp(scrollYPositive, 0, HEADER_SLOP + HEADER_HIDE).interpolate({
       inputRange: [0, HEADER_SLOP, HEADER_SLOP + HEADER_HIDE],
       outputRange: [0, 0, -HEADER_HIDE],
       extrapolate: 'clamp',
-    })
-  ).current;
+    }), [HEADER_HIDE]);
   // diffClamp remembers scroll HISTORY, not position: if the list reaches the
   // top without a matching stream of scroll events (a remount, a jump, a
   // resync after another screen was up) it can stay tucked while the feed
   // sits at offset 0 - uncovering the header clearance as a blank band.
   // Scaling by how far the list has actually scrolled caps the tuck at the
   // scroll distance, so at the top the header is always fully down.
-  const headerTranslateY = useRef(
+  const headerTranslateY = useMemo(() =>
     Animated.multiply(
       tuckedTranslateY,
       scrollYPositive.interpolate({
@@ -270,13 +277,7 @@ export default function MainScreen() {
         outputRange: [0, 1],
         extrapolate: 'clamp',
       })
-    )
-  ).current;
-  // The feed's top clearance is the header's real height, measured - not a
-  // guess. It changes with the safe-area inset (notch vs island, and the
-  // composer hiding the status bar), and a fixed 100 left a gap whenever the
-  // header came out shorter.
-  const [headerHeight, setHeaderHeight] = useState(100);
+    ), [tuckedTranslateY, HEADER_HIDE]);
 
   const [newPostEvent, setNewPostEvent] = useState<PostEvent | null>(null);
 
