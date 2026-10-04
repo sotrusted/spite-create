@@ -1,6 +1,8 @@
 import type { Post, PostCreate, RepostData, StickerElement } from '../types';
 import { ColorRun, runsToCodePoints } from './colorRuns';
 import { LIMITS } from '../constants/limits';
+import type { OutlineSetting } from '../constants/textStyle';
+import { resolveOutlineColor } from './outline';
 
 // Inside the range the API accepts (it would clamp anyway; this keeps the
 // payload honest about what will be drawn)
@@ -33,6 +35,7 @@ export interface ComposerTextElement {
   // Two palette colours cycled per letter; wins over rainbow when set
   alternateColors?: string[];
   colorRuns?: ColorRun[];
+  outline?: OutlineSetting;
   align?: 'left' | 'center' | 'right';
   bold?: boolean;
   italic?: boolean;
@@ -132,6 +135,12 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       rainbow: !!el.rainbow,
       alternateColors: el.alternateColors?.length === 2 ? el.alternateColors : null,
       // Only when there are any, so payloads without them are unchanged
+      // 'auto' is resolved here, against the post's solid background (a
+      // gradient or image varies under the text, so only the text counts)
+      ...(el.outline && el.outline.mode !== 'off'
+        ? { outlineColor: resolveOutlineColor(el.outline, mode === 'inverted' ? '#FFFFFF' : el.color,
+            s.backgroundGradient.length > 0 || s.backgroundImage ? null : s.backgroundColor) }
+        : {}),
       ...(el.colorRuns?.length
         ? { colorRuns: runsToCodePoints(el.content, el.colorRuns, el.capsLock ? ch => ch.toUpperCase() : undefined) }
         : {}),

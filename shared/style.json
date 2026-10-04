@@ -1,0 +1,4 @@
+{
+  "_comment": "Text styling both sides draw identically. Frontend: src/constants/textStyle.ts; backend: posts/limits.py (OUTLINE_WIDTH_EM). A test on each side compares with this file.",
+  "outlineWidthEm": 0.07
+}

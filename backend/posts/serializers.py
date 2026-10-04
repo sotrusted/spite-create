@@ -122,6 +122,9 @@ class PostSerializer(serializers.ModelSerializer):
             if not math.isfinite(size):
                 raise serializers.ValidationError('Text element sizes must be numbers')
             element['fontSize'] = min(max(size, limits.FONT_SIZE_MIN), limits.FONT_SIZE_MAX)
+            if element.get('outlineColor') is not None and not (
+                    isinstance(element['outlineColor'], str) and HEX_COLOR.match(element['outlineColor'])):
+                raise serializers.ValidationError('Text element outlineColor must be #RRGGBB or null')
             for key in ('color', 'backgroundColor'):
                 if key in element and not (isinstance(element[key], str) and HEX_COLOR.match(element[key])):
                     raise serializers.ValidationError(f'Text element {key} must be #RRGGBB')

@@ -101,6 +101,8 @@ export interface TextElement {
   alternateColors?: string[];
   // Colour ranges, code points into content (server shape)
   colorRuns?: { start: number; end: number; color: string }[];
+  // The border colour to stroke the letters with (resolved), or null
+  outlineColor?: string | null;
   align?: 'left' | 'center' | 'right';
   bold?: boolean;
   italic?: boolean;

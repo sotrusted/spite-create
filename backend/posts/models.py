@@ -426,6 +426,9 @@ class Post(models.Model):
                 'underline': bool(element.get('underline')),
                 'listStyle': element.get('listStyle') if element.get('listStyle') in ('bullet', 'dash', 'star', 'number') else 'none',
                 'opacity': min(max(float(element.get('opacity') or 1), 0.05), 1.0),
+                # border round the letters (resolved by the client), or None
+                'outlineColor': element.get('outlineColor') if isinstance(element.get('outlineColor'), str)
+                and re.fullmatch(r'#[0-9A-Fa-f]{6}', element.get('outlineColor')) else None,
             }
 
             # Lists: prefix each typed line and force left alignment (the
@@ -1001,6 +1004,12 @@ class Post(models.Model):
             or element.get('alternateColors') or element.get('charColors')
         )
 
+    def _outline_width(self, element):
+        """Stroke width of the element's border in canvas px (0 for none)."""
+        if not element.get('outlineColor'):
+            return 0
+        return max(1, int(round(element.get('fontSize', 24) * limits.OUTLINE_WIDTH_EM)))
+
     def _glow_radius(self, element):
         return max(4, int(element['fontSize'] * 0.12))
 
@@ -1054,7 +1063,9 @@ class Post(models.Model):
         bbox = self._ink_bbox(element, font)
         if bbox is None:
             return None
-        left, top, right, bottom = bbox
+        # the border reaches past the glyphs by its width
+        stroke = self._outline_width(element)
+        left, top, right, bottom = bbox[0] - stroke, bbox[1] - stroke, bbox[2] + stroke, bbox[3] + stroke
 
         if element.get('glow'):
             pad = self._glow_radius(element) * 2
@@ -1093,16 +1104,17 @@ class Post(models.Model):
         content = element['content']
 
         align = element.get('align', 'center')
+        # Border round the letters: every glyph stroked first, then every
+        # glyph filled, so no letter's border paints over its neighbour
+        outline = element.get('outlineColor')
+        stroke = self._outline_width(element)
 
         if not self._is_styled_text(element):
-            draw.multiline_text(
-                (element['x'], element['y']),
-                content,
-                font=font,
-                fill=element['color'],
-                align=align,
-                anchor='mm',
-            )
+            passes = ([dict(fill=outline, stroke_width=stroke, stroke_fill=outline)] if outline else []) \
+                + [dict(fill=element['color'])]
+            for ink in passes:
+                draw.multiline_text((element['x'], element['y']), content, font=font,
+                                    align=align, anchor='mm', **ink)
             return
 
         spacing = element.get('letterSpacing') or 0
@@ -1137,34 +1149,43 @@ class Post(models.Model):
         # _collect_text_elements) and win over the element's colour, the
         # rainbow and the duo
         char_colors = element.get('charColors') or None
-        color_index = 0
-        visible_index = 0
-        for i, (line, width) in enumerate(lines):
-            x = line_x(width)
-            y = top + i * (line_height + gap)
-            line_start_x = x
-            if cycle_palette or spacing or char_colors:
-                for ch in line:
-                    fill = element['color']
-                    if not ch.isspace():
-                        if cycle_palette:
-                            fill = cycle_palette[color_index % len(cycle_palette)]
-                            color_index += 1
-                        if char_colors and visible_index < len(char_colors) and char_colors[visible_index]:
-                            fill = char_colors[visible_index]
-                        visible_index += 1
-                    draw.text((x, y), ch, font=font, fill=fill)
-                    x += draw.textlength(ch, font=font) + spacing
-            else:
-                # Whole-line draw keeps kerning (underline-only path)
-                draw.text((line_start_x, y), line, font=font, fill=element['color'])
-            if underline and line.strip():
-                underline_y = y + ascent + max(2, int(size * 0.04))
-                draw.line(
-                    (line_start_x, underline_y, line_start_x + width, underline_y),
-                    fill=element['color'],
-                    width=max(2, int(size // 16)),
-                )
+
+        def draw_lines(stroke_pass):
+            color_index = 0
+            visible_index = 0
+            ink = dict(stroke_width=stroke, stroke_fill=outline) if stroke_pass else {}
+            for i, (line, width) in enumerate(lines):
+                x = line_x(width)
+                y = top + i * (line_height + gap)
+                line_start_x = x
+                if cycle_palette or spacing or char_colors:
+                    for ch in line:
+                        fill = element['color']
+                        if not ch.isspace():
+                            if cycle_palette:
+                                fill = cycle_palette[color_index % len(cycle_palette)]
+                                color_index += 1
+                            if char_colors and visible_index < len(char_colors) and char_colors[visible_index]:
+                                fill = char_colors[visible_index]
+                            visible_index += 1
+                        draw.text((x, y), ch, font=font, fill=outline if stroke_pass else fill, **ink)
+                        x += draw.textlength(ch, font=font) + spacing
+                else:
+                    # Whole-line draw keeps kerning (underline-only path)
+                    draw.text((line_start_x, y), line, font=font,
+                              fill=outline if stroke_pass else element['color'], **ink)
+                if underline and line.strip():
+                    underline_y = y + ascent + max(2, int(size * 0.04))
+                    thickness = max(2, int(size // 16))
+                    draw.line(
+                        (line_start_x, underline_y, line_start_x + width, underline_y),
+                        fill=outline if stroke_pass else element['color'],
+                        width=thickness + 2 * stroke if stroke_pass else thickness,
+                    )
+
+        if outline:
+            draw_lines(stroke_pass=True)
+        draw_lines(stroke_pass=False)
 
     def _draw_text_element(self, img, draw, element):
         content = element['content']

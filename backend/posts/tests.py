@@ -1406,3 +1406,33 @@ class PayloadValidationTests(TestCase):
         body = self.payload(repost_data={'original_post_id': parent.json()['id'],
                                          'repost_geometry': {'x': 'a', 'width': None}})
         self.assertEqual(self.post(body).status_code, 201)
+
+
+class OutlineTests(RenderTestCase):
+    """The text border: stroked under the fill, OUTLINE_WIDTH_EM wide."""
+
+    def test_border_is_drawn_round_the_letters(self):
+        plain = self.make_post([text_element('MEME', color='#FFFFFF', fontFamily='impact')],
+                               background_color='#0000EE')
+        bordered = self.make_post([text_element('MEME', color='#FFFFFF', fontFamily='impact',
+                                                outlineColor='#000000')], background_color='#0000EE')
+        count = lambda post, rgb: sum(n for n, c in self.open_render(post).getcolors(1 << 20) if c == rgb)
+        self.assertEqual(count(plain, (0, 0, 0)), 0)
+        self.assertGreater(count(bordered, (0, 0, 0)), 1000)
+        # the fill still shows inside the border
+        self.assertGreater(count(bordered, (255, 255, 255)), 1000)
+
+    def test_styled_text_gets_the_border_too(self):
+        post = self.make_post([text_element('AB CD', color='#FFFFFF', fontFamily='impact', rainbow=True,
+                                             outlineColor='#000000')], background_color='#0000EE')
+        self.assertGreater(sum(n for n, c in self.open_render(post).getcolors(1 << 20) if c == (0, 0, 0)), 1000)
+
+    def test_bad_border_colours_are_ignored(self):
+        post = Post(author=self.user, image_width=CANVAS_WIDTH, image_height=CANVAS_HEIGHT)
+        post._text_elements_data = [text_element('x', outlineColor='black')]
+        self.assertIsNone(post._collect_text_elements()[0]['outlineColor'])
+
+    def test_width_matches_shared_style(self):
+        from posts import limits
+        shared = json.loads(open(os.path.join(os.path.dirname(__file__), '..', '..', 'shared', 'style.json')).read())
+        self.assertEqual(limits.OUTLINE_WIDTH_EM, shared['outlineWidthEm'])

@@ -1,3 +1,4 @@
+import type { FontStyleDefaults } from './textStyle';
 export const Colors = {
   // Old internet cleaned-up theme
   background: '#F8F8FF',    // Ghost white (light background)
@@ -93,6 +94,8 @@ export const FontChoices = {
     name: 'Impact',
     fontFamily: 'Impact',
     fontWeight: 'normal' as const,
+    // the meme look: capitals with a border (both can be turned off)
+    style: { capsLock: true, outline: 'auto' } as FontStyleDefaults,
   },
   'courier-prime': {
     // Typewriter register

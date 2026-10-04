@@ -50,6 +50,9 @@ import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { applyColorToRange, adjustRuns, colorSpans } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
+import { OUTLINE } from '../constants/textStyle';
+import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor } from '../utils/outline';
+import OutlinedText from './OutlinedText';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
 import {
@@ -394,7 +397,8 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // live canvas at half opacity so any drift is immediately visible
   const [parityGhost, setParityGhost] = useState<{ uri: string; post: any } | null>(null);
   // 'range': colour for the text selected while typing (colorRuns)
-  const [colorGridMode, setColorGridMode] = useState<'background' | 'text' | 'range' | null>(null);
+  // 'outline': the border colour (utils/outline)
+  const [colorGridMode, setColorGridMode] = useState<'background' | 'text' | 'range' | 'outline' | null>(null);
   const [textSelection, setTextSelection] = useState<{ start: number; end: number } | null>(null);
   const rangeTarget = useRef<{ id: string; start: number; end: number } | null>(null);
   // Colours collected so far while building a two-colour letter cycle;
@@ -440,7 +444,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         if (saved && FontChoices[saved as FontChoice]) {
           lastFontRef.current = saved;
           setTextElements(prev => prev.map(el =>
-            el.content ? el : { ...el, fontFamily: saved }
+            el.content ? el : { ...el, ...applyFontChange(el, saved) }
           ));
         }
         const savedBg = JSON.parse(raw)?.background;
@@ -741,15 +745,27 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     return textElements.find(el => el.id === selectedTextId) || textElements[0];
   };
 
+  // Every change to a text element comes through here, so the style rules
+  // that follow from a change live here too (utils/outline):
+  // - a new font brings its own look (Impact: capitals, border) for what
+  //   the user had not changed from the old font's look;
+  // - a new text colour puts a picked border back to following it.
   const updateTextElement = (id: string, updates: Partial<TextElement>) => {
-    console.log('🔄 updateTextElement called:', { id, updates });
-    setTextElements(prev => {
-      const newElements = prev.map(el => 
-        el.id === id ? { ...el, ...updates } : el
-      );
-      console.log('📝 Text elements updated:', newElements);
-    return newElements;
-    });
+    setTextElements(prev => prev.map(el => {
+      if (el.id !== id) return el;
+      let patch = updates;
+      if (updates.fontFamily && updates.fontFamily !== el.fontFamily
+          && !('capsLock' in updates) && !('outline' in updates)) {
+        patch = { ...applyFontChange(el, updates.fontFamily), ...patch };
+      }
+      const recoloured = ('color' in updates && updates.color !== el.color)
+        || ('rainbow' in updates && updates.rainbow !== el.rainbow)
+        || 'alternateColors' in updates;
+      if (recoloured && !('outline' in updates)) {
+        patch = { ...patch, outline: outlineAfterTextColor(el.outline) };
+      }
+      return { ...el, ...patch };
+    }));
   };
 
   // Upload sticker image to backend
@@ -1005,7 +1021,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         hasBackground: false,
         backgroundColor: '#FFFFFF',
         backgroundMode: 'off',
-        capsLock: false,
+        ...startingStyle(lastFontRef.current),
         scale: 1,
         letterSpacing: 0,
         glow: false,
@@ -1492,7 +1508,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       hasBackground: false,
       backgroundColor: '#FFFFFF',
       backgroundMode: 'off',
-      capsLock: false,
+      ...startingStyle(lastFontRef.current),
       scale: 1,
       letterSpacing: 0,
       glow: false,
@@ -1594,15 +1610,30 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     return null;
   };
 
+  // The text as typed, minus what the server drops. Outside the editor,
+  // trailing blank lines and spaces are not drawn: a trailing newline drawn
+  // as an empty last line made the block taller here, so it sat half a line
+  // higher than it posts.
+  const drawnText = (element: TextElement) => {
+    const typed = getDisplayText(element) || '';
+    const editingThis = isEditingText && selectedTextId === element.id;
+    return editingThis ? typed : typed.replace(/\s+$/, '');
+  };
+  // ... as displayed, without colour (list markers included)
+  const displayPlain = (element: TextElement) =>
+    applyListPrefixes(drawnText(element), element.listStyle);
+  // The border colour, resolved like the payload does (utils/outline)
+  const outlineColorFor = (element: TextElement) =>
+    resolveOutlineColor(
+      element.outline,
+      element.backgroundMode === 'inverted' ? '#FFFFFF' : element.color,
+      backgroundGradient.length > 0 || backgroundImage ? null : backgroundColor,
+    );
+
   const renderDisplayContent = (element: TextElement) => {
     const showPlaceholder = !getDisplayText(element) && element.id === '1' && !isEditingText && !anyElementHasInk();
     if (showPlaceholder) return placeholderNode(element);
-    // Outside the editor, trailing blank lines and spaces are not drawn: the
-    // server drops them, and a trailing newline drawn as an empty last line
-    // made the block taller here, so it sat half a line higher than it posts
-    const typed = getDisplayText(element) || '';
-    const editingThis = isEditingText && selectedTextId === element.id;
-    const raw = editingThis ? typed : typed.replace(/\s+$/, '');
+    const raw = drawnText(element);
     // Same rule as the server: one palette advanced per non-space character,
     // with an explicit pair taking precedence over rainbow, and colour
     // ranges (colour for selected text) on top of both
@@ -2072,8 +2103,11 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                     onPress={() => startEditingText(element.id)}
                     onLongPress={() => deleteTextElement(element.id)}
                   >
-                    <Text
+                    <OutlinedText
                       style={getTextStyle(element)}
+                      outlineColor={outlineColorFor(element)}
+                      outlineWidth={element.fontSize * OUTLINE.widthEm}
+                      plain={displayPlain(element)}
                       onLayout={(event) => {
                         // True text block size (unlike the 120px-min touch
                         // area), used by the adaptive crop guides
@@ -2088,7 +2122,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                       }}
                     >
                       {renderDisplayContent(element)}
-                    </Text>
+                    </OutlinedText>
                   </TouchableOpacity>
                 )}
               </AnimatedReanimated.View>
@@ -2169,15 +2203,19 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         <Pressable style={styles.editingScrollContent} onPress={handleCanvasTap}>
         <View style={{ alignItems: wrapperAlign }} pointerEvents="box-none">
           {/* Styled mirror - the source of visual truth while editing */}
-          <Text
-            style={[
-              textStyle,
-              !content && { color: 'rgba(255,255,255,0.5)' },
-            ]}
-            pointerEvents="none"
-          >
-            {content ? renderDisplayContent(element) : (isEditingText || anyElementHasInk()) ? '' : placeholderNode(element)}
-          </Text>
+          <View pointerEvents="none">
+            <OutlinedText
+              style={[
+                textStyle,
+                !content && { color: 'rgba(255,255,255,0.5)' },
+              ]}
+              outlineColor={content ? outlineColorFor(element) : null}
+              outlineWidth={currentFontSize * OUTLINE.widthEm}
+              plain={displayPlain(element)}
+            >
+              {content ? renderDisplayContent(element) : (isEditingText || anyElementHasInk()) ? '' : placeholderNode(element)}
+            </OutlinedText>
+          </View>
           {/* Invisible-text input on top: caret and typing only */}
           <TextInput
             key={`editing-${element.id}`}
@@ -2567,7 +2605,11 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       closeColorGrid();
       return;
     }
-    if (colorGridMode === 'range') applyRangeColor(color);
+    if (colorGridMode === 'outline') {
+      const el = selectedElement();
+      if (el) updateTextElement(el.id, { outline: { mode: 'custom', color } });
+    }
+    else if (colorGridMode === 'range') applyRangeColor(color);
     else if (colorGridMode === 'text') setSelectedElementColor(color);
     else applyBackground(color);
     closeColorGrid();
@@ -2598,7 +2640,8 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   };
 
   const renderColorGrid = () => {
-    const el = colorGridMode === 'text' || colorGridMode === 'range' ? selectedElement() : null;
+    const el = colorGridMode === 'text' || colorGridMode === 'range' || colorGridMode === 'outline'
+      ? selectedElement() : null;
     // A selection already in one colour shows it as current
     const rangeColor = (() => {
       const range = rangeTarget.current;
@@ -2621,12 +2664,17 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               {colorGridMode === 'range' && (
                 <Text style={styles.colorGridLabel}>COLOR FOR SELECTION</Text>
               )}
+              {colorGridMode === 'outline' && (
+                <Text style={styles.colorGridLabel}>BORDER COLOR</Text>
+              )}
               <View style={styles.colorGrid}>
                 {Colors.postColors.map(color => {
                   const current = duoPending
                     ? null
                     : colorGridMode === 'range'
                       ? rangeColor
+                    : colorGridMode === 'outline'
+                      ? (el?.outline?.mode === 'custom' ? el.outline.color : null)
                     : colorGridMode === 'text'
                       ? (el?.rainbow || duo ? null : selectedElementColor())
                       : (backgroundGradient.length === 0 ? backgroundColor : null);
@@ -2667,6 +2715,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               )}
               {/* Text gets the per-letter cycles: rainbow, and a duo built
                   from two taps on the palette. */}
+              {/* Border back to following the text colour */}
+              {colorGridMode === 'outline' && el && (
+                <TouchableOpacity onPress={() => { updateTextElement(el.id, { outline: { mode: 'auto' } }); closeColorGrid(); }}>
+                  <View style={[styles.colorCell, styles.rangeResetCell, el.outline?.mode === 'auto' && styles.colorCellActive]}>
+                    <Text style={styles.autoCellLabel}>AUTO</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
               {/* The selection back to the text's own colour */}
               {colorGridMode === 'range' && el && (
                 <TouchableOpacity onPress={() => { applyRangeColor(null); closeColorGrid(); }}>
@@ -3063,6 +3119,31 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               textDecorationLine: 'underline',
             }]}>U</Text>
           </TouchableOpacity>
+          {/* Capitals on/off (Impact starts with them on) */}
+          <TouchableOpacity
+            style={[styles.controlOption, el.capsLock && styles.controlOptionActive]}
+            onPress={() => updateTextElement(el.id, { capsLock: !el.capsLock })}
+          >
+            <Text numberOfLines={1} style={[styles.controlCapsLabel, onBarBaseline('CourierPrimeBold', 19), {
+              color: el.capsLock ? Colors.accent : 'white',
+            }]}>AA</Text>
+          </TouchableOpacity>
+          {/* Border round the letters: tap on/off, hold for its colour */}
+          <TouchableOpacity
+            style={[styles.controlOption, styles.controlLetterOption, el.outline && el.outline.mode !== 'off' && styles.controlOptionActive]}
+            onPress={() => updateTextElement(el.id, {
+              outline: el.outline && el.outline.mode !== 'off' ? { mode: 'off' } : { mode: 'auto' },
+            })}
+            onLongPress={() => setColorGridMode('outline')}
+            delayLongPress={GESTURES.longPress.controlMs}
+          >
+            {/* a letter in a ring of the border's colour; a faint ring when off */}
+            <View style={[styles.controlOutlineRing, {
+              borderColor: outlineColorFor(el) ?? 'rgba(255,255,255,0.3)',
+            }]}>
+              <Text style={styles.controlOutlineLetter}>A</Text>
+            </View>
+          </TouchableOpacity>
           {/* Color: swatch shows current, tap cycles palette then rainbow */}
           <TouchableOpacity
             style={[styles.controlOption, selectedRange() && styles.controlOptionActive]}
@@ -3384,6 +3465,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: CHROME.hairline,
   },
+  autoCellLabel: {
+    fontFamily: 'CourierPrimeBold',
+    fontSize: 11,
+    color: 'white',
+  },
   rangeResetCell: {
     backgroundColor: '#3D3D42',
     alignItems: 'center',
@@ -3653,6 +3739,25 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   // B, I and U are single letters - they do not need a full-width button
+  controlCapsLabel: {
+    fontSize: 19,
+    fontFamily: 'CourierPrimeBold',
+    color: 'white',
+    includeFontPadding: false,
+  },
+  controlOutlineRing: {
+    width: 26,
+    height: 26,
+    borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  controlOutlineLetter: {
+    fontFamily: 'Impact',
+    fontSize: 16,
+    color: 'white',
+    includeFontPadding: false,
+  },
   controlLetterOption: {
     width: 26,
   },

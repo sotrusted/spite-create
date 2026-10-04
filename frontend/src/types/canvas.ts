@@ -14,6 +14,7 @@
 // server accepts only the versions it lists (CANVAS_STATE_VERSIONS).
 import { FontChoice, StickerElement } from './index';
 import type { ColorRun } from '../utils/colorRuns';
+import type { OutlineSetting } from '../constants/textStyle';
 
 export const CANVAS_STATE_VERSION = 1 as const;
 
@@ -43,6 +44,8 @@ export interface CanvasTextElement {
   alternateColors?: string[];
   // Colour for selected text (utils/colorRuns): UTF-16 offsets into content
   colorRuns?: ColorRun[];
+  // Border around the letters (absent on canvases from before it existed: off)
+  outline?: OutlineSetting;
   align: 'left' | 'center' | 'right';
   bold: boolean;
   italic: boolean;
