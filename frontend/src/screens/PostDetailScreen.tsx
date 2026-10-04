@@ -8,7 +8,9 @@ import {
   StyleSheet,
   Dimensions,
   ActivityIndicator,
-  Animated,
+  ActionSheetIOS,
+  Alert,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Share, StatusBar } from 'react-native';
@@ -24,6 +26,9 @@ import { TapGestureHandler, State as GestureState } from 'react-native-gesture-h
 import PlanText from '../components/PlanText';
 import { isTextPlan } from '../types/textPlan';
 import { textResolutionFor } from '../utils/zoom';
+import { REPORT_REASONS, MODERATION_COPY, HideKind, hideAuthor, reportPost } from '../utils/moderation';
+import { editAgain } from '../utils/editAgain';
+import Toast from 'react-native-toast-message';
 import { FEATURES } from '../constants/features';
 import { Post } from '../types';
 import { fullPostLayout, gradientEndpoints, canvasPointIn, CardLayout } from '../utils/cardLayout';
@@ -201,6 +206,64 @@ export default function PostDetailScreen() {
     );
   };
 
+  // The [...] menu. Someone else's post: report it, or mute or block its
+  // author (Apple's UGC rules want both a tap away). Your own: edit it again.
+  const sheet = (title: string, options: string[], destructive: number[], pick: (i: number) => void) => {
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { title, options: [...options, 'Cancel'], cancelButtonIndex: options.length, destructiveButtonIndex: destructive },
+        i => { if (i < options.length) pick(i); },
+      );
+    } else {
+      Alert.alert(title, undefined, [
+        ...options.map((o, i) => ({ text: o, onPress: () => pick(i), style: destructive.includes(i) ? 'destructive' as const : 'default' as const })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ]);
+    }
+  };
+  const confirmHide = (kind: HideKind) => {
+    if (!post) return;
+    const copy = MODERATION_COPY[kind];
+    Alert.alert(`${copy.title} @${post.author.handle}?`, copy.body, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: copy.title,
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await hideAuthor(post.author.handle, kind);
+            Toast.show({ type: 'success', text1: copy.done, position: 'bottom' });
+            navigation.goBack();
+          } catch {
+            Alert.alert(`Could not ${kind}`, 'Try again in a moment.');
+          }
+        },
+      },
+    ]);
+  };
+  const openReport = () => {
+    if (!post) return;
+    sheet('Why are you reporting this post?', REPORT_REASONS.map(r => r.label), [], async i => {
+      try {
+        await reportPost(post.id, REPORT_REASONS[i].value);
+        Toast.show({ type: 'success', text1: 'Reported', text2: MODERATION_COPY.reported, position: 'bottom' });
+      } catch {
+        Alert.alert('Could not report', 'Try again in a moment.');
+      }
+    });
+  };
+  const openMenu = () => {
+    if (!post) return;
+    if (post.is_author) {
+      if (post.editable) sheet('Your post', ['Edit again'], [], () => editAgain(navigation as any, post.id));
+      return;
+    }
+    sheet(`@${post.author.handle}`, ['Report post', 'Mute', 'Block'], [0, 2], i => {
+      if (i === 0) openReport();
+      else confirmHide(i === 1 ? 'mute' : 'block');
+    });
+  };
+
   // Save the post's rendered image: one tap to Photos, share sheet if the
   // build predates the photo permission string.
   const handleDownload = async () => {
@@ -234,7 +297,7 @@ export default function PostDetailScreen() {
   const onZoomScroll = (zoomScale: number) => {
     if (settleTimer.current) clearTimeout(settleTimer.current);
     settleTimer.current = setTimeout(() => {
-      setTextResolution(textResolutionFor(zoomScale, GESTURES.zoom.maxScale));
+      setTextResolution(textResolutionFor(zoomScale, GESTURES.zoom.maxTextResolution));
     }, GESTURES.zoom.settleMs);
   };
   useEffect(() => () => { if (settleTimer.current) clearTimeout(settleTimer.current); }, []);
@@ -243,8 +306,12 @@ export default function PostDetailScreen() {
   const scrollRef = useRef<ScrollView>(null);
   useEffect(() => {
     if (!__DEV__ || !zoomTest || !stageHeight) return;
+    // zoomTest=<level>: zoom into the centre by that much
+    const level = Math.max(1.5, Number(zoomTest) || 2.5);
+    const w = screenWidth / level;
+    const h = stageHeight / level;
     const t = setTimeout(() => (scrollRef.current as any)?.scrollResponderZoomTo?.({
-      x: screenWidth * 0.3, y: stageHeight * 0.4, width: screenWidth * 0.4, height: stageHeight * 0.2, animated: true,
+      x: (screenWidth - w) / 2, y: (stageHeight - h) / 2, width: w, height: h, animated: true,
     }), 1200);
     return () => clearTimeout(t);
   }, [zoomTest, stageHeight, postId]);
@@ -313,6 +380,16 @@ export default function PostDetailScreen() {
             <Ionicons name="close" size={CHROME.iconSize} color={chrome} />
           </TouchableOpacity>
 
+          {/* nothing to offer on your own post without its saved canvas */}
+          {!(post.is_author && !post.editable) && <TouchableOpacity
+            style={styles.menuButton}
+            onPress={openMenu}
+            accessibilityLabel="More"
+            hitSlop={{ top: CHROME.hitSlop, bottom: CHROME.hitSlop, left: CHROME.hitSlop, right: CHROME.hitSlop }}
+          >
+            <Ionicons name="ellipsis-horizontal" size={CHROME.iconSize} color={chrome} />
+          </TouchableOpacity>}
+
           <TouchableOpacity style={styles.downloadButton} onPress={handleDownload}>
             <Ionicons name="download-outline" size={CHROME.iconSize} color={chrome} />
           </TouchableOpacity>
@@ -358,6 +435,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: CHROME.topInset,
     left: CHROME.inset,
+    width: CHROME.iconButton,
+    height: CHROME.iconButton,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  // left of download, same row
+  menuButton: {
+    position: 'absolute',
+    top: CHROME.topInset,
+    right: CHROME.inset + CHROME.iconButton,
     width: CHROME.iconButton,
     height: CHROME.iconButton,
     justifyContent: 'center',

@@ -6,8 +6,6 @@ import {
   StyleSheet,
   Dimensions,
   Alert,
-  Modal,
-  TouchableWithoutFeedback,
   Animated,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
@@ -16,12 +14,12 @@ import { useNavigation } from '@react-navigation/native';
 import { FEATURES } from '../constants/features';
 import { SPACE, CHROME } from '../constants/layout';
 import { Colors } from '../constants/colors';
-import { Post, RepostData } from '../types';
+import { Post } from '../types';
 import { absoluteUrl, api, endpoints } from '../config/api';
-import { CanvasState } from '../types/canvas';
 import { contrastRatio, hexToRgb } from '../utils/contrast';
 import { feedCardLayout, canvasPointIn, gradientEndpoints, CARD } from '../utils/cardLayout';
 import { quotedPostAt } from '../utils/hitTest';
+import { editAgain } from '../utils/editAgain';
 import { GESTURES } from '../constants/gestures';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -30,18 +28,7 @@ const { width: screenWidth } = Dimensions.get('window');
 interface Props {
   onSwipeableOpen?: (ref: React.RefObject<Swipeable | null>) => void;
   post: Post;
-  onReport: (reason: string, description: string) => void;
-  onMute: () => void;
-  onBlock: () => void;
 }
-
-const REPORT_REASONS = [
-  { value: 'spam', label: 'Spam' },
-  { value: 'harassment', label: 'Harassment' },
-  { value: 'inappropriate', label: 'Inappropriate Content' },
-  { value: 'fake', label: 'Fake/Misleading' },
-  { value: 'other', label: 'Other' },
-];
 
 const chipTextColor = (background: string) => {
   const bg = hexToRgb(background);
@@ -50,10 +37,9 @@ const chipTextColor = (background: string) => {
     : '#000000';
 };
 
-export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableOpen }: Props) {
+export default function PostCard({ post, onSwipeableOpen }: Props) {
   const swipeableRef = React.useRef<Swipeable | null>(null);
   const navigation = useNavigation();
-  const [showReportModal, setShowReportModal] = useState(false);
   const [imageAspectRatio, setImageAspectRatio] = useState<number>(1);
   // Recursive compression. collapsedAt: null = fully expanded; 0 = the
   // whole card is a chip; k >= 1 = ancestors from level k down are hidden
@@ -205,57 +191,6 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
     // instead of flashing the loading animation while it refetches.
     (navigation as any).navigate('PostDetail', { postId: post.id, post });
   };
-
-  const confirmMute = () => {
-    Alert.alert(
-      'Mute User',
-      "You won't see their posts anymore.",
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Mute', style: 'destructive', onPress: onMute },
-      ]
-    );
-  };
-
-  const confirmBlock = () => {
-    Alert.alert(
-      'Block User',
-      'Their posts disappear for you, your posts disappear for them, and their quoted posts are hidden.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Block', style: 'destructive', onPress: onBlock },
-      ]
-    );
-  };
-
-  const handleReport = (reason: string) => {
-    setShowReportModal(false);
-    onReport(reason, '');
-  };
-
-  // Left-edge rail (swipe right): the bad stuff
-  const renderModerationRail = () => (
-    <View style={styles.rail}>
-      <TouchableOpacity
-        style={[styles.railButton, { backgroundColor: Colors.warning }]}
-        onPress={() => setShowReportModal(true)}
-      >
-        <Text style={styles.railText}>Report</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.railButton, { backgroundColor: Colors.secondary }]}
-        onPress={confirmMute}
-      >
-        <Text style={styles.railText}>Mute</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.railButton, { backgroundColor: Colors.error }]}
-        onPress={confirmBlock}
-      >
-        <Text style={styles.railText}>Block</Text>
-      </TouchableOpacity>
-    </View>
-  );
 
   // Collapsed-at-level view: stacked segments with dead space squeezed.
   // Own reply (tight crop) + each still-visible ancestor's reply strip +
@@ -487,61 +422,9 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
     );
   };
 
-  const renderReportModal = () => (
-    <Modal
-      visible={showReportModal}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setShowReportModal(false)}
-    >
-      <TouchableWithoutFeedback onPress={() => setShowReportModal(false)}>
-        <View style={styles.modalOverlay}>
-          <TouchableWithoutFeedback>
-            <View style={styles.reportModal}>
-              <Text style={styles.modalTitle}>Report Post</Text>
-              <Text style={styles.modalSubtitle}>Why are you reporting this post?</Text>
-              {REPORT_REASONS.map((reason) => (
-                <TouchableOpacity
-                  key={reason.value}
-                  style={styles.reportReason}
-                  onPress={() => handleReport(reason.value)}
-                >
-                  <Text style={styles.reportReasonText}>{reason.label}</Text>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setShowReportModal(false)}
-              >
-                <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-    </Modal>
-  );
-
-  // "Edit again": reopen the composer with the exact canvas this post was
-  // made from. The saved state only comes back to its author, from the detail
-  // endpoint; a quote is re-fetched because the state references it by id.
-  // Posting from there makes a new post - the original stays as it was.
-  const handleEditAgain = async () => {
+  const handleEditAgain = () => {
     swipeableRef.current?.close();
-    try {
-      const { data: full } = await api.get(endpoints.getPost(post.id));
-      const state = full.canvas_state as CanvasState | undefined;
-      if (!state) throw new Error('no saved canvas');
-      let repostData: RepostData | undefined;
-      if (state.repost) {
-        const { data: original } = await api.get(endpoints.getPost(state.repost.originalPostId));
-        repostData = { originalPost: original, screenshotUri: original.rendered_image_url };
-      }
-      (navigation as any).navigate('PostComposer', { restoreState: state, repostData });
-    } catch (error) {
-      console.log('Edit again failed:', error);
-      Alert.alert('Could not reopen this post', 'Try again in a moment.');
-    }
+    editAgain(navigation as any, post.id);
   };
 
   // Right-edge rail (swipe left): actions on the post - the growth slot
@@ -574,10 +457,8 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
   return (
     <Swipeable
       ref={swipeableRef}
-      renderLeftActions={renderModerationRail}
       renderRightActions={renderActionsRail}
       overshootRight={false}
-      overshootLeft={false}
       onSwipeableOpenStartDrag={() => onSwipeableOpen?.(swipeableRef)}
       onSwipeableWillOpen={() => onSwipeableOpen?.(swipeableRef)}
     >
@@ -650,7 +531,6 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
             <Text style={[styles.quoteButtonText, { color: post.background_color || Colors.background }]}>Aa</Text>
           </TouchableOpacity>
         )}
-        {renderReportModal()}
       </View>
     </Swipeable>
   );
@@ -767,53 +647,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'CourierPrime',
     fontWeight: '700',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'flex-end',
-  },
-  reportModal: {
-    backgroundColor: Colors.surface,
-    marginHorizontal: SPACE.xxl,
-    padding: SPACE.xl,
-    alignSelf: 'center',
-    maxWidth: 300,
-    width: '100%',
-  },
-  modalTitle: {
-    color: Colors.primary,
-    fontSize: 18,
-    fontFamily: 'ArialBlack',
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: SPACE.sm,
-  },
-  modalSubtitle: {
-    color: Colors.secondary,
-    fontSize: 14,
-    fontFamily: 'CourierPrime',
-    textAlign: 'center',
-    marginBottom: SPACE.xl,
-  },
-  reportReason: {
-    paddingVertical: SPACE.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.background,
-  },
-  reportReasonText: {
-    color: Colors.primary,
-    fontSize: 16,
-    fontFamily: 'CourierPrime',
-  },
-  cancelButton: {
-    marginTop: SPACE.lg,
-    paddingVertical: SPACE.md,
-  },
-  cancelText: {
-    color: Colors.secondary,
-    fontSize: 16,
-    fontFamily: 'CourierPrime',
-    textAlign: 'center',
   },
 });

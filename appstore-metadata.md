@@ -62,7 +62,8 @@ Tracking: **No** ("Data Used to Track You": none).
 ## Review notes (for the App Review team)
 The app requires no account. On first launch it shows a terms agreement
 and handle picker — tap the checkbox and Continue. Post via the + button.
-Reports: swipe left on any post. Blocking: swipe left → Block.
+Reports, muting and blocking: open any post (tap it), then the "..." button
+at the top right → Report post / Mute / Block.
 Account deletion: Profile → Settings → Account → Delete Account (removes the
 account, all its posts and images; quotes of it in other people's posts
 are replaced with a "post removed" placeholder). Content is

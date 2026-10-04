@@ -52,6 +52,8 @@ export interface Post {
   content_boxes?: number[][] | null;
   // true on your own posts that saved their canvas (can "Edit again")
   editable?: boolean;
+  // the request came from the author's device (the post page's menu)
+  is_author?: boolean;
   // only ever present on your own posts' detail
   canvas_state?: CanvasState;
   is_signed?: boolean;

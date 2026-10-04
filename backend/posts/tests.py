@@ -1716,3 +1716,16 @@ class FontMetricsTableTests(TestCase):
                 hhea = font['hhea']
                 self.assertAlmostEqual(float(m.group(1)), (hhea.ascent + hhea.lineGap) / upm, places=3)
                 self.assertAlmostEqual(float(m.group(2) or 0), hhea.lineGap / upm, places=3)
+
+
+class IsAuthorFieldTests(RenderTestCase):
+    def test_only_the_authors_device_sees_its_post_as_its_own(self):
+        from django.test import RequestFactory
+        from posts.serializers import PostSerializer, PostListSerializer
+        self.user.device_id = 'author-device'
+        self.user.save()
+        post = self.make_post([text_element('MINE')])
+        for device, expected in (('author-device', True), ('someone-else', False)):
+            request = RequestFactory().get('/', HTTP_X_DEVICE_ID=device)
+            for serializer in (PostSerializer, PostListSerializer):
+                self.assertEqual(serializer(post, context={'request': request}).data['is_author'], expected)

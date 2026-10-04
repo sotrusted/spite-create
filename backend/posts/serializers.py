@@ -140,6 +140,7 @@ class PostSerializer(serializers.ModelSerializer):
     canvas_height = serializers.IntegerField(write_only=True, required=False)
     canvas_state = serializers.JSONField(required=False, allow_null=True)
     editable = serializers.SerializerMethodField()
+    is_author = serializers.SerializerMethodField()
     textless_image_url = serializers.SerializerMethodField()
     quote_chain = serializers.SerializerMethodField()
     
@@ -155,7 +156,7 @@ class PostSerializer(serializers.ModelSerializer):
             'repost_screenshot_url', 'repost_data', 'canvas_width', 'canvas_height',
             'is_signed', 'signature_style',
             'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes',
-            'canvas_state', 'editable', 'textless_image_url', 'quote_chain', 'text_plan',
+            'canvas_state', 'editable', 'textless_image_url', 'quote_chain', 'text_plan', 'is_author',
         ]
         read_only_fields = ['id', 'author', 'text_plan', 'rendered_image_url', 'created_at', 'view_count', 
                            'is_repost', 'original_post', 'repost_screenshot_url',
@@ -290,6 +291,10 @@ class PostSerializer(serializers.ModelSerializer):
 
     def get_editable(self, obj):
         return obj.canvas_state is not None and _is_author(obj, self.context)
+
+    def get_is_author(self, obj):
+        # the post page's menu: your own post offers Edit, not Report/Mute/Block
+        return _is_author(obj, self.context)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -546,6 +551,7 @@ class PostListSerializer(serializers.ModelSerializer):
     quote_chain = serializers.SerializerMethodField()
     repost_screenshot_url = serializers.SerializerMethodField()
     editable = serializers.SerializerMethodField()
+    is_author = serializers.SerializerMethodField()
     # the feed hands its post to the post page, which draws over this
     textless_image_url = serializers.SerializerMethodField()
 
@@ -557,12 +563,15 @@ class PostListSerializer(serializers.ModelSerializer):
             'is_signed', 'signature_style', 'background_color', 'background_gradient', 'font_choice',
             'response_image_url', 'response_top_y', 'response_bottom_y', 'quote', 'quote_chain',
             'repost_screenshot_url', 'image_width', 'image_height', 'top_y', 'bottom_y',
-            'content_boxes', 'editable', 'textless_image_url', 'text_plan',
+            'content_boxes', 'editable', 'textless_image_url', 'text_plan', 'is_author',
         ]
 
     def get_editable(self, obj):
         # author is select_related on the feed, so this costs no query
         return obj.canvas_state is not None and _is_author(obj, self.context)
+
+    def get_is_author(self, obj):
+        return _is_author(obj, self.context)
 
     def get_quote_chain(self, obj):
         return quote_chain_for(obj, self.context)

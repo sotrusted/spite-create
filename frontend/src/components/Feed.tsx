@@ -14,6 +14,7 @@ import {
 import Toast from 'react-native-toast-message';
 import { bootFeed, saveBootFeed } from '../utils/bootFeed';
 import { separatorColor } from '../utils/feedSeparator';
+import { onAuthorHidden } from '../utils/moderation';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
 import { api, endpoints, isOfflineError } from '../config/api';
@@ -202,59 +203,13 @@ export default function Feed({
     }
   }, [nextUrl, loadingMore, fetchFeed]);
 
-  const handlePostAction = useCallback(async (postId: string, action: 'report' | 'mute' | 'block', data?: any) => {
-    try {
-      switch (action) {
-        case 'report':
-          await api.post(endpoints.reportPost(postId), data);
-          Toast.show({
-            type: 'success',
-            text1: 'Reported',
-            text2: 'Thank you for helping keep the community safe',
-          });
-          break;
-        case 'mute': {
-          const post = posts.find(p => p.id === postId);
-          if (post) {
-            await api.post(endpoints.muteUser(post.author.handle));
-            setPosts(prev => prev.filter(p => p.author.handle !== post.author.handle));
-            Toast.show({
-              type: 'success',
-              text1: 'Muted',
-              text2: 'You will not see their posts anymore',
-            });
-          }
-          break;
-        }
-        case 'block': {
-          const post = posts.find(p => p.id === postId);
-          if (post) {
-            await api.post(endpoints.blockUser(post.author.handle));
-            setPosts(prev => prev.filter(p => p.author.handle !== post.author.handle));
-            // Refetch so quoted strips of the blocked author hide too
-            fetchFeed(true);
-            Toast.show({
-              type: 'success',
-              text1: 'Blocked',
-              text2: 'Their posts are hidden and yours are hidden from them',
-            });
-          }
-          break;
-        }
-      }
-    } catch (error: any) {
-      console.error(`Error ${action}ing post:`, error);
-      const errorMessage = error.response?.data?.error || 
-                          error.response?.data?.detail || 
-                          `Failed to ${action} post`;
-      
-      Toast.show({
-        type: 'error',
-        text1: 'Error',
-        text2: errorMessage,
-      });
-    }
-  }, [posts]);
+  // Muting or blocking (from a post page's menu) takes the author's posts
+  // out of the feed at once, then refetches: the page refills past them, and
+  // after a block their quoted strips come back hidden
+  useEffect(() => onAuthorHidden(({ handle }) => {
+    setPosts(prev => prev.filter(p => p.author.handle !== handle));
+    fetchFeed(true);
+  }), [fetchFeed]);
 
   // WebSocket event handlers
   const handleNewPost = useCallback((message: WebSocketMessage) => {
@@ -485,9 +440,6 @@ export default function Feed({
       <Animated.View style={animatedStyle}>
         <PostCard
           post={item}
-          onReport={(reason, description) => handlePostAction(item.id, 'report', { reason, description })}
-          onMute={() => handlePostAction(item.id, 'mute')}
-          onBlock={() => handlePostAction(item.id, 'block')}
           onSwipeableOpen={handleSwipeableOpen}
         />
       </Animated.View>
