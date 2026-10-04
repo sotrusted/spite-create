@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import Toast from 'react-native-toast-message';
 import { bootFeed, saveBootFeed } from '../utils/bootFeed';
-import { separatorColor, SEPARATOR } from '../utils/feedSeparator';
+import { separatorColor } from '../utils/feedSeparator';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
 import { api, endpoints, isOfflineError } from '../config/api';
@@ -439,7 +439,8 @@ export default function Feed({
     const index = leadingItem ? posts.findIndex(p => p.id === leadingItem.id) : -1;
     const below = index >= 0 ? posts[index + 1] : undefined;
     const color = leadingItem && below ? separatorColor(leadingItem, below) : null;
-    return color ? <View style={{ height: SEPARATOR.width, backgroundColor: color }} /> : null;
+    // one device pixel: a rule, not a border
+    return color ? <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: color }} /> : null;
   }, [posts]);
 
   const renderPost = ({ item, index }: { item: Post; index: number }) => {

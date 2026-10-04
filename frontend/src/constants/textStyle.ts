@@ -17,7 +17,8 @@ export interface OutlinePolicy {
   // 'auto' picks the first candidate that reads against the text and is not
   // lost in a solid background: black or white first (whichever contrasts
   // more with the text - the same rule as text on a background), then the
-  // other, then the palette by contrast with the text
+  // other, then the text colour's companion (constants/rules), then the
+  // palette by contrast with the text
   minTextContrast: number; // WCAG contrast ratio, outline vs text
   minBackgroundDistance: number; // RGB distance, outline vs solid background
 }

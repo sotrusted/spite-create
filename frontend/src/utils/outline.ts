@@ -1,6 +1,7 @@
 import { Colors, FontChoices } from '../constants/colors';
 import { OUTLINE, OutlinePolicy, OutlineSetting, FontStyleDefaults, PLAIN_STYLE } from '../constants/textStyle';
 import { contrastRatio, hexToRgb } from './contrast';
+import { RULE_ON } from '../constants/rules';
 import type { FontChoice } from '../types';
 
 const BLACK = '#000000';
@@ -21,9 +22,13 @@ export function autoOutlineColor(
   const text = hexToRgb(textColor);
   const vsText = (c: string) => contrastRatio(text, hexToRgb(c));
   const [first, second] = vsText(BLACK) >= vsText(WHITE) ? [BLACK, WHITE] : [WHITE, BLACK];
+  // after black and white: the text colour's designed companion
+  // (constants/rules), then the rest of the palette by contrast
+  const companion = RULE_ON[textColor.toUpperCase()];
   const palette = [...Colors.postColors]
-    .filter(c => c !== BLACK && c !== WHITE)
+    .filter(c => c !== BLACK && c !== WHITE && c !== companion)
     .sort((a, b) => vsText(b) - vsText(a));
+  if (companion && companion !== BLACK && companion !== WHITE) palette.unshift(companion);
   const fits = (c: string) =>
     vsText(c) >= policy.minTextContrast
     && (background === null || rgbDistance(c, background) >= policy.minBackgroundDistance);

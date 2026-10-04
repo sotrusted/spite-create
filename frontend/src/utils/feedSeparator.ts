@@ -1,18 +1,19 @@
-import { RAINBOW_MIN_DISTANCE } from '../constants/colors';
-import { contrastRatio, hexToRgb } from './contrast';
+import { Colors, RAINBOW_MIN_DISTANCE } from '../constants/colors';
+import { RULE_ON, RULE_BETWEEN } from '../constants/rules';
+import { hexToRgb } from './contrast';
 
-// A hairline between two feed posts whose meeting edges are the same or
-// nearly the same colour (e.g. yellow over highlighter green), so the cards
-// do not run together. Elsewhere the posts' own colours are the boundary.
+// A hairline between two feed posts whose touching edges are the same or
+// nearly the same colour (e.g. yellow over highlighter), so the cards do not
+// run together. Elsewhere the posts' own colours are the boundary. Its
+// colour comes from the designed tables in constants/rules.
 
 export interface SeparatorPolicy {
   // Edges closer than this (RGB distance) read as one colour: the same line
-  // the palette is designed around (every pair sits at <= 74 or >= 106)
+  // the palette is designed around (every pair sits at <= 87 or >= 106)
   similarDistance: number;
-  width: number; // points
 }
 
-export const SEPARATOR: SeparatorPolicy = { similarDistance: RAINBOW_MIN_DISTANCE, width: 1 };
+export const SEPARATOR: SeparatorPolicy = { similarDistance: RAINBOW_MIN_DISTANCE };
 
 // What a post's top and bottom edges look like. A gradient runs diagonally
 // from its first stop to its last; an image post has no single colour.
@@ -40,13 +41,17 @@ const distance = (a: string, b: string) => {
   return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
 };
 
-// The line between `above` and `below`, or null for none. Black or white,
-// whichever stands out more against the weaker of the two edges.
+// A gradient stop may sit off the palette: it takes its nearest palette colour
+export const nearestPaletteColor = (hex: string) =>
+  Colors.postColors.reduce((best, c) => (distance(hex, c) < distance(hex, best) ? c : best));
+
+// The line between `above` and `below`, or null for none
 export function separatorColor(above: EdgePost, below: EdgePost, policy = SEPARATOR): string | null {
   const a = edgeColors(above);
   const b = edgeColors(below);
   if (!a || !b || distance(a.bottom, b.top) >= policy.similarDistance) return null;
-  const against = (line: string) =>
-    Math.min(contrastRatio(hexToRgb(line), hexToRgb(a.bottom)), contrastRatio(hexToRgb(line), hexToRgb(b.top)));
-  return against('#000000') >= against('#FFFFFF') ? '#000000' : '#FFFFFF';
+  const [x, y] = [nearestPaletteColor(a.bottom), nearestPaletteColor(b.top)];
+  if (x === y) return RULE_ON[x];
+  const [first, second] = Colors.postColors.indexOf(x) < Colors.postColors.indexOf(y) ? [x, y] : [y, x];
+  return RULE_BETWEEN[`${first}|${second}`] ?? RULE_ON[a.bottom.toUpperCase()] ?? RULE_ON[x];
 }
