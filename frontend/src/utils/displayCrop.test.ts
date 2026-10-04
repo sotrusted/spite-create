@@ -79,8 +79,3 @@ test('clearance is idempotent', () => {
   assert.deepEqual(twice, once);
 });
 
-test('a capped post whose content runs past the edge is left alone', () => {
-  const box: [number, number, number, number] = [0, 200, 1080, 2300];
-  const c = displayCropBounds(500, 1850, CANVAS_W, CANVAS_H, SCREEN_W, [box]);
-  assert.deepEqual(c, { topY: 500, bottomY: 1850 });
-});

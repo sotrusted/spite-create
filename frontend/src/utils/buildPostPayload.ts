@@ -1,5 +1,10 @@
 import type { Post, PostCreate, RepostData, StickerElement } from '../types';
 import { ColorRun, runsToCodePoints } from './colorRuns';
+import { LIMITS } from '../constants/limits';
+
+// Inside the range the API accepts (it would clamp anyway; this keeps the
+// payload honest about what will be drawn)
+const clampFontSize = (px: number) => Math.min(Math.max(px, LIMITS.fontSizeMin), LIMITS.fontSizeMax);
 
 // Fixed logical canvas width. Posts are composed in screen points and mapped
 // onto this canvas at submit time, so the server render is identical on every
@@ -117,7 +122,7 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       content: el.capsLock ? el.content.toUpperCase() : el.content,
       x: Math.round(el.x * k),
       y: Math.round(el.y * k),
-      fontSize: Math.round(el.fontSize * el.scale * k),
+      fontSize: clampFontSize(Math.round(el.fontSize * el.scale * k)),
       color: mode === 'inverted' ? '#FFFFFF' : el.color,
       fontFamily: el.fontFamily,
       hasBackground: mode !== 'off',
@@ -127,7 +132,9 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       rainbow: !!el.rainbow,
       alternateColors: el.alternateColors?.length === 2 ? el.alternateColors : null,
       // Only when there are any, so payloads without them are unchanged
-      ...(el.colorRuns?.length ? { colorRuns: runsToCodePoints(el.content, el.colorRuns) } : {}),
+      ...(el.colorRuns?.length
+        ? { colorRuns: runsToCodePoints(el.content, el.colorRuns, el.capsLock ? ch => ch.toUpperCase() : undefined) }
+        : {}),
       align: el.align || 'center',
       bold: !!el.bold,
       italic: !!el.italic,
@@ -148,7 +155,7 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       shape: sticker.shape,
     })),
     font_choice: (first?.fontFamily as PostCreate['font_choice']) || 'arial-black',
-    font_size: Math.round((first?.fontSize || 24) * (first?.scale || 1) * k),
+    font_size: clampFontSize(Math.round((first?.fontSize || 24) * (first?.scale || 1) * k)),
     text_color: first?.color || '#FF1A1A',
     background_color: s.backgroundColor,
     background_gradient: s.backgroundGradient.length > 0 ? s.backgroundGradient : undefined,

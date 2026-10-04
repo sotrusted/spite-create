@@ -156,14 +156,15 @@ class GoldenImageTests(RenderTestCase):
         self.assertGreater(post.bottom_y - post.top_y, 72 * 2)
         self.assert_matches_golden(post, 'long_text_wrapped')
 
-    def test_tall_content_capped_at_max_aspect(self):
+    def test_tall_content_is_never_cut(self):
+        # Bounds are the whole content extent; the feed shrinks a tall card
+        # to fit its 5:4 box instead of cropping it
         post = self.make_post([
             text_element('TOP', y=200, fontSize=64),
             text_element('BOTTOM', y=2100, fontSize=64),
         ])
-        max_height = int(CANVAS_WIDTH * 1.25)
-        self.assertEqual(post.bottom_y - post.top_y, max_height,
-                         'posts taller than 5:4 portrait must be capped')
+        self.assertLess(post.top_y, 200 - 32)
+        self.assertGreater(post.bottom_y, 2100 + 32)
 
     def test_multiple_positioned_elements(self):
         post = self.make_post([
@@ -477,12 +478,9 @@ class BackgroundImageTests(RenderTestCase):
             background_image_scale=cover_scale,
             background_image_position={'x': 0, 'y': 0},
         )
-        # A photo post is not cropped to its caption, but is capped at the
-        # max post aspect (5:4 portrait), centered on the canvas
-        max_height = int(CANVAS_WIDTH * 1.25)
-        expected_top = max(0, int((CANVAS_HEIGHT / 2) - max_height / 2))
-        self.assertEqual(post.top_y, expected_top)
-        self.assertEqual(post.bottom_y, expected_top + max_height)
+        # A photo post without crop bars is the whole canvas (the feed
+        # shrinks it into its card)
+        self.assertEqual((post.top_y, post.bottom_y), (0, CANVAS_HEIGHT))
 
         img = self.open_render(post)
         # Cover scaling: corners must show the background image, not the fill
@@ -671,7 +669,6 @@ class ReplyMarginTests(RenderTestCase):
                            'reply above the quote got no extra top room')
 
     def test_reply_below_quote_gets_bottom_room(self):
-        # kept inside the 5:4 cap so the crop is not centre-cropped instead
         quoted = self._bounds(reply_y=1500, strip_y=800)
         self.assertGreater(quoted.bottom_y - 1500, 88,
                            'reply below the quote got no extra bottom room')
@@ -1316,3 +1313,91 @@ class WrapSpacingTests(RenderTestCase):
         self.assertNotIn(' \n', wrapped)
         self.assertNotIn('\n ', wrapped)
         self.assertEqual(wrapped.replace('\n', ' '), 'aaaa bbbb cccc')
+
+
+class QuoteCropTests(RenderTestCase):
+    """A quote shows the band of the original it was made from, frozen in
+    repost_geometry, so recomputing the original's bounds never moves it."""
+
+    def test_frozen_band_wins_over_the_originals_current_bounds(self):
+        parent = self.make_post([text_element('PARENT', color='#000000')], background_color='#00CED1')
+        geometry = {'x': 54, 'y': 600, 'width': 972, 'crop_top': parent.top_y, 'crop_bottom': parent.bottom_y}
+        repost = self.make_post([text_element('REPLY', y=400)], is_repost=True,
+                                original_post=parent, repost_geometry=geometry)
+        before = repost._repost_strip_geometry()
+        Post.objects.filter(pk=parent.pk).update(top_y=0, bottom_y=parent.image_height)
+        repost.original_post.refresh_from_db()
+        self.assertEqual(repost._repost_strip_geometry(), before)
+
+    def test_quote_chain_names_each_level(self):
+        from posts.serializers import PostListSerializer
+        parent = self.make_post([text_element('PARENT', color='#000000')], background_color='#00CED1')
+        repost = self.make_post([text_element('REPLY', y=400)], is_repost=True, original_post=parent,
+                                repost_geometry={'x': 54, 'y': 600, 'width': 972})
+        chain = PostListSerializer(context={}).get_quote_chain(repost)
+        self.assertEqual(chain[0]['post_id'], str(parent.id))
+
+
+class LimitsTests(TestCase):
+    def test_limits_match_shared_file(self):
+        from posts import limits
+        shared = json.loads(open(os.path.join(os.path.dirname(__file__), '..', '..', 'shared', 'limits.json')).read())
+        shared.pop('_comment')
+        mine = {
+            'canvasWidth': limits.CANVAS_WIDTH, 'canvasHeightMin': limits.CANVAS_HEIGHT_MIN,
+            'canvasHeightMax': limits.CANVAS_HEIGHT_MAX, 'fontSizeMin': limits.FONT_SIZE_MIN,
+            'fontSizeMax': limits.FONT_SIZE_MAX, 'maxTextElements': limits.MAX_TEXT_ELEMENTS,
+            'maxPostLength': limits.MAX_POST_LENGTH, 'gradientStopsMin': limits.GRADIENT_STOPS_MIN,
+            'gradientStopsMax': limits.GRADIENT_STOPS_MAX, 'maxColorRuns': limits.MAX_COLOR_RUNS,
+        }
+        self.assertEqual(mine, shared)
+
+
+@override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
+class PayloadValidationTests(TestCase):
+    """The API checks what is drawn, not just the summary the client sends."""
+
+    def payload(self, **overrides):
+        body = {
+            'text_content': 'hello',
+            'text_elements': [{'content': 'hello', 'x': 540, 'y': 1000, 'fontSize': 60,
+                               'color': '#000000', 'fontFamily': 'arial-black'}],
+            'background_color': '#F8F8FF', 'canvas_width': 1080, 'canvas_height': 2340,
+        }
+        body.update(overrides)
+        return body
+
+    def post(self, body):
+        return self.client.post('/api/posts/', data=json.dumps(body), content_type='application/json',
+                                HTTP_X_DEVICE_ID='validation-test-device')
+
+    def test_moderation_reads_the_drawn_text(self):
+        body = self.payload(text_content='harmless', text_elements=[
+            {'content': 'buy spam now', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}])
+        self.assertEqual(self.post(body).status_code, 400)
+
+    def test_length_counts_every_element(self):
+        long = {'content': 'x' * 300, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}
+        self.assertEqual(self.post(self.payload(text_elements=[long, dict(long, y=1400)])).status_code, 400)
+
+    def test_canvas_size_is_bounded(self):
+        self.assertEqual(self.post(self.payload(canvas_height=100_000)).status_code, 400)
+        self.assertEqual(self.post(self.payload(canvas_width=5000)).status_code, 400)
+
+    def test_font_sizes_are_clamped_not_refused(self):
+        response = self.post(self.payload(font_size=5000, text_elements=[
+            {'content': 'big', 'x': 540, 'y': 1000, 'fontSize': 99999, 'color': '#000000'}]))
+        self.assertEqual(response.status_code, 201, response.content)
+        post = Post.objects.get(id=response.json()['id'])
+        self.assertEqual(post.text_elements[0]['fontSize'], 2000)
+
+    def test_bad_colours_and_gradients_are_refused(self):
+        bad = {'content': 'x', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': 'red'}
+        self.assertEqual(self.post(self.payload(text_elements=[bad])).status_code, 400)
+        self.assertEqual(self.post(self.payload(background_gradient=['#FFF', 'nope'])).status_code, 400)
+
+    def test_malformed_quote_geometry_is_dropped_not_a_500(self):
+        parent = self.post(self.payload())
+        body = self.payload(repost_data={'original_post_id': parent.json()['id'],
+                                         'repost_geometry': {'x': 'a', 'width': None}})
+        self.assertEqual(self.post(body).status_code, 201)

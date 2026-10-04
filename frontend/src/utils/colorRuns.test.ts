@@ -53,6 +53,12 @@ test('spans: the rainbow keeps cycling under a range', () => {
   assert.deepEqual(spans.map(s => s.color), ['#1', R, '#3']);
 });
 
+test('caps lock that lengthens a letter shifts later runs with it', () => {
+  // 'ß' uppercases to 'SS': a run on the 'x' after it moves one place on
+  assert.deepEqual(runsToCodePoints('ßx', [{ start: 1, end: 2, color: R }], ch => ch.toUpperCase()),
+    [{ start: 2, end: 3, color: R }]);
+});
+
 test('offsets become code points for the server', () => {
   // the emoji is two UTF-16 units but one code point
   assert.deepEqual(runsToCodePoints('😀ab', [{ start: 2, end: 3, color: R }]), [{ start: 1, end: 2, color: R }]);

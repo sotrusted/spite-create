@@ -1,0 +1,13 @@
+{
+  "_comment": "Limits both sides enforce. The frontend (src/constants/limits.ts) and the backend (posts/limits.py) each have a test that fails if they drift from this file.",
+  "canvasWidth": 1080,
+  "canvasHeightMin": 1080,
+  "canvasHeightMax": 4000,
+  "fontSizeMin": 4,
+  "fontSizeMax": 2000,
+  "maxTextElements": 30,
+  "maxPostLength": 500,
+  "gradientStopsMin": 2,
+  "gradientStopsMax": 8,
+  "maxColorRuns": 200
+}

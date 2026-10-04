@@ -10,6 +10,8 @@ import unicodedata
 import uuid
 import hashlib
 
+from . import limits
+
 # Glyph-bomb protection: strip what breaks rendering or spoofs layout while
 # keeping the ornamental characters the app celebrates. Removes control
 # chars (except newline), zero-width/invisible spam, directional overrides,
@@ -282,7 +284,6 @@ class Post(models.Model):
             )
             img = self._render_canvas(text_elements, include_original=True)
             final_bottom = self._draw_signature(img, final_bottom)
-            final_top, final_bottom = self._cap_bounds_height(final_top, final_bottom)
             self.top_y = int(final_top)
             self.bottom_y = int(final_bottom)
             self._save_render(img, self.rendered_image, f"{self.id}.png")
@@ -290,7 +291,6 @@ class Post(models.Model):
             if self.is_repost and self.original_post:
                 response_img = self._render_canvas(text_elements, include_original=False)
                 response_bottom = self._draw_signature(response_img, response_bottom)
-                response_top, response_bottom = self._cap_bounds_height(response_top, response_bottom)
                 self.response_top_y = int(response_top)
                 self.response_bottom_y = int(response_bottom)
                 self._save_render(response_img, self.response_image, f"{self.id}_response.png")
@@ -513,19 +513,9 @@ class Post(models.Model):
 
         return '\n'.join(wrapped_lines)
 
-    # Feed posts are capped at 5:4 portrait so the collage stays scannable;
-    # taller content is cropped centered on its extent
-    MAX_POST_ASPECT = 1.25
-
-    def _cap_bounds_height(self, top, bottom):
-        canvas_height = int(self.image_height or settings.POST_IMAGE_HEIGHT)
-        max_height = int(round(int(self.image_width) * self.MAX_POST_ASPECT))
-        if bottom - top <= max_height:
-            return (int(top), int(bottom))
-        center = (top + bottom) / 2
-        new_top = max(0, int(center - max_height / 2))
-        new_bottom = min(canvas_height, new_top + max_height)
-        return (new_top, new_bottom)
+    # top_y / bottom_y are the post's whole content extent, never cut down:
+    # a feed card taller than 5:4 is shrunk to fit its box on the client
+    # (frontend utils/displayCrop.ts, MAX_CARD_ASPECT), so nothing is lost.
 
     def _calculate_vertical_bounds(self, text_elements, include_repost=True):
         canvas_height = int(self.image_height or settings.POST_IMAGE_HEIGHT)
@@ -545,13 +535,13 @@ class Post(models.Model):
                     min(canvas_height, int(self.crop_bottom)),
                 )
             else:
-                return self._cap_bounds_height(0, canvas_height)
+                return (0, canvas_height)
 
         has_repost_layer = include_repost and self.is_repost and self._repost_strip_geometry() is not None
         if not text_elements and not has_repost_layer and not self.sticker_elements:
             if crop_band:
-                return self._cap_bounds_height(*crop_band)
-            return self._cap_bounds_height(0, canvas_height)
+                return (int(crop_band[0]), int(crop_band[1]))
+            return (0, canvas_height)
 
         bounds = []
         for element in text_elements:
@@ -605,8 +595,8 @@ class Post(models.Model):
 
         if not bounds:
             if crop_band:
-                return self._cap_bounds_height(*crop_band)
-            return self._cap_bounds_height(0, canvas_height)
+                return (int(crop_band[0]), int(crop_band[1]))
+            return (0, canvas_height)
 
         min_y = min(b[1] for b in bounds)
         max_y = max(b[3] for b in bounds)
@@ -633,7 +623,7 @@ class Post(models.Model):
             if final_bottom <= final_top:
                 final_top = max(0, final_bottom - 1)
 
-        return self._cap_bounds_height(final_top, final_bottom)
+        return (int(final_top), int(final_bottom))
 
     @staticmethod
     def _diagonal_gradient(width, height, stops, band=None):
@@ -800,6 +790,23 @@ class Post(models.Model):
         
         return background
 
+    @staticmethod
+    def quoted_crop(original, geometry):
+        """The band of the original a quote shows: the one it had when it was
+        quoted (frozen in repost_geometry as crop_top/crop_bottom), so the
+        reply's layout never shifts if the original's bounds are recomputed
+        later; the original's current bounds for quotes from before that."""
+        orig_height = original.image_height or settings.POST_IMAGE_HEIGHT
+        geometry = geometry if isinstance(geometry, dict) else {}
+        if geometry.get('crop_bottom') is not None and geometry.get('crop_top') is not None:
+            top, bottom = int(geometry['crop_top']), int(geometry['crop_bottom'])
+        else:
+            top = original.top_y if original.top_y is not None else 0
+            bottom = original.bottom_y if original.bottom_y is not None else orig_height
+        if bottom <= top:
+            top, bottom = 0, orig_height
+        return top, bottom
+
     def _repost_strip_geometry(self):
         """Where the original's cropped content strip lands on this canvas.
 
@@ -826,10 +833,7 @@ class Post(models.Model):
 
         orig_width = original.image_width or settings.POST_IMAGE_WIDTH
         orig_height = original.image_height or settings.POST_IMAGE_HEIGHT
-        crop_top = original.top_y if original.top_y is not None else 0
-        crop_bottom = original.bottom_y if original.bottom_y is not None else orig_height
-        if crop_bottom <= crop_top:
-            crop_top, crop_bottom = 0, orig_height
+        crop_top, crop_bottom = self.quoted_crop(original, self.repost_geometry)
 
         # Quoted strips are inset with a hairline so quotation reads visually;
         # nested composites naturally produce nested frames (chain depth cue)
@@ -934,7 +938,7 @@ class Post(models.Model):
             return None
         return colors
 
-    MAX_COLOR_RUNS = 200
+    MAX_COLOR_RUNS = limits.MAX_COLOR_RUNS
 
     @classmethod
     def _normalize_color_runs(cls, value, length):

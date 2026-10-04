@@ -32,6 +32,11 @@ export const CHROME = {
   // the quote button on cards and detail
   buttonWidth: 38,
   buttonHeight: 34,
+  // the post page's quote button: the page's one action, so bigger, and
+  // raised clear of the home indicator like the composer's Post button
+  detailButtonWidth: 64,
+  detailButtonHeight: 52,
+  detailButtonFontSize: 22,
   // grows the tap target past the drawn box without moving it
   hitSlop: SPACE.sm,
   hairline: '#88888A',

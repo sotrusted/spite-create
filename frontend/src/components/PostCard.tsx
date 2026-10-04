@@ -20,7 +20,10 @@ import { Post, RepostData } from '../types';
 import { absoluteUrl, api, endpoints } from '../config/api';
 import { CanvasState } from '../types/canvas';
 import { contrastRatio, hexToRgb } from '../utils/contrast';
-import { displayCropBounds } from '../utils/displayCrop';
+import { feedCardLayout, canvasPointIn, gradientEndpoints, CARD } from '../utils/cardLayout';
+import { quotedPostAt } from '../utils/hitTest';
+import { GESTURES } from '../constants/gestures';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -100,7 +103,7 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
   };
 
   // Captured at onPressIn: locationX/Y are unreliable in onPress events
-  const pressLocation = { current: { x: 0, y: 0 } } as { current: { x: number; y: number } };
+  const pressLocation = React.useRef({ x: 0, y: 0 });
   // Double tap quotes the post. A single tap's action (collapse, when that
   // feature is on) waits out the double-tap window so the two don't both
   // fire; with collapse parked the wait costs nothing.
@@ -117,7 +120,6 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
     ]).start();
   };
 
-  const DOUBLE_TAP_MS = 260;
   const tapTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   React.useEffect(() => () => {
     if (tapTimer.current) clearTimeout(tapTimer.current);
@@ -128,18 +130,31 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
     if (tapTimer.current) {
       clearTimeout(tapTimer.current);
       tapTimer.current = null;
-      handleRepost();
+      const quoted = tappedPostId();
+      if (quoted) quotePostById(quoted);
+      else handleRepost();
       return;
     }
     tapTimer.current = setTimeout(() => {
       tapTimer.current = null;
       handleSingleTap();
-    }, DOUBLE_TAP_MS);
+    }, GESTURES.tap.doubleTapWindowMs);
+  };
+
+  // The post a tap means: a quoted post inside this one when the tap is on
+  // its strip (deepest wins), else this post. The press location is in the
+  // card's box, mapped back to canvas px through the card layout.
+  const tappedPostId = (): string | null => {
+    const layout = feedCardLayout(post, screenWidth);
+    if (!layout || collapsedAt !== null) return null;
+    return quotedPostAt(chain, canvasPointIn(layout, pressLocation.current));
   };
 
   const handleSingleTap = () => {
     if (!FEATURES.collapsePosts) {
-      openDetail();
+      const quoted = tappedPostId();
+      if (quoted) (navigation as any).navigate('PostDetail', { postId: quoted });
+      else openDetail();
       return;
     }
     // locationX/Y are relative to the touched child - the full-canvas Image -
@@ -167,6 +182,20 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
       }
     }
     setCollapsedAt(0);
+  };
+
+  // A quoted post is only an id here: fetch it, then quote it
+  const quotePostById = async (id: string) => {
+    try {
+      const { data: original } = await api.get<Post>(endpoints.getPost(id));
+      if (!original.rendered_image_url) return;
+      (navigation as any).navigate('PostComposer', {
+        repostData: { originalPost: original, screenshotUri: original.rendered_image_url },
+      });
+    } catch (error) {
+      console.log('Quoting the quoted post failed:', error);
+      Alert.alert('Could not open that post', 'Try again in a moment.');
+    }
   };
 
   const openDetail = () => {
@@ -402,23 +431,37 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
       );
     }
 
-    const canvasWidth = post.image_width && post.image_width > 0 ? post.image_width : null;
-    const canvasHeight = post.image_height && post.image_height > 0 ? post.image_height : null;
-    const topY = typeof displayTopY === 'number' ? displayTopY : null;
-    const bottomY = typeof displayBottomY === 'number' ? displayBottomY : null;
-
-    if (canvasWidth && canvasHeight && topY !== null && bottomY !== null && bottomY > topY) {
-      const scale = screenWidth / canvasWidth;
-      const crop = displayCropBounds(topY, bottomY, canvasWidth, canvasHeight, screenWidth, post.content_boxes);
-      const croppedHeight = Math.max(crop.bottomY - crop.topY, 1);
+    // The content band, shrunk to fit a 5:4 box when taller (never cropped)
+    const layout = feedCardLayout(post, screenWidth);
+    if (layout) {
+      const gradient = layout.shrunk && post.background_gradient && post.background_gradient.length > 1
+        ? post.background_gradient : null;
       return (
-        <View style={[styles.postImageWrapper, { height: croppedHeight * scale }]}>
+        // box-only: every touch lands on this box, so press locations are in
+        // its coordinates (see tappedPostId)
+        <View
+          pointerEvents="box-only"
+          style={[styles.postImageWrapper, {
+            height: layout.height,
+            backgroundColor: post.background_color || Colors.surface,
+          }]}
+        >
+          {gradient && (
+            <LinearGradient
+              colors={gradient as [string, string, ...string[]]}
+              {...gradientEndpoints(post, layout, { width: layout.width, height: layout.height })}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
           <ExpoImage
             source={{ uri: absoluteUrl(displayUri) }}
-            style={[styles.postImage, {
-              height: canvasHeight * scale,
-              transform: [{ translateY: -crop.topY * scale }],
-            }]}
+            style={{
+              position: 'absolute',
+              left: layout.imageLeft,
+              top: layout.imageTop,
+              width: layout.imageWidth,
+              height: layout.imageHeight,
+            }}
             contentFit="cover"
             cachePolicy="memory-disk"
             onError={(event) => console.log('Post image error:', event.error)}
@@ -428,7 +471,7 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
     }
 
     return (
-      <View style={[styles.postImageWrapper, { aspectRatio: imageAspectRatio, maxHeight: screenWidth * 1.5 }]}>
+      <View style={[styles.postImageWrapper, { aspectRatio: imageAspectRatio, maxHeight: screenWidth * CARD.maxAspect }]}>
         <ExpoImage
           source={{ uri: absoluteUrl(displayUri) }}
           style={[styles.postImage, { aspectRatio: imageAspectRatio }]}
@@ -556,7 +599,7 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
             style={[styles.collapsedChip, { backgroundColor: post.background_color || Colors.surface }]}
             onPress={() => setCollapsedAt(lockLevel)}
             onLongPress={handleRepost}
-            delayLongPress={400}
+            delayLongPress={GESTURES.longPress.cardMs}
             activeOpacity={0.85}
           >
             <Text
@@ -581,7 +624,7 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
             }}
             onPress={handleBodyPress}
             onLongPress={handleRepost}
-            delayLongPress={400}
+            delayLongPress={GESTURES.longPress.cardMs}
             activeOpacity={0.95}
           >
             {renderImage()}

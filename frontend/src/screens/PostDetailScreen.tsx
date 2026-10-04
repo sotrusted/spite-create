@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -17,10 +17,13 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
-import { displayCropBounds } from '../utils/displayCrop';
-import { gradientBandPx } from '../utils/gradient';
 import { LinearGradient } from 'expo-linear-gradient';
+import { TapGestureHandler, State as GestureState } from 'react-native-gesture-handler';
 import { Post } from '../types';
+import { fullPostLayout, gradientEndpoints, canvasPointIn, CardLayout } from '../utils/cardLayout';
+import { quotedPostAt } from '../utils/hitTest';
+import { GESTURES } from '../constants/gestures';
+import { TEXT_WRAP_FRACTION } from '../utils/buildPostPayload';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -44,71 +47,114 @@ export default function PostDetailScreen() {
       .catch(() => { if (!seed) setError(true); });
   }, [postId, seed]);
 
-  const handleRepost = () => {
-    if (!post?.rendered_image_url) return;
+  const quote = (original: Post) => {
+    if (!original.rendered_image_url) return;
     (navigation as any).navigate('PostComposer', {
-      repostData: {
-        originalPost: post,
-        screenshotUri: post.rendered_image_url,
-      },
+      repostData: { originalPost: original, screenshotUri: original.rendered_image_url },
     });
   };
+  const handleRepost = () => {
+    if (post) quote(post);
+  };
 
-  const renderImage = () => {
+  // A tap's post: one quoted inside this one when the tap is on its strip
+  // (deepest wins), else this post. x/y are in the post box's own
+  // coordinates (the gesture handler reports them unzoomed).
+  const postAt = (layout: CardLayout, x: number, y: number) =>
+    quotedPostAt(post?.quote_chain ?? [], canvasPointIn(layout, { x, y }));
+  const handleTap = (layout: CardLayout, x: number, y: number) => {
+    const id = postAt(layout, x, y);
+    if (id) (navigation as any).push('PostDetail', { postId: id });
+  };
+  const handleDoubleTap = async (layout: CardLayout, x: number, y: number) => {
+    const id = postAt(layout, x, y);
+    if (!id) {
+      handleRepost();
+      return;
+    }
+    try {
+      const { data } = await api.get<Post>(endpoints.getPost(id));
+      quote(data);
+    } catch {
+      // the tap simply does nothing if the quoted post cannot be fetched
+    }
+  };
+  const doubleTapRef = useRef(null);
+
+  // The whole post, full width, never cropped (fullPostLayout); tall posts
+  // scroll, and the stage zooms. Taps and double taps are gesture handlers
+  // so their coordinates are the box's own, whatever the zoom.
+  const renderImage = (layout: CardLayout | null) => {
     if (!post?.rendered_image_url) return null;
-    const canvasWidth = post.image_width || 0;
-    const canvasHeight = post.image_height || 0;
-    const topY = typeof post.top_y === 'number' ? post.top_y : null;
-    const bottomY = typeof post.bottom_y === 'number' ? post.bottom_y : null;
-
-    if (canvasWidth > 0 && canvasHeight > 0 && topY !== null && bottomY !== null && bottomY > topY) {
-      const scale = screenWidth / canvasWidth;
-      const crop = displayCropBounds(topY, bottomY, canvasWidth, canvasHeight, screenWidth);
+    if (!layout) {
       return (
-        <View style={{ width: '100%', height: (crop.bottomY - crop.topY) * scale, overflow: 'hidden' }}>
-          <Image
-            source={{ uri: absoluteUrl(post.rendered_image_url) }}
-            style={{ width: '100%', height: canvasHeight * scale, transform: [{ translateY: -crop.topY * scale }] }}
-            resizeMode="cover"
-          />
-          {/* Invisible selectable text laid over the rendered text: we know
-              the exact content and geometry, so selection works word-by-word
-              on what looks like the image */}
-          {(post as any).text_elements?.map((el: any, index: number) => {
-            if (!el?.content?.trim()) return null;
-            const x = (el.x || 0) * scale;
-            const y = ((el.y || 0) - crop.topY) * scale;
-            const fontSize = Math.max(8, (el.fontSize || 24) * scale);
-            const maxWidth = screenWidth * 0.9;
-            return (
-              <Text
-                key={index}
-                selectable
-                style={{
-                  position: 'absolute',
-                  left: Math.max(0, x - maxWidth / 2),
-                  top: y - fontSize * 0.75,
-                  width: maxWidth,
-                  textAlign: (el.align || 'center') as any,
-                  fontSize,
-                  letterSpacing: (el.letterSpacing || 0) * scale,
-                  color: 'transparent',
-                  lineHeight: fontSize * 1.15,
-                }}
-              >
-                {el.content}
-              </Text>
-            );
-          })}
-        </View>
+        <Image
+          source={{ uri: absoluteUrl(post.rendered_image_url) }}
+          style={{ width: '100%', aspectRatio: 0.8 }}
+          resizeMode="contain"
+        />
       );
     }
+    const { scale, crop } = layout;
     return (
-      <Image
-        source={{ uri: absoluteUrl(post.rendered_image_url) }}
-        style={{ width: '100%', aspectRatio: 0.8 }}
-        resizeMode="contain"
-      />
+      <TapGestureHandler
+        waitFor={doubleTapRef}
+        onHandlerStateChange={e => {
+          if (e.nativeEvent.state === GestureState.ACTIVE) handleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
+        }}
+      >
+        <TapGestureHandler
+          ref={doubleTapRef}
+          numberOfTaps={2}
+          maxDelayMs={GESTURES.tap.doubleTapWindowMs}
+          onHandlerStateChange={e => {
+            if (e.nativeEvent.state === GestureState.ACTIVE) handleDoubleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
+          }}
+        >
+          <View style={{ width: layout.width, height: layout.height, overflow: 'hidden' }}>
+            <Image
+              source={{ uri: absoluteUrl(post.rendered_image_url) }}
+              style={{
+                position: 'absolute',
+                left: layout.imageLeft,
+                top: layout.imageTop,
+                width: layout.imageWidth,
+                height: layout.imageHeight,
+              }}
+              resizeMode="cover"
+            />
+            {/* Invisible selectable text laid over the rendered text: we know
+                the exact content and geometry, so selection works word-by-word
+                on what looks like the image */}
+            {(post as any).text_elements?.map((el: any, index: number) => {
+              if (!el?.content?.trim()) return null;
+              const x = (el.x || 0) * scale;
+              const y = ((el.y || 0) - crop.topY) * scale;
+              const fontSize = Math.max(8, (el.fontSize || 24) * scale);
+              const maxWidth = layout.width * TEXT_WRAP_FRACTION;
+              return (
+                <Text
+                  key={index}
+                  selectable
+                  style={{
+                    position: 'absolute',
+                    left: Math.max(0, x - maxWidth / 2),
+                    top: y - fontSize * 0.75,
+                    width: maxWidth,
+                    textAlign: (el.align || 'center') as any,
+                    fontSize,
+                    letterSpacing: (el.letterSpacing || 0) * scale,
+                    color: 'transparent',
+                    lineHeight: fontSize * 1.15,
+                  }}
+                >
+                  {el.content}
+                </Text>
+              );
+            })}
+          </View>
+        </TapGestureHandler>
+      </TapGestureHandler>
     );
   };
 
@@ -135,28 +181,21 @@ export default function PostDetailScreen() {
   const background = post?.background_color || Colors.background;
   const chrome = chromeColor(background);
 
-  // A gradient post's image is only the cropped band of its gradient, so a
-  // flat full-bleed colour around it showed a hard edge. Instead the same
-  // gradient fills the stage: its line (the band's top-left to bottom-right,
-  // canvas px) is mapped to screen points with the image's own scale and
-  // vertical centring, so where they overlap they are the same pixels.
+  const layout = post ? fullPostLayout(post, screenWidth) : null;
+  // Short posts sit centred in the stage; taller ones start at its top
+  const boxTop = layout && stageHeight ? Math.max(0, (stageHeight - layout.height) / 2) : 0;
+
+  // A gradient post's image is only its band of the gradient, so the same
+  // gradient fills the stage around it, mapped through the image's placement
+  // so where they overlap they are the same pixels.
   const renderGradient = () => {
     const stops = post?.background_gradient;
-    const canvasWidth = post?.image_width || 0;
-    const canvasHeight = post?.image_height || 0;
-    if (!post || !stops || stops.length < 2 || !stageHeight || !canvasWidth || !canvasHeight) return null;
-    if (typeof post.top_y !== 'number' || typeof post.bottom_y !== 'number') return null;
-    const scale = screenWidth / canvasWidth;
-    const crop = displayCropBounds(post.top_y, post.bottom_y, canvasWidth, canvasHeight, screenWidth);
-    const imageTop = (stageHeight - (crop.bottomY - crop.topY) * scale) / 2;
-    const band = gradientBandPx(post.top_y, post.bottom_y, canvasHeight);
-    const toUnitY = (canvasY: number) => (imageTop + (canvasY - crop.topY) * scale) / stageHeight;
+    if (!post || !layout || !stops || stops.length < 2 || !stageHeight) return null;
     return (
       <LinearGradient
         pointerEvents="none"
         colors={stops as [string, string, ...string[]]}
-        start={{ x: 0, y: toUnitY(band.top) }}
-        end={{ x: 1, y: toUnitY(band.bottom) }}
+        {...gradientEndpoints(post, layout, { width: screenWidth, height: stageHeight, top: boxTop })}
         style={StyleSheet.absoluteFill}
       />
     );
@@ -183,7 +222,18 @@ export default function PostDetailScreen() {
           {/* Full bleed: the post floats in its own colour, vertically centred */}
           <View style={styles.stage} onLayout={e => setStageHeight(e.nativeEvent.layout.height)}>
             {renderGradient()}
-            {renderImage()}
+            <ScrollView
+              style={StyleSheet.absoluteFill}
+              // a short post sits centred (boxTop), a tall one starts at the top
+              contentContainerStyle={{ paddingTop: boxTop, paddingBottom: boxTop }}
+              maximumZoomScale={GESTURES.zoom.maxScale}
+              minimumZoomScale={1}
+              bouncesZoom
+              showsVerticalScrollIndicator={false}
+              showsHorizontalScrollIndicator={false}
+            >
+              {renderImage(layout)}
+            </ScrollView>
           </View>
 
           <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>
@@ -218,10 +268,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  // The post floats in its own colour, centred vertically, edge to edge
+  // The post floats in its own colour, edge to edge
   stage: {
     flex: 1,
-    justifyContent: 'center',
   },
   loading: {
     flex: 1,
@@ -255,9 +304,9 @@ const styles = StyleSheet.create({
   quoteButton: {
     position: 'absolute',
     right: CHROME.inset,
-    bottom: CHROME.inset,
-    width: CHROME.buttonWidth,
-    height: CHROME.buttonHeight,
+    bottom: CHROME.bottomInset,
+    width: CHROME.detailButtonWidth,
+    height: CHROME.detailButtonHeight,
     borderWidth: 1,
     borderColor: CHROME.hairline,
     alignItems: 'center',
@@ -267,7 +316,7 @@ const styles = StyleSheet.create({
   quoteButtonText: {
     fontFamily: 'CourierPrime',
     fontWeight: '700',
-    fontSize: 15,
+    fontSize: CHROME.detailButtonFontSize,
     includeFontPadding: false,
     textAlignVertical: 'center',
   },

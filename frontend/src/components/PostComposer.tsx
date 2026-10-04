@@ -49,6 +49,8 @@ import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { applyColorToRange, adjustRuns, colorSpans } from '../utils/colorRuns';
+import { GESTURES } from '../constants/gestures';
+import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
 import {
   Draft, DraftTarget, saveDraft, saveDraftThumb, removeDraft, listDrafts, onDraftsChanged,
@@ -238,7 +240,16 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
 export default function PostComposer({ onPost, onClose, repostData, restoreState, draftTarget, onOpenDraft }: Props) {
   // A restore replaces every default below; rescaled if this screen differs
   // from the one it was composed on. Read once - it seeds initial state only.
-  const restored = useRef(restoreState ? fromCanvasState(restoreState, screenWidth) : null).current;
+  const restored = useRef((() => {
+    if (!restoreState) return null;
+    try {
+      return fromCanvasState(restoreState, screenWidth);
+    } catch (error) {
+      // a canvas saved by a newer build: open blank rather than crash
+      console.log('Could not restore canvas:', error);
+      return null;
+    }
+  })()).current;
   // Resolved before the first text element so its ink can be checked against it
   const initialBackground = repostData?.originalPost?.background_color
     ? getNextBackgroundColor(repostData.originalPost.background_color)
@@ -1749,11 +1760,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // the last frame's value - compounding per-frame caused jitter and stuck
   // clamping at the extremes
   //
-  // Like the drag's minDist, a pinch has to mean it: fingers resting or
-  // wobbling on the canvas change nothing until the spread has changed by
-  // PINCH_DEAD_ZONE, and from there scaling runs from that point, so the size
-  // never jumps by the dead zone it just crossed.
-  const PINCH_DEAD_ZONE = 0.06;
+  // Like the drag's minimum distance, a pinch has to mean it: nothing changes
+  // until the spread has changed by GESTURES.pinch.deadZone, and from there
+  // scaling runs from that point, so the size never jumps by the dead zone.
   const textPinch = useRef<Record<string, { base: number; engagedAt: number | null }>>({});
   const handlePinchGesture = (event: any, elementId: string) => {
     const { state, scale } = event.nativeEvent;
@@ -1767,15 +1776,26 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     const pinch = textPinch.current[elementId] ??= { base: element?.scale ?? 1, engagedAt: null };
     if (state !== State.ACTIVE || !scale) return;
     if (pinch.engagedAt === null) {
-      if (Math.abs(Math.log(scale)) < Math.log(1 + PINCH_DEAD_ZONE)) return;
+      if (Math.abs(Math.log(scale)) < Math.log(1 + GESTURES.pinch.deadZone)) return;
       pinch.engagedAt = scale;
     }
     const engagedAt = pinch.engagedAt ?? scale;
     updateTextElement(elementId, {
-      scale: Math.max(0.3, Math.min(5.0, pinch.base * (scale / engagedAt))),
+      scale: Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale, pinch.base * (scale / engagedAt))),
     });
   };
 
+
+  // Text blocks as drawn (scale applied), for pinch targeting
+  const pinchCandidates = (): PinchCandidate[] => textElements
+    .filter(el => (getDisplayText(el) || '').trim() && textInkSizes[el.id])
+    .map(el => {
+      const width = textInkSizes[el.id].width * el.scale;
+      const height = textInkSizes[el.id].height * el.scale;
+      return { id: el.id, box: { x: el.x - width / 2, y: el.y - height / 2, width, height } };
+    });
+  // undefined: not resolved yet this gesture; null: no text target
+  const pinchTargetRef = useRef<string | null | undefined>(undefined);
 
   // Unified gesture handler that detects target and action
   const handleUnifiedGesture = (event: any, gestureType: 'pan' | 'pinch') => {
@@ -1902,14 +1922,26 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
         }
       }
       
-      // Anywhere on the canvas, a pinch resizes the selected text - two
-      // fingers on a short line of text is too fiddly to ask for
-      const pinchedText = !isEditingText && !selectedStickerId
-        ? textElements.find(el => el.id === selectedTextId && el.content.trim())
-        : undefined;
-      if (pinchedText) {
-        handlePinchGesture(event, pinchedText.id);
-        return;
+      // Text: the element the pinch is centred on, each one a target at
+      // least GESTURES.pinch.minTarget big (see pickPinchTarget), else the
+      // selected one. Resolved once per gesture, at its first movement, when
+      // the focal point between the two fingers is known.
+      if (!isEditingText && !selectedStickerId) {
+        const { focalX, focalY } = event.nativeEvent;
+        if (pinchTargetRef.current === undefined && state === State.ACTIVE) {
+          const target = pickPinchTarget(pinchCandidates(), { x: focalX, y: focalY },
+                                         selectedTextId || null, GESTURES.pinch);
+          pinchTargetRef.current = target;
+          if (target && target !== selectedTextId) setSelectedTextId(target);
+        }
+        const target = pinchTargetRef.current;
+        if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+          pinchTargetRef.current = undefined;
+        }
+        if (target) {
+          handlePinchGesture(event, target);
+          return;
+        }
       }
 
       // Check if we're pinching the image background
@@ -1997,19 +2029,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   const renderEditableText = () => {
     return textElements.map((element) => {
       return (
-        <PinchGestureHandler
-          key={`pinch-${element.id}`}
-          onGestureEvent={(event) => handlePinchGesture(event, element.id)}
-          onHandlerStateChange={(event) => handlePinchGesture(event, element.id)}
-          enabled={!isEditingText}
-        >
           <AnimatedReanimated.View
+            key={`text-${element.id}`}
             style={[
-              styles.textElementTouchArea, // Much larger touch area for pinch
+              styles.textElementTouchArea,
               {
                 // Center the measured box on the (x, y) anchor
-                left: element.x - (elementSizes[element.id]?.width ?? 120) / 2,
-                top: element.y - (elementSizes[element.id]?.height ?? 120) / 2,
+                left: element.x - (elementSizes[element.id]?.width ?? GESTURES.touch.minElementTarget) / 2,
+                top: element.y - (elementSizes[element.id]?.height ?? GESTURES.touch.minElementTarget) / 2,
               },
               selectedTextId === element.id ? deletionAnimatedStyle : {},
             ]}
@@ -2032,7 +2059,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               onGestureEvent={(event) => handlePanGesture(event, element.id)}
               onHandlerStateChange={(event) => handlePanStateChange(event, element.id)}
               enabled={!isEditingText}
-              minDist={4}
+              minDist={GESTURES.drag.elementMinDistance}
             >
               <AnimatedReanimated.View style={styles.textElement}>
                 {isEditingText && selectedTextId === element.id ? (
@@ -2067,7 +2094,6 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               </AnimatedReanimated.View>
             </PanGestureHandler>
           </AnimatedReanimated.View>
-        </PinchGestureHandler>
       );
     });
   };
@@ -2258,7 +2284,6 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   // Projected feed crop for the current canvas, mirroring the backend's
   // bounds math: content extent + margin, capped at the max post aspect
   // (5:4 portrait) centered on the content
-  const MAX_POST_ASPECT = 1.25; // height <= 1.25 x width
   const getProjectedCropBounds = () => {
     const measured = textElements.filter(
       el => el.content.trim() && textInkSizes[el.id]
@@ -2298,12 +2323,8 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     top = Math.max(0, top - margin - topExtra);
     bottom = Math.min(screenHeight, bottom + margin + bottomExtra);
 
-    const maxHeight = screenWidth * MAX_POST_ASPECT;
-    if (bottom - top > maxHeight) {
-      const center = (top + bottom) / 2;
-      top = Math.max(0, center - maxHeight / 2);
-      bottom = Math.min(screenHeight, top + maxHeight);
-    }
+    // No height cap: like the server's bounds this is the whole content
+    // extent; the feed shrinks a card taller than CARD.maxAspect to fit
 
     return { top, bottom };
   };
@@ -2315,11 +2336,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   const gradientBand = () => {
     let bounds = getProjectedCropBounds();
     if (!bounds) {
-      // Nothing placed yet: the server crops an empty canvas to the centred
-      // 5:4 cap
-      const maxHeight = Math.min(screenWidth * MAX_POST_ASPECT, screenHeight);
-      const top = (screenHeight - maxHeight) / 2;
-      bounds = { top, bottom: top + maxHeight };
+      // Nothing placed yet: the server's bounds for an empty canvas are the
+      // whole canvas
+      bounds = { top: 0, bottom: screenHeight };
     }
     const k = CANVAS_WIDTH / screenWidth;
     const band = gradientBandPx(bounds.top * k, bounds.bottom * k, screenHeight * k);
@@ -2431,7 +2450,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
             // A finger almost never stays still. Without a movement threshold
             // this pan activated on the first pixel of drift and swallowed the
             // tap, so placing text demanded an unnaturally precise press.
-            minDist={28}
+            minDist={GESTURES.drag.canvasMinDistance}
           >
             <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
               {/* Repost image layer */}
@@ -2820,7 +2839,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                       style={styles.draftCard}
                       onPress={() => pick(draft)}
                       onLongPress={() => confirmDelete(draft)}
-                      delayLongPress={350}
+                      delayLongPress={GESTURES.longPress.controlMs}
                     >
                       {renderDraftCard(draft)}
                     </TouchableOpacity>
@@ -2876,7 +2895,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
             style={styles.topMenuButton}
             onPress={cycleBackgroundColor}
             onLongPress={() => setColorGridMode('background')}
-            delayLongPress={350}
+            delayLongPress={GESTURES.longPress.controlMs}
           >
             {backgroundGradient.length > 0 ? (
               <LinearGradient {...DIAGONAL} colors={backgroundGradient as [string, string]} style={styles.backgroundPreview} />
@@ -3005,7 +3024,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
             style={styles.controlOption}
             onPress={cycleFont}
             onLongPress={() => setFontGridOpen(true)}
-            delayLongPress={350}
+            delayLongPress={GESTURES.longPress.controlMs}
           >
             <Text
               style={[styles.controlFontLabel, onBarBaseline(fontConfig.fontFamily, 22), {
@@ -3049,7 +3068,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
             style={[styles.controlOption, selectedRange() && styles.controlOptionActive]}
             onPress={() => { if (!openRangeColors()) cycleColor(); }}
             onLongPress={() => { if (!openRangeColors()) setColorGridMode('text'); }}
-            delayLongPress={350}
+            delayLongPress={GESTURES.longPress.controlMs}
           >
             {el.alternateColors?.length === 2 ? (
               <View style={styles.controlColorSwatch}>
@@ -3575,8 +3594,10 @@ const styles = StyleSheet.create({
   },
   textElementTouchArea: {
     position: 'absolute',
-    minWidth: 120, // Much larger touch area for easier pinch gestures
-    minHeight: 120,
+    // a short word is still comfortable to tap and drag (pinching uses its
+    // own, larger targets: pickPinchTarget)
+    minWidth: GESTURES.touch.minElementTarget,
+    minHeight: GESTURES.touch.minElementTarget,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 15,

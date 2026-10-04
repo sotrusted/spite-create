@@ -126,9 +126,24 @@ export function colorSpans(
   return spans;
 }
 
-// For the server: offsets in code points (an emoji is one, not two)
-export function runsToCodePoints(text: string, runs: ColorRun[] | undefined): ColorRun[] {
+// For the server: offsets in code points (an emoji is one, not two), into
+// the text as sent - `transform` is what the payload does to each character
+// first (caps lock: 'ß' becomes 'SS', two letters, so later runs shift)
+export function runsToCodePoints(
+  text: string,
+  runs: ColorRun[] | undefined,
+  transform: (ch: string) => string = ch => ch,
+): ColorRun[] {
   if (!runs?.length) return [];
-  const toCodePoint = (offset: number) => Array.from(text.slice(0, offset)).length;
-  return runs.map(r => ({ start: toCodePoint(r.start), end: toCodePoint(r.end), color: r.color }));
+  // sent-text code point index at each UTF-16 offset of the typed text
+  const at = new Map<number, number>([[0, 0]]);
+  let utf16 = 0;
+  let sent = 0;
+  for (const ch of text) {
+    utf16 += ch.length;
+    sent += Array.from(transform(ch)).length;
+    at.set(utf16, sent);
+  }
+  const map = (offset: number) => at.get(Math.min(offset, text.length)) ?? sent;
+  return runs.map(r => ({ start: map(r.start), end: map(r.end), color: r.color }));
 }

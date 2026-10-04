@@ -50,10 +50,7 @@ export const displayCropBounds = (
     const inColumn = contentBoxes.filter(
       b => b[2] > left - gutter && b[0] < right + gutter && b[1] < bottom,
     );
-    // Content running past the crop edge (a capped tall post) cannot be
-    // cleared without breaking the cap; leave those cards as they are.
-    const cutOff = inColumn.some(b => b[3] > bottom);
-    if (inColumn.length && !cutOff) {
+    if (inColumn.length) {
       const lowest = Math.max(...inColumn.map(b => b[3]));
       const needed = lowest + gutter + (CHROME.buttonHeight + CHROME.inset) * k;
       if (needed > bottom) bottom = Math.min(canvasHeight, needed);

@@ -30,7 +30,7 @@ export interface Post {
   font_size: number;
   text_color: string;
   background_color: string;
-  background_gradient?: string[];
+  background_gradient?: string[] | null;
   has_outline: boolean;
   outline_color: string;
   has_text_background?: boolean;
@@ -39,12 +39,13 @@ export interface Post {
   created_at: string;
   view_count: number;
   is_repost?: boolean;
-  original_post?: Post;
+  // the quoted post's id (the serializers send the key, not the object)
+  original_post?: string | null;
   repost_screenshot_url?: string;
   image_width?: number;
   image_height?: number;
-  top_y?: number;
-  bottom_y?: number;
+  top_y?: number | null;
+  bottom_y?: number | null;
   // [[x0, y0, x1, y1], ...] canvas px of every piece of content; the card
   // keeps the [Aa] off them (utils/displayCrop)
   content_boxes?: number[][] | null;
@@ -69,6 +70,8 @@ export interface Post {
   // Full quoted-ancestor chain with rects in THIS post's canvas coords,
   // enabling per-level collapse
   quote_chain?: Array<{
+    // the quoted post at this level (tap opens it, double tap quotes it)
+    post_id?: string;
     rect: { x: number; y: number; width: number; height: number };
     strip: {
       url: string | null;
@@ -162,7 +165,7 @@ export interface FeedResponse {
 export type RootStackParamList = {
   Main: undefined;
   PostComposer: { repostData?: RepostData; restoreState?: CanvasState };
-  PostDetail: { postId: string };
+  PostDetail: { postId: string; post?: Post };
   Profile: undefined;
   Settings: undefined;
 };

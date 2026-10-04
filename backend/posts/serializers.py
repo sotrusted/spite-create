@@ -1,4 +1,6 @@
 import json
+import math
+import re
 from rest_framework import serializers
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -6,7 +8,10 @@ from .models import Post, PostReport
 from users.models import User, UserReport, MutedUser
 
 
+from . import limits
+
 CANVAS_STATE_VERSIONS = {1}
+HEX_COLOR = re.compile(r'^#[0-9A-Fa-f]{6}$')
 CANVAS_STATE_MAX_BYTES = 100_000
 
 
@@ -75,6 +80,94 @@ class PostSerializer(serializers.ModelSerializer):
             return obj.repost_screenshot.url
         return None
     
+    def validate_canvas_width(self, value):
+        if value != limits.CANVAS_WIDTH:
+            raise serializers.ValidationError(f'canvas_width must be {limits.CANVAS_WIDTH}')
+        return value
+
+    def validate_canvas_height(self, value):
+        if not limits.CANVAS_HEIGHT_MIN <= value <= limits.CANVAS_HEIGHT_MAX:
+            raise serializers.ValidationError(
+                f'canvas_height must be {limits.CANVAS_HEIGHT_MIN}-{limits.CANVAS_HEIGHT_MAX}')
+        return value
+
+    def validate_text_elements(self, value):
+        """What is actually drawn: each element's text is sanitised, sizes are
+        clamped to the drawable range, colours must be #RRGGBB, fonts must be
+        ones the server has. Moderation and the length limit then run on the
+        drawn text (validate builds text_content from it)."""
+        from .models import _sanitize_glyphs
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError('text_elements must be a list')
+        if len(value) > limits.MAX_TEXT_ELEMENTS:
+            raise serializers.ValidationError(f'At most {limits.MAX_TEXT_ELEMENTS} text elements')
+        fonts = {key for key, _label in Post.FONT_CHOICES}
+        cleaned = []
+        for element in value:
+            if not isinstance(element, dict) or not isinstance(element.get('content', ''), str):
+                raise serializers.ValidationError('Each text element must be an object with text content')
+            element = dict(element)
+            element['content'] = _sanitize_glyphs(element.get('content') or '')
+            try:
+                size = float(element.get('fontSize', 24))
+                for axis in ('x', 'y'):
+                    if axis in element:
+                        element[axis] = float(element[axis])
+                        if not math.isfinite(element[axis]):
+                            raise ValueError
+            except (TypeError, ValueError):
+                raise serializers.ValidationError('Text element sizes and positions must be numbers')
+            if not math.isfinite(size):
+                raise serializers.ValidationError('Text element sizes must be numbers')
+            element['fontSize'] = min(max(size, limits.FONT_SIZE_MIN), limits.FONT_SIZE_MAX)
+            for key in ('color', 'backgroundColor'):
+                if key in element and not (isinstance(element[key], str) and HEX_COLOR.match(element[key])):
+                    raise serializers.ValidationError(f'Text element {key} must be #RRGGBB')
+            if element.get('fontFamily') not in fonts:
+                element['fontFamily'] = 'arial-black'
+            runs = element.get('colorRuns')
+            if runs is not None and (not isinstance(runs, list) or len(runs) > limits.MAX_COLOR_RUNS):
+                raise serializers.ValidationError('colorRuns must be a list of at most '
+                                                  f'{limits.MAX_COLOR_RUNS} ranges')
+            cleaned.append(element)
+        return cleaned
+
+    def validate_background_gradient(self, value):
+        if value in (None, []):
+            return value
+        if (
+            not isinstance(value, list)
+            or not limits.GRADIENT_STOPS_MIN <= len(value) <= limits.GRADIENT_STOPS_MAX
+            or not all(isinstance(c, str) and HEX_COLOR.match(c) for c in value)
+        ):
+            raise serializers.ValidationError(
+                f'background_gradient must be {limits.GRADIENT_STOPS_MIN}-'
+                f'{limits.GRADIENT_STOPS_MAX} #RRGGBB colours')
+        return value
+
+    def validate_repost_data(self, value):
+        """{original_post_id, repost_geometry?: {x, y, width}} - numbers, or
+        the geometry is dropped (the server then places the quote itself)."""
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('repost_data must be an object')
+        geometry = value.get('repost_geometry')
+        if geometry is not None:
+            try:
+                value['repost_geometry'] = {
+                    'x': int(geometry.get('x', 0)),
+                    'y': int(geometry.get('y', 0)),
+                    'width': int(geometry['width']),
+                }
+                if value['repost_geometry']['width'] <= 0:
+                    raise ValueError
+            except (AttributeError, KeyError, TypeError, ValueError):
+                value['repost_geometry'] = None
+        return value
+
     def validate_canvas_state(self, value):
         if value is None:
             return None
@@ -127,6 +220,11 @@ class PostSerializer(serializers.ModelSerializer):
                     'y': int(geometry.get('y', 0)),
                     'width': int(geometry['width']),
                 }
+                # The band of the original this quote shows, as of now
+                original = validated_data.get('original_post')
+                if original:
+                    top, bottom = Post.quoted_crop(original, None)
+                    validated_data['repost_geometry'].update(crop_top=top, crop_bottom=bottom)
 
         # A repost may not reuse its parent's background color: the quote
         # chip carries that color, so the repost must differ for it to read.
@@ -148,7 +246,9 @@ class PostSerializer(serializers.ModelSerializer):
 
         provided_is_signed = None
         if hasattr(self, 'initial_data') and 'is_signed' in self.initial_data:
-            provided_is_signed = bool(self.initial_data.get('is_signed'))
+            raw = self.initial_data.get('is_signed')
+            # JSON true/false; a string "false" must not read as true
+            provided_is_signed = raw.strip().lower() in ('true', '1') if isinstance(raw, str) else bool(raw)
 
         is_signed = provided_is_signed if provided_is_signed is not None else prefers_signed
 
@@ -177,7 +277,7 @@ class PostSerializer(serializers.ModelSerializer):
         from .models import _sanitize_glyphs
         value = _sanitize_glyphs(value)
         
-        max_length = getattr(settings, 'MAX_POST_LENGTH', 500)
+        max_length = limits.MAX_POST_LENGTH
         if len(value) > max_length:
             raise serializers.ValidationError(f"Text content cannot exceed {max_length} characters")
         
@@ -281,9 +381,7 @@ class PostSerializer(serializers.ModelSerializer):
         """Validate font size is within reasonable bounds.
         Sizes are in canvas pixels (1080-wide canvas), so scaled-up display
         text legitimately reaches several hundred px."""
-        if value < 8 or value > 1000:
-            raise serializers.ValidationError("Font size must be between 8 and 1000 canvas pixels")
-        return value
+        return min(max(value, limits.FONT_SIZE_MIN), limits.FONT_SIZE_MAX)
     
     def validate_text_color(self, value):
         """Validate color format"""
@@ -303,6 +401,12 @@ class PostSerializer(serializers.ModelSerializer):
         """Validate that either text content or background image is present"""
         from django.conf import settings
 
+        # The drawn text is the post's text: summarise it from the elements
+        # (the client's summary could say anything) and moderate that
+        elements = data.get('text_elements')
+        if elements:
+            data['text_content'] = self.validate_text_content(
+                ' '.join(e['content'] for e in elements if e['content'].strip()))
         text_content = data.get('text_content', '').strip()
         background_image = data.get('background_image')
 
@@ -379,8 +483,7 @@ class PostListSerializer(serializers.ModelSerializer):
             if not (isinstance(geometry, dict) and geometry.get('width')):
                 break
             parent_width = parent.image_width or 1080
-            crop_top = parent.top_y or 0
-            crop_bottom = parent.bottom_y or (parent.image_height or 0)
+            crop_top, crop_bottom = Post.quoted_crop(parent, geometry)
             level_scale = geometry['width'] / parent_width
 
             rect = {
@@ -413,6 +516,8 @@ class PostListSerializer(serializers.ModelSerializer):
             chain.append({
                 'rect': rect,
                 'strip': strip_source,
+                # tapping this level opens (or, double-tapped, quotes) this post
+                'post_id': str(parent.id),
                 'snippet': (parent.text_content or '').strip()[:24],
                 'background_color': parent.background_color,
                 # the masthead samples its costume from every level of the
@@ -455,17 +560,14 @@ class PostListSerializer(serializers.ModelSerializer):
             'background_color': original.background_color,
         }
         geometry = obj.repost_geometry
-        if (
-            isinstance(geometry, dict) and geometry.get('width')
-            and original.top_y is not None and original.bottom_y is not None
-            and original.image_width
-        ):
+        if isinstance(geometry, dict) and geometry.get('width') and original.image_width:
             scale = geometry['width'] / original.image_width
+            crop_top, crop_bottom = Post.quoted_crop(original, geometry)
             quote['geometry'] = {
                 'x': geometry.get('x', 0),
                 'y': geometry.get('y', 0),
                 'width': geometry['width'],
-                'height': int((original.bottom_y - original.top_y) * scale),
+                'height': int((crop_bottom - crop_top) * scale),
             }
         return quote
     
