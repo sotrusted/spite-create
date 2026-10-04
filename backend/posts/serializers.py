@@ -29,6 +29,104 @@ class AuthorSerializer(serializers.ModelSerializer):
         fields = ['handle', 'avatar_color']
 
 
+def _absolute(image, context):
+    if not image:
+        return None
+    request = context.get('request')
+    return request.build_absolute_uri(image.url) if request else image.url
+
+
+def quote_chain_for(obj, context):
+    """Every quoted ancestor with its strip rect mapped into THIS post's
+    canvas coordinates, enabling per-level collapse in the feed.
+    Level i entry: where ancestor i's strip sits (rect, root canvas px),
+    what to draw when levels >= i collapse (the ancestor's reply-only
+    strip source), and the chip content for hiding level i."""
+    if not obj.is_repost or not obj.original_post_id:
+        return []
+    blocked_ids = context.get('blocked_author_ids') or set()
+    request = context.get('request')
+    # The feed batch-loads every ancestor on the page (one query per
+    # level); following current.original_post instead costs a query per
+    # ancestor per post. Falls back to the FK outside the feed.
+    ancestors = context.get('ancestors') or {}
+
+    def url_of(image):
+        if not image:
+            return None
+        return request.build_absolute_uri(image.url) if request else image.url
+
+    chain = []
+    current = obj
+    # Cumulative transform from current level's canvas into root canvas
+    offset_x, offset_y, scale = 0.0, 0.0, 1.0
+    for _depth in range(6):
+        if not current.is_repost or not current.original_post_id:
+            break
+        geometry = current.repost_geometry
+        parent = ancestors.get(current.original_post_id) or current.original_post
+        if not (isinstance(geometry, dict) and geometry.get('width')):
+            break
+        parent_width = parent.image_width or 1080
+        crop_top, crop_bottom = Post.quoted_crop(parent, geometry)
+        level_scale = geometry['width'] / parent_width
+
+        rect = {
+            'x': int(offset_x + geometry.get('x', 0) * scale),
+            'y': int(offset_y + geometry.get('y', 0) * scale),
+            'width': int(geometry['width'] * scale),
+            'height': int((crop_bottom - crop_top) * level_scale * scale),
+        }
+
+        # What to draw for this ancestor when deeper levels collapse:
+        # its reply-only render if it is itself a repost, else its full
+        # render (leaf posts have no quote to hide)
+        if parent.is_repost and parent.response_image:
+            strip_source = {
+                'url': url_of(parent.response_image),
+                'top_y': parent.response_top_y or 0,
+                'bottom_y': parent.response_bottom_y or 0,
+                'image_width': parent.image_width,
+                'image_height': parent.image_height,
+            }
+        else:
+            strip_source = {
+                'url': url_of(parent.rendered_image),
+                'top_y': crop_top,
+                'bottom_y': crop_bottom,
+                'image_width': parent.image_width,
+                'image_height': parent.image_height,
+            }
+
+        chain.append({
+            'rect': rect,
+            'strip': strip_source,
+            # tapping this level opens (or, double-tapped, quotes) this post
+            'post_id': str(parent.id),
+        # the top of the band of the parent this quote shows (parent canvas
+        # px): rect's top edge is this row of the parent
+        'crop_top': crop_top,
+            'snippet': (parent.text_content or '').strip()[:24],
+            'background_color': parent.background_color,
+            # the masthead samples its costume from every level of the
+            # page, quoted ancestors included - not just top-level posts
+            'font_choice': parent.font_choice,
+        # the post page draws each level's text itself, over the text-free
+        # render; rainbow text needs to know a gradient lies under it
+        'background_gradient': parent.background_gradient,
+            'text_elements': parent.text_elements,
+            'hidden': parent.author_id in blocked_ids,
+        })
+
+        # Descend: next level's coordinates live inside this strip,
+        # which shows parent cropped from its top_y
+        offset_x = rect['x']
+        offset_y = rect['y'] - crop_top * level_scale * scale
+        scale = scale * level_scale
+        current = parent
+    return chain
+
+
 class PostSerializer(serializers.ModelSerializer):
     """Serializer for Post model with full create/read capabilities"""
     author = AuthorSerializer(read_only=True)
@@ -40,6 +138,8 @@ class PostSerializer(serializers.ModelSerializer):
     canvas_height = serializers.IntegerField(write_only=True, required=False)
     canvas_state = serializers.JSONField(required=False, allow_null=True)
     editable = serializers.SerializerMethodField()
+    textless_image_url = serializers.SerializerMethodField()
+    quote_chain = serializers.SerializerMethodField()
     
     class Meta:
         model = Post
@@ -53,7 +153,7 @@ class PostSerializer(serializers.ModelSerializer):
             'repost_screenshot_url', 'repost_data', 'canvas_width', 'canvas_height',
             'is_signed', 'signature_style',
             'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes',
-            'canvas_state', 'editable',
+            'canvas_state', 'editable', 'textless_image_url', 'quote_chain',
         ]
         read_only_fields = ['id', 'author', 'rendered_image_url', 'created_at', 'view_count', 
                            'is_repost', 'original_post', 'repost_screenshot_url',
@@ -71,6 +171,12 @@ class PostSerializer(serializers.ModelSerializer):
             return obj.rendered_image.url
         return None
     
+    def get_textless_image_url(self, obj):
+        return _absolute(obj.textless_image, self.context)
+
+    def get_quote_chain(self, obj):
+        return quote_chain_for(obj, self.context)
+
     def get_repost_screenshot_url(self, obj):
         """Get the full URL for the repost screenshot"""
         if obj.repost_screenshot:
@@ -438,6 +544,8 @@ class PostListSerializer(serializers.ModelSerializer):
     quote_chain = serializers.SerializerMethodField()
     repost_screenshot_url = serializers.SerializerMethodField()
     editable = serializers.SerializerMethodField()
+    # the feed hands its post to the post page, which draws over this
+    textless_image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Post
@@ -447,7 +555,7 @@ class PostListSerializer(serializers.ModelSerializer):
             'is_signed', 'signature_style', 'background_color', 'background_gradient', 'font_choice',
             'response_image_url', 'response_top_y', 'response_bottom_y', 'quote', 'quote_chain',
             'repost_screenshot_url', 'image_width', 'image_height', 'top_y', 'bottom_y',
-            'content_boxes', 'editable',
+            'content_boxes', 'editable', 'textless_image_url',
         ]
 
     def get_editable(self, obj):
@@ -455,88 +563,10 @@ class PostListSerializer(serializers.ModelSerializer):
         return obj.canvas_state is not None and _is_author(obj, self.context)
 
     def get_quote_chain(self, obj):
-        """Every quoted ancestor with its strip rect mapped into THIS post's
-        canvas coordinates, enabling per-level collapse in the feed.
-        Level i entry: where ancestor i's strip sits (rect, root canvas px),
-        what to draw when levels >= i collapse (the ancestor's reply-only
-        strip source), and the chip content for hiding level i."""
-        if not obj.is_repost or not obj.original_post_id:
-            return []
-        blocked_ids = self.context.get('blocked_author_ids') or set()
-        request = self.context.get('request')
-        # The feed batch-loads every ancestor on the page (one query per
-        # level); following current.original_post instead costs a query per
-        # ancestor per post. Falls back to the FK outside the feed.
-        ancestors = self.context.get('ancestors') or {}
+        return quote_chain_for(obj, self.context)
 
-        def url_of(image):
-            if not image:
-                return None
-            return request.build_absolute_uri(image.url) if request else image.url
-
-        chain = []
-        current = obj
-        # Cumulative transform from current level's canvas into root canvas
-        offset_x, offset_y, scale = 0.0, 0.0, 1.0
-        for _depth in range(6):
-            if not current.is_repost or not current.original_post_id:
-                break
-            geometry = current.repost_geometry
-            parent = ancestors.get(current.original_post_id) or current.original_post
-            if not (isinstance(geometry, dict) and geometry.get('width')):
-                break
-            parent_width = parent.image_width or 1080
-            crop_top, crop_bottom = Post.quoted_crop(parent, geometry)
-            level_scale = geometry['width'] / parent_width
-
-            rect = {
-                'x': int(offset_x + geometry.get('x', 0) * scale),
-                'y': int(offset_y + geometry.get('y', 0) * scale),
-                'width': int(geometry['width'] * scale),
-                'height': int((crop_bottom - crop_top) * level_scale * scale),
-            }
-
-            # What to draw for this ancestor when deeper levels collapse:
-            # its reply-only render if it is itself a repost, else its full
-            # render (leaf posts have no quote to hide)
-            if parent.is_repost and parent.response_image:
-                strip_source = {
-                    'url': url_of(parent.response_image),
-                    'top_y': parent.response_top_y or 0,
-                    'bottom_y': parent.response_bottom_y or 0,
-                    'image_width': parent.image_width,
-                    'image_height': parent.image_height,
-                }
-            else:
-                strip_source = {
-                    'url': url_of(parent.rendered_image),
-                    'top_y': crop_top,
-                    'bottom_y': crop_bottom,
-                    'image_width': parent.image_width,
-                    'image_height': parent.image_height,
-                }
-
-            chain.append({
-                'rect': rect,
-                'strip': strip_source,
-                # tapping this level opens (or, double-tapped, quotes) this post
-                'post_id': str(parent.id),
-                'snippet': (parent.text_content or '').strip()[:24],
-                'background_color': parent.background_color,
-                # the masthead samples its costume from every level of the
-                # page, quoted ancestors included - not just top-level posts
-                'font_choice': parent.font_choice,
-                'text_elements': parent.text_elements,
-                'hidden': parent.author_id in blocked_ids,
-            })
-
-            # Descend: next level's coordinates live inside this strip,
-            # which shows parent cropped from its top_y
-            offset_x = rect['x']
-            offset_y = rect['y'] - crop_top * level_scale * scale
-            scale = scale * level_scale
-            current = parent
-        return chain
+    def get_textless_image_url(self, obj):
+        return _absolute(obj.textless_image, self.context)
 
     def get_response_image_url(self, obj):
         """Collapsed-repost render (response only, no quoted strip)"""

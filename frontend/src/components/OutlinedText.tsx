@@ -17,12 +17,13 @@ interface Props {
   outlineWidth: number; // points, before the element's scale
   plain: string; // the displayed text without colour spans (for the copies)
   onLayout?: React.ComponentProps<typeof Text>['onLayout'];
+  selectable?: boolean;
   children: React.ReactNode;
 }
 
-export default function OutlinedText({ style, outlineColor, outlineWidth, plain, onLayout, children }: Props) {
+export default function OutlinedText({ style, outlineColor, outlineWidth, plain, onLayout, selectable, children }: Props) {
   if (!outlineColor || outlineWidth <= 0) {
-    return <Text style={style} onLayout={onLayout}>{children}</Text>;
+    return <Text style={style} onLayout={onLayout} selectable={selectable}>{children}</Text>;
   }
   const { transform, opacity, backgroundColor, ...text } = StyleSheet.flatten(style) as TextStyle;
   const ink: TextStyle = {
@@ -51,7 +52,7 @@ export default function OutlinedText({ style, outlineColor, outlineWidth, plain,
           </Text>
         );
       })}
-      <Text style={text} onLayout={onLayout}>{children}</Text>
+      <Text style={text} onLayout={onLayout} selectable={selectable}>{children}</Text>
     </View>
   );
 }

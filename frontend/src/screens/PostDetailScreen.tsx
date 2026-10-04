@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Dimensions,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Share, StatusBar } from 'react-native';
@@ -18,7 +19,9 @@ import { api, endpoints, absoluteUrl } from '../config/api';
 import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
 import { LinearGradient } from 'expo-linear-gradient';
-import { TapGestureHandler, State as GestureState } from 'react-native-gesture-handler';
+import { TapGestureHandler, PinchGestureHandler, State as GestureState } from 'react-native-gesture-handler';
+import PostText from '../components/PostText';
+import { clampZoom, offsetAfterZoom } from '../utils/zoom';
 import { Post } from '../types';
 import { fullPostLayout, gradientEndpoints, canvasPointIn, CardLayout } from '../utils/cardLayout';
 import { quotedPostAt } from '../utils/hitTest';
@@ -82,8 +85,13 @@ export default function PostDetailScreen() {
   const doubleTapRef = useRef(null);
 
   // The whole post, full width, never cropped (fullPostLayout); tall posts
-  // scroll, and the stage zooms. Taps and double taps are gesture handlers
-  // so their coordinates are the box's own, whatever the zoom.
+  // scroll. Taps and double taps are gesture handlers so their coordinates
+  // are the box's own.
+  //
+  // With a text-free render, the text is drawn here as real text (PostText):
+  // the post's own, and each visible quoted level's, clipped to its strip -
+  // so zooming lays it out again at the new size instead of magnifying a
+  // picture of it. Posts without one show their full render.
   const renderImage = (layout: CardLayout | null) => {
     if (!post?.rendered_image_url) return null;
     if (!layout) {
@@ -95,7 +103,14 @@ export default function PostDetailScreen() {
         />
       );
     }
-    const { scale, crop } = layout;
+    const vector = !!post.textless_image_url;
+    const { scale } = layout;
+    const solid = post.background_gradient?.length ? null : post.background_color ?? null;
+    // visible quoted levels, outermost first; a hidden (blocked) one hides
+    // everything inside it
+    const chain = post.quote_chain ?? [];
+    const hiddenAt = chain.findIndex(level => level.hidden);
+    const levels = hiddenAt >= 0 ? chain.slice(0, hiddenAt) : chain;
     return (
       <TapGestureHandler
         waitFor={doubleTapRef}
@@ -113,7 +128,7 @@ export default function PostDetailScreen() {
         >
           <View style={{ width: layout.width, height: layout.height, overflow: 'hidden' }}>
             <Image
-              source={{ uri: absoluteUrl(post.rendered_image_url) }}
+              source={{ uri: absoluteUrl(vector ? post.textless_image_url! : post.rendered_image_url) }}
               style={{
                 position: 'absolute',
                 left: layout.imageLeft,
@@ -123,35 +138,47 @@ export default function PostDetailScreen() {
               }}
               resizeMode="cover"
             />
-            {/* Invisible selectable text laid over the rendered text: we know
-                the exact content and geometry, so selection works word-by-word
-                on what looks like the image */}
-            {(post as any).text_elements?.map((el: any, index: number) => {
-              if (!el?.content?.trim()) return null;
-              const x = (el.x || 0) * scale;
-              const y = ((el.y || 0) - crop.topY) * scale;
-              const fontSize = Math.max(8, (el.fontSize || 24) * scale);
-              const maxWidth = layout.width * TEXT_WRAP_FRACTION;
+            {vector && levels.map((level, i) => {
+              const width = level.strip.image_width;
+              if (!width || !level.text_elements?.length) return null;
+              // level px -> root px, and where the level's own canvas sits
+              const levelScale = level.rect.width / width;
               return (
-                <Text
-                  key={index}
-                  selectable
+                <View
+                  key={i}
+                  pointerEvents="box-none"
                   style={{
                     position: 'absolute',
-                    left: Math.max(0, x - maxWidth / 2),
-                    top: y - fontSize * 0.75,
-                    width: maxWidth,
-                    textAlign: (el.align || 'center') as any,
-                    fontSize,
-                    letterSpacing: (el.letterSpacing || 0) * scale,
-                    color: 'transparent',
-                    lineHeight: fontSize * 1.15,
+                    left: layout.imageLeft + level.rect.x * scale,
+                    top: layout.imageTop + level.rect.y * scale,
+                    width: level.rect.width * scale,
+                    height: level.rect.height * scale,
+                    overflow: 'hidden',
                   }}
                 >
-                  {el.content}
-                </Text>
+                  <PostText
+                    elements={level.text_elements}
+                    scale={scale * levelScale}
+                    offsetX={0}
+                    offsetY={-(level.crop_top ?? 0) * levelScale * scale}
+                    canvasWidth={width}
+                    background={level.background_gradient?.length ? null : level.background_color ?? null}
+                    selectable
+                  />
+                </View>
               );
             })}
+            {vector && post.text_elements && (
+              <PostText
+                elements={post.text_elements}
+                scale={scale}
+                offsetX={layout.imageLeft}
+                offsetY={layout.imageTop}
+                canvasWidth={post.image_width || 1080}
+                background={solid}
+                selectable
+              />
+            )}
           </View>
         </TapGestureHandler>
       </TapGestureHandler>
@@ -181,13 +208,45 @@ export default function PostDetailScreen() {
   const background = post?.background_color || Colors.background;
   const chrome = chromeColor(background);
 
-  const layout = post ? fullPostLayout(post, screenWidth) : null;
+  // Zoom: the committed level lays the post out again at that size (text
+  // stays text); during a pinch the content is only scaled, then committed
+  // on release with the point under the fingers kept in place (utils/zoom)
+  const [zoom, setZoom] = useState(1);
+  const pinchScale = useRef(new Animated.Value(1)).current;
+  const [pinchOrigin, setPinchOrigin] = useState({ x: 0, y: 0 });
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollOffset = useRef({ x: 0, y: 0 });
+  const pendingOffset = useRef<{ x: number; y: number } | null>(null);
+  const onPinch = Animated.event([{ nativeEvent: { scale: pinchScale } }], { useNativeDriver: true });
+  const onPinchState = (e: any) => {
+    const { state, scale, focalX, focalY } = e.nativeEvent;
+    if (state === GestureState.BEGAN) {
+      setPinchOrigin({ x: scrollOffset.current.x + focalX, y: scrollOffset.current.y + focalY });
+    }
+    if (state === GestureState.END || state === GestureState.CANCELLED) {
+      const next = clampZoom(zoom * scale, GESTURES.zoom.maxScale);
+      pendingOffset.current = offsetAfterZoom(scrollOffset.current, { x: focalX, y: focalY }, zoom, next);
+      pinchScale.setValue(1);
+      setZoom(next);
+    }
+  };
+  // after the re-layout at the new zoom, scroll the focal point back under
+  // the fingers
+  useEffect(() => {
+    const offset = pendingOffset.current;
+    if (!offset) return;
+    pendingOffset.current = null;
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ ...offset, animated: false }));
+  }, [zoom]);
+
+  const layout = post ? fullPostLayout(post, screenWidth * zoom) : null;
   // Short posts sit centred in the stage; taller ones start at its top
   const boxTop = layout && stageHeight ? Math.max(0, (stageHeight - layout.height) / 2) : 0;
+  const contentHeight = Math.max(stageHeight, (layout?.height ?? 0) + 2 * boxTop);
 
   // A gradient post's image is only its band of the gradient, so the same
-  // gradient fills the stage around it, mapped through the image's placement
-  // so where they overlap they are the same pixels.
+  // gradient fills the content around it, mapped through the image's
+  // placement so where they overlap they are the same pixels
   const renderGradient = () => {
     const stops = post?.background_gradient;
     if (!post || !layout || !stops || stops.length < 2 || !stageHeight) return null;
@@ -195,7 +254,7 @@ export default function PostDetailScreen() {
       <LinearGradient
         pointerEvents="none"
         colors={stops as [string, string, ...string[]]}
-        {...gradientEndpoints(post, layout, { width: screenWidth, height: stageHeight, top: boxTop })}
+        {...gradientEndpoints(post, layout, { width: layout.width, height: contentHeight, top: boxTop })}
         style={StyleSheet.absoluteFill}
       />
     );
@@ -221,19 +280,34 @@ export default function PostDetailScreen() {
           <StatusBar barStyle={chrome === '#FFFFFF' ? 'light-content' : 'dark-content'} animated />
           {/* Full bleed: the post floats in its own colour, vertically centred */}
           <View style={styles.stage} onLayout={e => setStageHeight(e.nativeEvent.layout.height)}>
-            {renderGradient()}
-            <ScrollView
-              style={StyleSheet.absoluteFill}
-              // a short post sits centred (boxTop), a tall one starts at the top
-              contentContainerStyle={{ paddingTop: boxTop, paddingBottom: boxTop }}
-              maximumZoomScale={GESTURES.zoom.maxScale}
-              minimumZoomScale={1}
-              bouncesZoom
-              showsVerticalScrollIndicator={false}
-              showsHorizontalScrollIndicator={false}
-            >
-              {renderImage(layout)}
-            </ScrollView>
+            <PinchGestureHandler onGestureEvent={onPinch} onHandlerStateChange={onPinchState}>
+              <Animated.View style={StyleSheet.absoluteFill}>
+                <ScrollView
+                  ref={scrollRef}
+                  style={StyleSheet.absoluteFill}
+                  // both directions once zoomed past the screen width
+                  contentContainerStyle={{ width: layout?.width ?? screenWidth, minHeight: contentHeight }}
+                  directionalLockEnabled={false}
+                  onScroll={e => { scrollOffset.current = e.nativeEvent.contentOffset; }}
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}
+                  showsHorizontalScrollIndicator={false}
+                >
+                  <Animated.View
+                    style={{
+                      minHeight: contentHeight,
+                      // a short post sits centred (boxTop), a tall one starts at the top
+                      paddingTop: boxTop,
+                      transformOrigin: [pinchOrigin.x, pinchOrigin.y, 0],
+                      transform: [{ scale: pinchScale }],
+                    }}
+                  >
+                    {renderGradient()}
+                    {renderImage(layout)}
+                  </Animated.View>
+                </ScrollView>
+              </Animated.View>
+            </PinchGestureHandler>
           </View>
 
           <TouchableOpacity style={styles.closeButton} onPress={() => navigation.goBack()}>

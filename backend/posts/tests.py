@@ -1488,3 +1488,35 @@ class ReplyRelayTests(TestCase):
         from posts.inbound_email import relayed_email_id
         self.assertIsNone(relayed_email_id('reply+orig-1.0000000000@example.com'))
         self.assertIsNone(relayed_email_id('support@example.com'))
+
+
+class TextlessRenderTests(RenderTestCase):
+    """The post page draws text itself over a render without any."""
+
+    def test_textless_render_has_the_background_and_no_ink(self):
+        post = self.make_post([text_element('INK', color='#000000')], background_color='#F0FF00')
+        self.assertTrue(post.textless_image)
+        img = Image.open(post.textless_image.path).convert('RGB')
+        self.assertEqual(img.size, (post.image_width, post.image_height))
+        self.assertEqual({c for _n, c in img.getcolors(1 << 20)}, {(240, 255, 0)})
+
+    def test_a_quote_composites_its_parents_textless_render(self):
+        parent = self.make_post([text_element('PARENT', color='#000000')], background_color='#00CED1')
+        repost = self.make_post([text_element('REPLY', y=400, color='#000000')], background_color='#F0FF00',
+                                is_repost=True, original_post=parent,
+                                repost_geometry={'x': 54, 'y': 900, 'width': 972})
+        img = Image.open(repost.textless_image.path).convert('RGB')
+        # no black ink anywhere: neither the reply's text nor the parent's
+        self.assertNotIn((0, 0, 0), {c for _n, c in img.getcolors(1 << 20)})
+
+    def test_both_serializers_send_it_and_the_chain(self):
+        from posts.serializers import PostSerializer, PostListSerializer
+        parent = self.make_post([text_element('PARENT')], background_color='#00CED1')
+        repost = self.make_post([text_element('REPLY', y=400)], is_repost=True, original_post=parent,
+                                repost_geometry={'x': 54, 'y': 900, 'width': 972})
+        for serializer in (PostSerializer, PostListSerializer):
+            data = serializer(repost, context={}).data
+            self.assertTrue(data['textless_image_url'])
+            self.assertEqual(data['quote_chain'][0]['post_id'], str(parent.id))
+            self.assertIn('background_gradient', data['quote_chain'][0])
+            self.assertEqual(data['quote_chain'][0]['crop_top'], parent.top_y)

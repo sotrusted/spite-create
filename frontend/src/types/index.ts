@@ -72,6 +72,8 @@ export interface Post {
   quote_chain?: Array<{
     // the quoted post at this level (tap opens it, double tap quotes it)
     post_id?: string;
+    // the parent row the strip starts at (parent canvas px)
+    crop_top?: number;
     rect: { x: number; y: number; width: number; height: number };
     strip: {
       url: string | null;
@@ -82,8 +84,17 @@ export interface Post {
     };
     snippet?: string;
     background_color?: string;
+    background_gradient?: string[] | null;
+    font_choice?: FontChoice;
+    // this level's own text (canvas px of its own post), drawn over the
+    // text-free render on the post page
+    text_elements?: TextElement[] | null;
     hidden: boolean;
   }>;
+  // the post without any text drawn (its own or its quotes')
+  textless_image_url?: string | null;
+  // what is drawn (canvas px)
+  text_elements?: TextElement[] | null;
 }
 
 export interface TextElement {
@@ -98,7 +109,7 @@ export interface TextElement {
   letterSpacing?: number;
   glow?: boolean;
   rainbow?: boolean;
-  alternateColors?: string[];
+  alternateColors?: string[] | null;
   // Colour ranges, code points into content (server shape)
   colorRuns?: { start: number; end: number; color: string }[];
   // The border colour to stroke the letters with (resolved), or null

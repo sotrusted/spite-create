@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyColorToRange, adjustRuns, colorSpans, runsToCodePoints } from './colorRuns';
+import { applyColorToRange, adjustRuns, colorSpans, runsToCodePoints, runsFromCodePoints } from './colorRuns';
 
 const R = '#FF1A1A';
 const B = '#0000EE';
@@ -62,4 +62,11 @@ test('caps lock that lengthens a letter shifts later runs with it', () => {
 test('offsets become code points for the server', () => {
   // the emoji is two UTF-16 units but one code point
   assert.deepEqual(runsToCodePoints('😀ab', [{ start: 2, end: 3, color: R }]), [{ start: 1, end: 2, color: R }]);
+});
+
+test('code points come back to UTF-16 offsets', () => {
+  const runs = [{ start: 1, end: 2, color: R }];
+  assert.deepEqual(runsFromCodePoints('😀ab', runs), [{ start: 2, end: 3, color: R }]);
+  assert.deepEqual(runsFromCodePoints('😀ab', runsToCodePoints('😀ab', [{ start: 2, end: 3, color: R }])),
+    [{ start: 2, end: 3, color: R }]);
 });

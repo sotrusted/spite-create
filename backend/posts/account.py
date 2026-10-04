@@ -34,6 +34,7 @@ def _post_files(post):
         post.rendered_image.name if post.rendered_image else None,
         post.response_image.name if post.response_image else None,
         post.repost_screenshot.name if post.repost_screenshot else None,
+        post.textless_image.name if post.textless_image else None,
     ]
 
 

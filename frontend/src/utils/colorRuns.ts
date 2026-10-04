@@ -147,3 +147,12 @@ export function runsToCodePoints(
   const map = (offset: number) => at.get(Math.min(offset, text.length)) ?? sent;
   return runs.map(r => ({ start: map(r.start), end: map(r.end), color: r.color }));
 }
+
+// From the server's code points back to this side's UTF-16 offsets
+export function runsFromCodePoints(text: string, runs: ColorRun[] | undefined | null): ColorRun[] {
+  if (!runs?.length) return [];
+  const offsets = [0];
+  for (const ch of text) offsets.push(offsets[offsets.length - 1] + ch.length);
+  const at = (cp: number) => offsets[Math.max(0, Math.min(cp, offsets.length - 1))];
+  return runs.map(r => ({ start: at(r.start), end: at(r.end), color: r.color }));
+}

@@ -196,6 +196,11 @@ class Post(models.Model):
     # The feed shows this by default; tapping the quote chip swaps in the
     # full composite (rendered_image).
     response_image = models.ImageField(upload_to='posts/', null=True, blank=True)
+    # The full composite without any text drawn - its own or its quoted
+    # posts' (their strips come from their own text-free renders). The post
+    # page draws the text itself on top, as real text, so it stays sharp
+    # however far it is zoomed (PostDetailScreen).
+    textless_image = models.ImageField(upload_to='posts/', null=True, blank=True)
     response_top_y = models.IntegerField(null=True, blank=True)
     response_bottom_y = models.IntegerField(null=True, blank=True)
     
@@ -283,10 +288,12 @@ class Post(models.Model):
                 final_top, final_bottom, int(self.image_height or settings.POST_IMAGE_HEIGHT)
             )
             img = self._render_canvas(text_elements, include_original=True)
+            content_bottom = final_bottom
             final_bottom = self._draw_signature(img, final_bottom)
             self.top_y = int(final_top)
             self.bottom_y = int(final_bottom)
             self._save_render(img, self.rendered_image, f"{self.id}.png")
+            self._render_textless(content_bottom)
 
             if self.is_repost and self.original_post:
                 response_img = self._render_canvas(text_elements, include_original=False)
@@ -299,11 +306,19 @@ class Post(models.Model):
             _report_render_error(f'Error generating image for post {self.id}', e)
             self._create_fallback_image()
 
-    def _render_canvas(self, text_elements, include_original):
+    def _render_textless(self, content_bottom):
+        """The post without text (see textless_image), rendered alongside
+        the full one: same bounds and gradient band, so they line up exactly.
+        The signature band stays drawn in (it is chrome, not the post)."""
+        img = self._render_canvas([], include_original=True, textless=True)
+        self._draw_signature(img, content_bottom)
+        self._save_render(img, self.textless_image, f"{self.id}_textless.png")
+
+    def _render_canvas(self, text_elements, include_original, textless=False):
         img = self._create_background(int(self.image_height or settings.POST_IMAGE_HEIGHT))
         draw = ImageDraw.Draw(img)
         if include_original and self.is_repost and self._repost_strip_geometry() is not None:
-            self._composite_original(img)
+            self._composite_original(img, textless=textless)
         for element in text_elements:
             self._draw_text_element(img, draw, element)
         self._draw_stickers(img)
@@ -880,7 +895,7 @@ class Post(models.Model):
             'paste_y': paste_y,
         }
 
-    def _composite_original(self, img):
+    def _composite_original(self, img, textless=False):
         try:
             geometry = self._repost_strip_geometry()
             if geometry is None:
@@ -891,7 +906,12 @@ class Post(models.Model):
 
             # Storage-agnostic read: .path raises NotImplementedError on S3,
             # which used to be swallowed and silently drop the quoted strip
-            with self.original_post.rendered_image.open('rb') as fh:
+            # The text-free composite takes the quoted post's text-free render
+            # (older posts may not have one yet: their full render)
+            source = self.original_post.rendered_image
+            if textless and self.original_post.textless_image:
+                source = self.original_post.textless_image
+            with source.open('rb') as fh:
                 original_img = Image.open(io.BytesIO(fh.read())).convert('RGB')
             strip = original_img.crop(
                 (0, geometry['crop_top'], original_img.width, geometry['crop_bottom'])

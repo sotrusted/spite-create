@@ -44,7 +44,7 @@ import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../typ
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { captureRef } from 'react-native-view-shot';
 import { emitPostCreated } from '../utils/postEvents';
-import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
+import { TEXT_WRAP_FRACTION, buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
@@ -3692,7 +3692,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     position: 'relative',
     minWidth: 50, // Much smaller minimum
-    maxWidth: screenWidth - 40, // Leave some margin
+    // the server wraps at this fraction of the canvas width
+    maxWidth: screenWidth * TEXT_WRAP_FRACTION,
     minHeight: 50,
   },
   // Image background style
