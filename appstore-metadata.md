@@ -7,28 +7,17 @@ Type Magazine
 Creative Mind's Ideas
 
 ## Description
-A magazine of creative minds' ideas.
+(plain text: the App Store does not render markdown)
 
-You write text. It gets typeset. It joins the collage. That is the whole
-thing.
+Type Magazine is an app for the creative mind's ideas. Experience the power of text to awe and inspire when expressed in an image!
 
-There are no likes. There are no followers. There is no algorithm. The
-newest page is on top.
+Express yourself! The iPhone is a visual device, but thoughts require language. Select from your favorite fabulous fonts and trendy colors to express an original thought, or reproduce your favorite trend!
 
-- Six fonts, chosen carefully. Some of them are even good.
-- Colors from the old internet.
-- Rainbow text, glow, chips, kerning — the aesthetics of text.
-- Hold down on any post to quote it in your own. Quoted posts appear
-  smushed, which is a technical term.
-- Tap a quote to fold it into a little chip. Tap the chip to unfold it.
-- Posting is semi-anonymous. You get a handle. It is not your name,
-  unless you insist.
-- Sign your posts, or don't.
+Better than Create Mode! We're always hitting the volume button and the sleep button to screenshot someone's post, but what do you say we turn down the volume on that and put that whole notion to sleep? This is Type -- let's just hold down on the post or we can double tap to instantly quote! Sleep on it, this the kind of app that will hold you down. ;)
 
-The magazine is public, the pages are strangers', and the print run is
-infinite.
+Express your personality! Use Type Magazine to express your deepest secrets or quirkiest anecdotes instantly. Identities coming soon!
 
-"Amazing." — The Publisher
+Creative mind's ideas. Be creative. Your ideas count! 12345678910
 
 ## Keywords (100 chars max)
 text,typography,anonymous,magazine,zine,brutalist,fonts,posting,collage,writing,board,creative
