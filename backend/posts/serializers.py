@@ -115,6 +115,8 @@ def quote_chain_for(obj, context):
         # render; rainbow text needs to know a gradient lies under it
         'background_gradient': parent.background_gradient,
             'text_elements': parent.text_elements,
+        # the parent's text as its render drew it (parent canvas px)
+        'text_plan': parent.text_plan,
             'hidden': parent.author_id in blocked_ids,
         })
 
@@ -153,9 +155,9 @@ class PostSerializer(serializers.ModelSerializer):
             'repost_screenshot_url', 'repost_data', 'canvas_width', 'canvas_height',
             'is_signed', 'signature_style',
             'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes',
-            'canvas_state', 'editable', 'textless_image_url', 'quote_chain',
+            'canvas_state', 'editable', 'textless_image_url', 'quote_chain', 'text_plan',
         ]
-        read_only_fields = ['id', 'author', 'rendered_image_url', 'created_at', 'view_count', 
+        read_only_fields = ['id', 'author', 'text_plan', 'rendered_image_url', 'created_at', 'view_count', 
                            'is_repost', 'original_post', 'repost_screenshot_url',
                            'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes']
         extra_kwargs = {
@@ -555,7 +557,7 @@ class PostListSerializer(serializers.ModelSerializer):
             'is_signed', 'signature_style', 'background_color', 'background_gradient', 'font_choice',
             'response_image_url', 'response_top_y', 'response_bottom_y', 'quote', 'quote_chain',
             'repost_screenshot_url', 'image_width', 'image_height', 'top_y', 'bottom_y',
-            'content_boxes', 'editable', 'textless_image_url',
+            'content_boxes', 'editable', 'textless_image_url', 'text_plan',
         ]
 
     def get_editable(self, obj):

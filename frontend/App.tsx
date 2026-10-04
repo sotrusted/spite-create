@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import React, { useState, useEffect } from 'react';
 import * as Updates from 'expo-updates';
 import { AppState } from 'react-native';
@@ -78,6 +79,14 @@ const useAutoUpdates = () => {
   }, []);
 };
 
+// Development only: Expo Go links straight to a post, so tools can open
+// any post page (the parity check: tools/parity_check.py)
+//   exp://<host>/--/post/<id>?textMode=plan
+const devHost = Constants.expoConfig?.hostUri;
+const DEV_LINKING = __DEV__ && devHost
+  ? { prefixes: [`exp://${devHost}/--/`], config: { screens: { PostDetail: 'post/:postId' } } }
+  : undefined;
+
 export default function App() {
   useAutoUpdates();
   // The exact same font files the backend renders with (see the model's
@@ -120,7 +129,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer theme={{
+      <NavigationContainer linking={DEV_LINKING} theme={{
         dark: false,
         fonts: DefaultTheme.fonts,
         colors: {

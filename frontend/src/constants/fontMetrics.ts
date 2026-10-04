@@ -14,12 +14,15 @@
 //   the largest size that still fits so autoshrink never silently fires and
 //   invalidates the baseline arithmetic.
 
-export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; widthPerPt: number }> = {
+// lineGap: the font's built-in line gap (hhea.lineGap / unitsPerEm), counted
+//   into `ascent` above. A single line of text drawn by iOS puts its baseline
+//   at ascent - lineGap below the top (utils/planLayout). Only Times has one.
+export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; widthPerPt: number; lineGap?: number }> = {
   ArialBlack: { ascent: 1.1006, inkDrop: 0.0124, widthPerPt: 2.944 },
-  TimesNewRoman: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500 },
-  TimesNewRomanBold: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.667 },
-  TimesNewRomanItalic: { ascent: 0.9336, inkDrop: -0.0306, widthPerPt: 2.334 },
-  TimesNewRomanBoldItalic: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500 },
+  TimesNewRoman: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500, lineGap: 0.0425 },
+  TimesNewRomanBold: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.667, lineGap: 0.0425 },
+  TimesNewRomanItalic: { ascent: 0.9336, inkDrop: -0.0306, widthPerPt: 2.334, lineGap: 0.0425 },
+  TimesNewRomanBoldItalic: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500, lineGap: 0.0425 },
   Papyrus: { ascent: 0.9399, inkDrop: 0.0211, widthPerPt: 2.691 },
   Impact: { ascent: 1.0088, inkDrop: 0.0122, widthPerPt: 1.876 },
   CourierPrime: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398 },
@@ -40,6 +43,12 @@ export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; wid
 
 export const metricsFor = (fontFamily: string) =>
   FONT_METRICS[fontFamily] || { ascent: 1.0, inkDrop: 0, widthPerPt: 10 };
+
+// Top of a single-line Text to its baseline, per 1pt of size
+export const baselineFromTop = (fontFamily: string) => {
+  const m = metricsFor(fontFamily);
+  return m.ascent - (m.lineGap ?? 0);
+};
 
 // Where the title's ink actually bottoms out, per 1pt of size. Aligning THIS
 // is what reads as a shared baseline: Caveat's letters sit 0.061em below the

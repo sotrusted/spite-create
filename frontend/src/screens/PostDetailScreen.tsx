@@ -21,7 +21,8 @@ import { CHROME } from '../constants/layout';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
 import { TapGestureHandler, PinchGestureHandler, State as GestureState } from 'react-native-gesture-handler';
-import PostText from '../components/PostText';
+import PlanText from '../components/PlanText';
+import { isTextPlan } from '../types/textPlan';
 import { clampPinch, offsetAfterPinch } from '../utils/zoom';
 import { FEATURES } from '../constants/features';
 import { Post } from '../types';
@@ -38,7 +39,12 @@ const { width: screenWidth } = Dimensions.get('window');
 export default function PostDetailScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const { postId, post: seed } = (route.params as { postId: string; post?: Post }) || {};
+  const { postId, post: seed, textMode: textModeParam } =
+    (route.params as { postId: string; post?: Post; textMode?: 'plan' | 'image' }) || {};
+  // 'plan': text drawn from the draw list over the text-free render; 'image':
+  // the server's render. Development can force either (the parity check
+  // opens each post both ways)
+  const textMode = __DEV__ && textModeParam ? textModeParam : FEATURES.vectorPostText ? 'plan' : 'image';
   // Seeded from the feed when there is one - no fetch, no loading frame
   const [post, setPost] = useState<Post | null>(seed ?? null);
   const [error, setError] = useState(false);
@@ -47,6 +53,9 @@ export default function PostDetailScreen() {
 
   useEffect(() => {
     if (!postId) return;
+    // the screen can be handed another post (a link): start clean
+    setError(false);
+    if (post && post.id !== postId) setPost(seed?.id === postId ? seed : null);
     api.get<Post>(endpoints.getPost(postId))
       .then(response => setPost(response.data))
       .catch(() => { if (!seed) setError(true); });
@@ -105,14 +114,16 @@ export default function PostDetailScreen() {
         />
       );
     }
-    const vector = FEATURES.vectorPostText && !!post.textless_image_url;
     const { scale } = layout;
-    const solid = post.background_gradient?.length ? null : post.background_color ?? null;
     // visible quoted levels, outermost first; a hidden (blocked) one hides
     // everything inside it
     const chain = post.quote_chain ?? [];
     const hiddenAt = chain.findIndex(level => level.hidden);
     const levels = hiddenAt >= 0 ? chain.slice(0, hiddenAt) : chain;
+    // Real text only when every visible level has its draw list; otherwise
+    // the server's image, which always matches the feed
+    const vector = textMode === 'plan' && !!post.textless_image_url && isTextPlan(post.text_plan)
+      && levels.every(level => isTextPlan(level.text_plan));
     return (
       <TapGestureHandler
         waitFor={doubleTapRef}
@@ -146,7 +157,7 @@ export default function PostDetailScreen() {
             />
             {vector && levels.map((level, i) => {
               const width = level.strip.image_width;
-              if (!width || !level.text_elements?.length) return null;
+              if (!width || !isTextPlan(level.text_plan)) return null;
               // level px -> root px, and where the level's own canvas sits
               const levelScale = level.rect.width / width;
               return (
@@ -162,26 +173,22 @@ export default function PostDetailScreen() {
                     overflow: 'hidden',
                   }}
                 >
-                  <PostText
-                    elements={level.text_elements}
+                  <PlanText
+                    plan={level.text_plan}
                     scale={scale * levelScale}
                     offsetX={0}
                     offsetY={-(level.crop_top ?? 0) * levelScale * scale}
-                    canvasWidth={width}
-                    background={level.background_gradient?.length ? null : level.background_color ?? null}
                     selectable
                   />
                 </View>
               );
             })}
-            {vector && post.text_elements && (
-              <PostText
-                elements={post.text_elements}
+            {vector && isTextPlan(post.text_plan) && (
+              <PlanText
+                plan={post.text_plan}
                 scale={scale}
                 offsetX={layout.imageLeft}
                 offsetY={layout.imageTop}
-                canvasWidth={post.image_width || 1080}
-                background={solid}
                 selectable
               />
             )}

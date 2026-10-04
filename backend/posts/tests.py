@@ -20,7 +20,7 @@ import shutil
 import tempfile
 
 from django.test import TestCase, override_settings
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 
 from posts.models import Post
 from users.models import User
@@ -1519,4 +1519,197 @@ class TextlessRenderTests(RenderTestCase):
             self.assertTrue(data['textless_image_url'])
             self.assertEqual(data['quote_chain'][0]['post_id'], str(parent.id))
             self.assertIn('background_gradient', data['quote_chain'][0])
+            self.assertEqual(data['text_plan']['version'], Post.TEXT_PLAN_VERSION)
+            self.assertEqual(data['quote_chain'][0]['text_plan'], parent.text_plan)
             self.assertEqual(data['quote_chain'][0]['crop_top'], parent.top_y)
+
+
+# --- Draw-list parity -------------------------------------------------------
+# The post page draws a post's text from Post.text_plan (and each quoted
+# level's plan) over textless_image. These tests repaint posts the way the
+# app does - from the plan alone, glyph runs at their pen position and
+# baseline - and compare with the real render, across every font and style
+# and nested quotes. If the plan and the render ever disagree, these fail.
+
+from posts.models import Post as _Post  # noqa: E402
+
+FONT_KEYS = [key for key, _label in Post.FONT_CHOICES]
+
+STYLE_CASES = {
+    'plain': {},
+    'wrapped': {'content': 'a long line of text that has to wrap across the canvas at least twice over here'},
+    'multiline': {'content': 'first line\nsecond, longer line\nthird'},
+    'left': {'content': 'left aligned\ntwo lines', 'align': 'left'},
+    'right': {'content': 'right aligned\ntwo lines', 'align': 'right'},
+    'rainbow': {'rainbow': True},
+    'duo': {'alternateColors': ['#FF1A1A', '#0000EE']},
+    'runs': {'colorRuns': [{'start': 2, 'end': 7, 'color': '#0000EE'}]},
+    'spacing': {'letterSpacing': 18},
+    'underline': {'underline': True, 'content': 'underlined\ntwice'},
+    'chip': {'hasBackground': True, 'backgroundColor': '#F9FF4F'},
+    'bullets': {'listStyle': 'bullet', 'content': 'one\ntwo\nthree'},
+    'numbers': {'listStyle': 'number', 'content': 'one\ntwo'},
+    'bold': {'bold': True},
+    'italic': {'italic': True},
+    'outline': {'outlineColor': '#F8F8FF', 'content': 'border\nround it'},
+    'outline_rainbow': {'outlineColor': '#000000', 'rainbow': True},
+    'opacity': {'opacity': 0.45},
+    'glow': {'glow': True},
+}
+
+
+class TextPlanParityTests(RenderTestCase):
+
+    def repaint(self, post):
+        """The text-free render with every plan painted on it from the plan's
+        own numbers, as the app places them."""
+        from PIL import ImageFilter, ImageFont
+        img = Image.open(post.textless_image.path).convert('RGBA')
+
+        def paint(target, plan_el, scale=1.0, dx=0.0, dy=0.0, clip=None):
+            path = next(os.path.join(Post._REPO_FONTS, f) for f in os.listdir(Post._REPO_FONTS)
+                        if os.path.splitext(f)[0] == plan_el['face'])
+            font = ImageFont.truetype(path, max(1, int(round(plan_el['size'] * scale))))
+            layer = Image.new('RGBA', target.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(layer)
+            P = lambda x, y: (dx + x * scale, dy + y * scale)
+            for chip in plan_el['chips']:
+                x0, y0, x1, y1 = chip['rect']
+                draw.rectangle((*P(x0, y0), *P(x1, y1)), fill=chip['fill'])
+            outline, stroke = plan_el['outline'], int(round(plan_el['stroke'] * scale))
+            ink_layer = Image.new('RGBA', target.size, (0, 0, 0, 0))
+            ink = ImageDraw.Draw(ink_layer)
+            for stroke_pass in ([True] if outline else []) + [False]:
+                extra = dict(stroke_width=stroke, stroke_fill=outline) if stroke_pass else {}
+                for run in plan_el['runs']:
+                    ink.text(P(run['left'], run['baseline']), run['text'], font=font, anchor='ls',
+                             fill=outline if stroke_pass else run['fill'], **extra)
+                for line in plan_el['lines']:
+                    w = line['width'] * scale
+                    ink.line((*P(*line['from']), *P(*line['to'])), fill=outline if stroke_pass else line['fill'],
+                             width=int(round(w + 2 * stroke if stroke_pass else w)))
+            if plan_el['glow']:
+                halo = ink_layer.filter(ImageFilter.GaussianBlur(plan_el['glow'] * scale))
+                layer.paste(halo, (0, 0), halo)
+                layer.paste(halo, (0, 0), halo)
+            layer.paste(ink_layer, (0, 0), ink_layer)
+            if plan_el['opacity'] < 1:
+                layer.putalpha(layer.getchannel('A').point(lambda a: int(a * plan_el['opacity'])))
+            if clip:
+                mask = Image.new('L', target.size, 0)
+                ImageDraw.Draw(mask).rectangle(clip, fill=255)
+                layer.putalpha(ImageChops.multiply(layer.getchannel('A'), mask))
+            target.alpha_composite(layer)
+
+        from posts.serializers import quote_chain_for
+        chain = quote_chain_for(post, {})
+        hidden = next((i for i, level in enumerate(chain) if level['hidden']), len(chain))
+        for level in chain[:hidden]:
+            if not level.get('text_plan'):
+                continue
+            rect = level['rect']
+            scale = rect['width'] / level['strip']['image_width']
+            for el in level['text_plan']['elements']:
+                paint(img, el, scale, rect['x'], rect['y'] - level['crop_top'] * scale,
+                      clip=(rect['x'], rect['y'], rect['x'] + rect['width'], rect['y'] + rect['height']))
+        for el in post.text_plan['elements']:
+            paint(img, el)
+        return img.convert('RGB')
+
+    def assert_parity(self, post, label, tolerance):
+        rendered = Image.open(post.rendered_image.path).convert('RGB')
+        repainted = self.repaint(post)
+        band = (0, post.top_y, post.image_width, post.bottom_y)
+        a, b = rendered.crop(band), repainted.crop(band)
+        # A mark counts as misplaced only if nothing within 1px of it in the
+        # other image matches: the plan stores positions to 0.01px and the
+        # app draws them at sub-pixel precision, while Pillow rounds each
+        # glyph to whole pixels - half a canvas pixel is 0.2pt on screen.
+        # A wrong line break, size or spacing moves whole glyphs and fails.
+        diff = None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                shifted = ImageChops.offset(b, dx, dy)
+                d = ImageChops.difference(a, shifted).convert('L')
+                diff = d if diff is None else ImageChops.darker(diff, d)
+        off = sum(n for value, n in enumerate(diff.histogram()) if value > 48)
+        area = (band[2] - band[0]) * (band[3] - band[1])
+        self.assertLess(off / area, tolerance, f'{label}: {off} px ({off / area:.4%}) differ between render and plan')
+
+    def element(self, font, style, y=1100):
+        overrides = dict(STYLE_CASES[style])
+        el = text_element(overrides.pop('content', 'Quote Typ'), fontFamily=font, fontSize=84, y=y, color='#111111')
+        el.update(overrides)
+        return el
+
+    # Per-glyph runs (rainbow, duo, spacing) round each glyph to whole
+    # pixels on its own; a wrong break, size or spacing moves whole glyphs
+    # and costs several percent
+    TOLERANCE = 0.002
+
+    def test_every_font_in_every_style(self):
+        for font in FONT_KEYS:
+            for style in STYLE_CASES:
+                if style == 'glow':
+                    continue
+                with self.subTest(font=font, style=style):
+                    post = self.make_post([self.element(font, style)], background_color='#00CED1')
+                    self.assert_parity(post, f'{font}/{style}', self.TOLERANCE)
+
+    def test_glow_changes_no_position(self):
+        # A halo is blended, not placed: the app draws it as a shadow of the
+        # same radius. What must hold is that glowing text is laid out
+        # exactly like the same text without it.
+        for font in FONT_KEYS:
+            with self.subTest(font=font):
+                glowing = self.make_post([self.element(font, 'glow')]).text_plan['elements'][0]
+                plain = self.make_post([self.element(font, 'plain')]).text_plan['elements'][0]
+                self.assertGreater(glowing.pop('glow'), 0)
+                plain.pop('glow')
+                self.assertEqual(glowing, plain)
+
+    def test_mixed_fonts_in_one_post(self):
+        elements = [self.element(font, style, y=300 + i * 260)
+                    for i, (font, style) in enumerate(zip(FONT_KEYS, ['plain', 'rainbow', 'chip', 'outline', 'bullets',
+                                                                       'underline', 'runs', 'duo', 'spacing', 'bold',
+                                                                       'italic', 'opacity', 'numbers']))]
+        post = self.make_post(elements, background_color='#FAEBD7')
+        self.assert_parity(post, 'mixed', self.TOLERANCE)
+
+    def test_nested_quotes_three_deep(self):
+        a = self.make_post([self.element('courier-prime', 'multiline'), self.element('impact', 'outline', y=1500)],
+                           background_color='#F0FF00')
+        b = self.make_post([self.element('cabin-sketch', 'rainbow', y=300)], background_color='#0000EE',
+                           is_repost=True, original_post=a, repost_geometry={'x': 54, 'y': 700, 'width': 972})
+        c = self.make_post([self.element('petit-formal', 'chip', y=250)], background_color='#FF90C2',
+                           is_repost=True, original_post=b, repost_geometry={'x': 80, 'y': 600, 'width': 920})
+        # quoted text is resampled into its strip on the server; the app
+        # draws it sharp at that size - close, not pixel-equal
+        self.assert_parity(c, 'nested', 0.02)
+
+    def test_every_plan_face_is_a_shipped_font_file(self):
+        post = self.make_post([self.element(font, 'plain', y=200 + i * 150) for i, font in enumerate(FONT_KEYS)])
+        shipped = {os.path.splitext(f)[0] for f in os.listdir(Post._REPO_FONTS)}
+        for el in post.text_plan['elements']:
+            self.assertIn(el['face'], shipped)
+
+
+class FontMetricsTableTests(TestCase):
+    """The app places drawn text by FONT_METRICS (frontend constants): every
+    face's ascent and line gap must be the font file's own."""
+
+    def test_table_matches_the_font_files(self):
+        import re
+        from fontTools.ttLib import TTFont
+        table = open(os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'src', 'constants',
+                                  'fontMetrics.ts')).read()
+        for name in os.listdir(Post._REPO_FONTS):
+            face = os.path.splitext(name)[0]
+            with self.subTest(face=face):
+                m = re.search(r'\b%s: \{ ascent: ([0-9.]+),[^}]*?(?:lineGap: ([0-9.]+))?\s*\}' % face, table)
+                self.assertIsNotNone(m, f'{face} missing from FONT_METRICS')
+                font = TTFont(os.path.join(Post._REPO_FONTS, name))
+                upm = font['head'].unitsPerEm
+                hhea = font['hhea']
+                self.assertAlmostEqual(float(m.group(1)), (hhea.ascent + hhea.lineGap) / upm, places=3)
+                self.assertAlmostEqual(float(m.group(2) or 0), hhea.lineGap / upm, places=3)

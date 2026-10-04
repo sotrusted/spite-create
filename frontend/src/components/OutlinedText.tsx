@@ -9,7 +9,7 @@ import { StyleSheet, Text, TextStyle, View, StyleProp } from 'react-native';
 // Scale, opacity and the chip background belong to the whole stack, so
 // they move to the wrapper (the chip under the border); the copies are
 // plain ink.
-const OUTLINE_STEPS = 16;
+export const OUTLINE_STEPS = 16;
 
 interface Props {
   style: StyleProp<TextStyle>;

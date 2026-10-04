@@ -201,6 +201,10 @@ class Post(models.Model):
     # page draws the text itself on top, as real text, so it stays sharp
     # however far it is zoomed (PostDetailScreen).
     textless_image = models.ImageField(upload_to='posts/', null=True, blank=True)
+    # Every mark the post's text makes, as the render painted it
+    # (TEXT_PLAN_VERSION; see _ink_plan). The post page draws its text from
+    # this over textless_image, so the two cannot disagree.
+    text_plan = models.JSONField(null=True, blank=True)
     response_top_y = models.IntegerField(null=True, blank=True)
     response_bottom_y = models.IntegerField(null=True, blank=True)
     
@@ -288,6 +292,7 @@ class Post(models.Model):
                 final_top, final_bottom, int(self.image_height or settings.POST_IMAGE_HEIGHT)
             )
             img = self._render_canvas(text_elements, include_original=True)
+            self.text_plan = self._text_plan(text_elements)
             content_bottom = final_bottom
             final_bottom = self._draw_signature(img, final_bottom)
             self.top_y = int(final_top)
@@ -1117,25 +1122,41 @@ class Post(models.Model):
             top + total_height + pad_y,
         )
 
-    def _render_text_ink(self, draw, element, font, include_chips=True):
-        """Draw the element's text onto the given draw surface. Handles the
-        per-character path (rainbow colors, letter spacing) and the standard
-        multiline path identically to how the composer previews them."""
-        content = element['content']
+    def _ink_plan(self, element, font):
+        """Every mark an element's text makes, in canvas px and paint order:
+        the highlighter chip, the runs of glyphs (each with where Pillow puts
+        it and the pen position and baseline that means), and the underlines.
 
+        This is the one layout of a post's text. The render paints exactly
+        this plan (_paint_plan), and the post page draws the same plan as
+        real text (Post.text_plan, frontend PlanText) - so line breaks,
+        sizes and positions cannot differ between them.
+        """
+        content = element['content']
         align = element.get('align', 'center')
-        # Border round the letters: every glyph stroked first, then every
-        # glyph filled, so no letter's border paints over its neighbour
-        outline = element.get('outlineColor')
-        stroke = self._outline_width(element)
+        fill_color = element['color']
+        ascent, descent = font.getmetrics()
+        size = element.get('fontSize', 24)
+        dummy = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+
+        def run(text, xy, anchor, fill):
+            # pen position and baseline: horizontal 'l'/'m'/'r' is the left,
+            # middle or right of the advance; vertical 'a'/'m'/'s' the
+            # ascender, the middle of ascender and descender, or the baseline
+            advance = dummy.textlength(text, font=font)
+            left = xy[0] - {'l': 0, 'm': advance / 2, 'r': advance}[anchor[0]]
+            baseline = xy[1] + {'a': ascent, 'm': (ascent - descent) / 2, 's': 0}[anchor[1]]
+            return {'text': text, 'xy': [xy[0], xy[1]], 'anchor': anchor, 'fill': fill,
+                    'left': left, 'baseline': baseline, 'advance': advance}
+
+        plan = {'chips': [], 'runs': [], 'lines': []}
 
         if not self._is_styled_text(element):
-            passes = ([dict(fill=outline, stroke_width=stroke, stroke_fill=outline)] if outline else []) \
-                + [dict(fill=element['color'])]
-            for ink in passes:
-                draw.multiline_text((element['x'], element['y']), content, font=font,
-                                    align=align, anchor='mm', **ink)
-            return
+            _font, parts = dummy._prepare_multiline_text(
+                (element['x'], element['y']), content, font, 'mm', 4, align,
+                None, None, None, 0, False, None)
+            plan['runs'] = [run(line, xy, anchor, fill_color) for xy, anchor, line in parts if line]
+            return plan
 
         spacing = element.get('letterSpacing') or 0
         # Rainbow and two-colour alternation are one mechanism: a palette
@@ -1147,10 +1168,7 @@ class Post(models.Model):
         lines, line_height, gap, total_height = self._styled_text_layout(element, font)
         top = element['y'] - total_height / 2
         max_width = max(width for _text, width in lines)
-
         underline = bool(element.get('underline'))
-        ascent, _descent = font.getmetrics()
-        size = element.get('fontSize', 24)
 
         def line_x(width):
             if align == 'left':
@@ -1160,52 +1178,102 @@ class Post(models.Model):
             return element['x'] - width / 2
 
         # Highlighter: ONE rectangle behind the whole text block, spanning
-        # the widest line and every line, drawn before any ink
-        if include_chips and element.get('hasBackground'):
-            draw.rectangle(self._chip_rect(element, max_width, top, total_height),
-                           fill=element.get('backgroundColor', '#FFFFFF'))
+        # the widest line and every line
+        if element.get('hasBackground'):
+            plan['chips'].append({'rect': list(self._chip_rect(element, max_width, top, total_height)),
+                                  'fill': element.get('backgroundColor', '#FFFFFF')})
 
         # Colour ranges are counted per visible character (see
         # _collect_text_elements) and win over the element's colour, the
         # rainbow and the duo
         char_colors = element.get('charColors') or None
+        color_index = 0
+        visible_index = 0
+        for i, (line, width) in enumerate(lines):
+            x = line_x(width)
+            y = top + i * (line_height + gap)
+            line_start_x = x
+            if cycle_palette or spacing or char_colors:
+                for ch in line:
+                    fill = fill_color
+                    if not ch.isspace():
+                        if cycle_palette:
+                            fill = cycle_palette[color_index % len(cycle_palette)]
+                            color_index += 1
+                        if char_colors and visible_index < len(char_colors) and char_colors[visible_index]:
+                            fill = char_colors[visible_index]
+                        visible_index += 1
+                    if not ch.isspace():
+                        plan['runs'].append(run(ch, (x, y), 'la', fill))
+                    x += dummy.textlength(ch, font=font) + spacing
+            elif line:
+                # Whole-line draw keeps kerning (underline-only path)
+                plan['runs'].append(run(line, (line_start_x, y), 'la', fill_color))
+            if underline and line.strip():
+                underline_y = y + ascent + max(2, int(size * 0.04))
+                plan['lines'].append({'from': [line_start_x, underline_y], 'to': [line_start_x + width, underline_y],
+                                      'width': max(2, int(size // 16)), 'fill': fill_color})
+        return plan
 
-        def draw_lines(stroke_pass):
-            color_index = 0
-            visible_index = 0
+    TEXT_PLAN_VERSION = 1
+
+    def _text_plan(self, text_elements):
+        """The post's text as drawn: per element, the face (the font file's
+        name, which is the app's font family name), size, border, glow and
+        opacity, and its _ink_plan. Canvas px, rounded to 0.01."""
+        def r(v):
+            return round(v, 2) if isinstance(v, float) else v
+
+        def tidy(value):
+            if isinstance(value, dict):
+                return {k: tidy(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [tidy(v) for v in value]
+            return r(value)
+
+        elements = []
+        for element in text_elements:
+            if not element.get('content'):
+                continue
+            font = self._get_font_for_element(element)
+            plan = self._ink_plan(element, font)
+            for run in plan['runs']:
+                del run['xy'], run['anchor']  # Pillow's own placement: server only
+            elements.append(tidy({
+                'face': os.path.splitext(os.path.basename(getattr(font, 'path', '') or ''))[0],
+                'size': element.get('fontSize', 24),
+                'outline': element.get('outlineColor'),
+                'stroke': self._outline_width(element),
+                'glow': self._glow_radius(element) if element.get('glow') else 0,
+                'opacity': float(element.get('opacity') or 1),
+                **plan,
+            }))
+        return {'version': self.TEXT_PLAN_VERSION, 'canvas': [int(self.image_width), int(self.image_height)],
+                'elements': elements}
+
+    def _paint_plan(self, draw, plan, font, outline=None, stroke=0, include_chips=True):
+        """Paint an _ink_plan: chips, then (with a border) every run and
+        underline stroked, then every run and underline filled - so no
+        glyph's border paints over its neighbour."""
+        if include_chips:
+            for chip in plan['chips']:
+                draw.rectangle(tuple(chip['rect']), fill=chip['fill'])
+        passes = ([True] if outline else []) + [False]
+        for stroke_pass in passes:
             ink = dict(stroke_width=stroke, stroke_fill=outline) if stroke_pass else {}
-            for i, (line, width) in enumerate(lines):
-                x = line_x(width)
-                y = top + i * (line_height + gap)
-                line_start_x = x
-                if cycle_palette or spacing or char_colors:
-                    for ch in line:
-                        fill = element['color']
-                        if not ch.isspace():
-                            if cycle_palette:
-                                fill = cycle_palette[color_index % len(cycle_palette)]
-                                color_index += 1
-                            if char_colors and visible_index < len(char_colors) and char_colors[visible_index]:
-                                fill = char_colors[visible_index]
-                            visible_index += 1
-                        draw.text((x, y), ch, font=font, fill=outline if stroke_pass else fill, **ink)
-                        x += draw.textlength(ch, font=font) + spacing
-                else:
-                    # Whole-line draw keeps kerning (underline-only path)
-                    draw.text((line_start_x, y), line, font=font,
-                              fill=outline if stroke_pass else element['color'], **ink)
-                if underline and line.strip():
-                    underline_y = y + ascent + max(2, int(size * 0.04))
-                    thickness = max(2, int(size // 16))
-                    draw.line(
-                        (line_start_x, underline_y, line_start_x + width, underline_y),
-                        fill=outline if stroke_pass else element['color'],
-                        width=thickness + 2 * stroke if stroke_pass else thickness,
-                    )
+            for r in plan['runs']:
+                draw.text(tuple(r['xy']), r['text'], font=font, anchor=r['anchor'],
+                          fill=outline if stroke_pass else r['fill'], **ink)
+            for line in plan['lines']:
+                draw.line((*line['from'], *line['to']),
+                          fill=outline if stroke_pass else line['fill'],
+                          width=line['width'] + 2 * stroke if stroke_pass else line['width'])
 
-        if outline:
-            draw_lines(stroke_pass=True)
-        draw_lines(stroke_pass=False)
+    def _render_text_ink(self, draw, element, font, include_chips=True):
+        """Draw the element's text: its plan (_ink_plan), painted."""
+        self._paint_plan(draw, self._ink_plan(element, font), font,
+                         outline=element.get('outlineColor'), stroke=self._outline_width(element),
+                         include_chips=include_chips)
 
     def _draw_text_element(self, img, draw, element):
         content = element['content']

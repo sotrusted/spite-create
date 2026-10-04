@@ -1,3 +1,4 @@
+import type { TextPlan } from './textPlan';
 import type { CanvasState } from './canvas';
 export interface User {
   handle: string;
@@ -89,12 +90,16 @@ export interface Post {
     // this level's own text (canvas px of its own post), drawn over the
     // text-free render on the post page
     text_elements?: TextElement[] | null;
+    // the parent's text as its render drew it (parent canvas px)
+    text_plan?: TextPlan | null;
     hidden: boolean;
   }>;
   // the post without any text drawn (its own or its quotes')
   textless_image_url?: string | null;
   // what is drawn (canvas px)
   text_elements?: TextElement[] | null;
+  // the text as the render drew it: the post page draws from this
+  text_plan?: TextPlan | null;
 }
 
 export interface TextElement {

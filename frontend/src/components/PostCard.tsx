@@ -66,7 +66,8 @@ export default function PostCard({ post, onReport, onMute, onBlock, onSwipeableO
 
   // Prefetch the renders that collapse states need, so toggling is instant
   useEffect(() => {
-    const urls = [post.response_image_url, ...chain.map(level => level.strip.url)]
+    // ... and the post page's text-free render, so it opens with no load
+    const urls = [post.response_image_url, post.textless_image_url, ...chain.map(level => level.strip.url)]
       .filter(Boolean)
       .map(u => absoluteUrl(u as string)!);
     // Renders never change in place (a re-render gets a new URL), so the disk
