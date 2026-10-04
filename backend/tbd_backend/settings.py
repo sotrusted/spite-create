@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -112,7 +113,10 @@ else:
 # silently reset), and it was never shared between worker processes. Redis
 # when CACHE_URL is set (production), in-memory for dev and tests.
 CACHE_URL = config('CACHE_URL', default='')
-if CACHE_URL:
+# A test run never touches the real cache: on the box CACHE_URL is the live
+# Redis, and test requests would spend (and be refused by) real rate limits
+RUNNING_TESTS = len(sys.argv) > 1 and sys.argv[1] == 'test'
+if CACHE_URL and not RUNNING_TESTS:
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.redis.RedisCache',

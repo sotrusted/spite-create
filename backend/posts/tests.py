@@ -1357,6 +1357,11 @@ class LimitsTests(TestCase):
 class PayloadValidationTests(TestCase):
     """The API checks what is drawn, not just the summary the client sends."""
 
+    def setUp(self):
+        # each test starts with fresh rate limits
+        from django.core.cache import cache
+        cache.clear()
+
     def payload(self, **overrides):
         body = {
             'text_content': 'hello',
