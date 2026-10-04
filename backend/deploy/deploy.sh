@@ -12,6 +12,8 @@ rsync -az \
   --exclude '*.actual.png' --exclude __pycache__ \
   backend/ "$HOST:cmim/backend/"
 rsync -az frontend/assets/fonts/ "$HOST:cmim/frontend/assets/fonts/"
+# limits and fixtures both sides are tested against
+rsync -az shared/ "$HOST:cmim/shared/"
 
 ssh "$HOST" 'set -e
 cd ~/cmim/backend
