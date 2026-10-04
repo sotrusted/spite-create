@@ -1701,8 +1701,11 @@ class FontMetricsTableTests(TestCase):
     def test_table_matches_the_font_files(self):
         import re
         from fontTools.ttLib import TTFont
-        table = open(os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'src', 'constants',
-                                  'fontMetrics.ts')).read()
+        path = os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'src', 'constants', 'fontMetrics.ts')
+        if not os.path.exists(path):
+            # a repo check: the server is deployed without the app's source
+            self.skipTest('frontend source not present (deployed server)')
+        table = open(path).read()
         for name in os.listdir(Post._REPO_FONTS):
             face = os.path.splitext(name)[0]
             with self.subTest(face=face):
