@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { autoOutlineColor, resolveOutlineColor, applyFontChange, outlineAfterTextColor, startingStyle } from './outline';
+import { autoOutlineColor, resolveOutlineColor, applyFontChange, outlineAfterTextColor, startingStyle, nextOutline } from './outline';
+import { Colors } from '../constants/colors';
 
 test('auto: the contrasting one of black and white', () => {
   assert.equal(autoOutlineColor('#F8F8FF', null), '#000000'); // white text, black border
@@ -45,4 +46,18 @@ test('switching font moves untouched style to the new font, keeps what the user 
 test('a new text colour puts a picked border back to following it', () => {
   assert.deepEqual(outlineAfterTextColor({ mode: 'custom', color: '#FF1A1A' }), { mode: 'auto' });
   assert.deepEqual(outlineAfterTextColor({ mode: 'off' }), { mode: 'off' });
+});
+
+test('tapping the border steps off, auto, every other palette colour, off', () => {
+  const text = '#FF1A1A';
+  const seen: string[] = [];
+  let setting = nextOutline({ mode: 'off' }, text);
+  assert.deepEqual(setting, { mode: 'auto' });
+  for (;;) {
+    setting = nextOutline(setting, text);
+    if (setting.mode !== 'custom') break;
+    seen.push(setting.color);
+  }
+  assert.deepEqual(setting, { mode: 'off' });
+  assert.deepEqual(seen, Colors.postColors.filter(c => c !== text));
 });

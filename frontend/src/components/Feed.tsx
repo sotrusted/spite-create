@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import Toast from 'react-native-toast-message';
 import { bootFeed, saveBootFeed } from '../utils/bootFeed';
+import { separatorColor, SEPARATOR } from '../utils/feedSeparator';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
 import { api, endpoints, isOfflineError } from '../config/api';
@@ -430,6 +431,17 @@ export default function Feed({
     return () => sub.remove();
   }, [fetchFeed]);
 
+  // Between two posts whose touching edges are the same or nearly the same
+  // colour, a hairline keeps them from running together (utils/feedSeparator).
+  // The list hands a separator only the post above it; the one below is the
+  // next in the feed.
+  const PostSeparator = useCallback(({ leadingItem }: { leadingItem?: Post }) => {
+    const index = leadingItem ? posts.findIndex(p => p.id === leadingItem.id) : -1;
+    const below = index >= 0 ? posts[index + 1] : undefined;
+    const color = leadingItem && below ? separatorColor(leadingItem, below) : null;
+    return color ? <View style={{ height: SEPARATOR.width, backgroundColor: color }} /> : null;
+  }, [posts]);
+
   const renderPost = ({ item, index }: { item: Post; index: number }) => {
     /*
     console.log('🎨 Rendering post:', {
@@ -551,7 +563,8 @@ export default function Feed({
             ? [styles.emptyContainer, { paddingTop: headerClearance }]
             : { paddingTop: headerClearance, paddingHorizontal: 0, flexGrow: 1 }
         }
-        ItemSeparatorComponent={null}
+        ItemSeparatorComponent={PostSeparator}
+        extraData={posts}
         style={{ backgroundColor: Colors.background, margin: 0, padding: 0, flex: 1 }}
         onScroll={onScroll}
         scrollEventThrottle={16}

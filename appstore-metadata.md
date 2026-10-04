@@ -15,7 +15,7 @@ Express yourself! The iPhone is a visual device, but thoughts require language. 
 
 Better than Create Mode! We're always hitting the volume button and the sleep button to screenshot someone's post, but what do you say we turn down the volume on that and put that whole notion to sleep? This is Type -- let's just hold down on the post or we can double tap to instantly quote! Sleep on it, this the kind of app that will hold you down. ;)
 
-Express your personality! Use Type Magazine to express your deepest secrets or quirkiest anecdotes instantly. Identities coming soon!
+Express your personality! Use Type Magazine to express your deepest secrets or quirkiest anecdotes instantly.
 
 Creative mind's ideas. Be creative. Your ideas count! 12345678910
 

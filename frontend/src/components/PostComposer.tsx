@@ -51,7 +51,7 @@ import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { applyColorToRange, adjustRuns, colorSpans } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
-import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor } from '../utils/outline';
+import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
@@ -3128,12 +3128,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               color: el.capsLock ? Colors.accent : 'white',
             }]}>AA</Text>
           </TouchableOpacity>
-          {/* Border round the letters: tap on/off, hold for its colour */}
+          {/* Border round the letters: tap steps auto, the palette, off; hold for the grid */}
           <TouchableOpacity
             style={[styles.controlOption, styles.controlLetterOption, el.outline && el.outline.mode !== 'off' && styles.controlOptionActive]}
-            onPress={() => updateTextElement(el.id, {
-              outline: el.outline && el.outline.mode !== 'off' ? { mode: 'off' } : { mode: 'auto' },
-            })}
+            onPress={() => updateTextElement(el.id, { outline: nextOutline(el.outline, el.color) })}
             onLongPress={() => setColorGridMode('outline')}
             delayLongPress={GESTURES.longPress.controlMs}
           >

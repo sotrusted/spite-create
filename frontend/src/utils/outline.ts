@@ -71,3 +71,13 @@ export const startingStyle = (family: FontChoice) => {
 export const outlineAfterTextColor = (setting: OutlineSetting | undefined): OutlineSetting | undefined =>
   setting?.mode === 'custom' ? { mode: 'auto' } : setting;
 
+
+// The border button's tap, like the colour button's: off -> auto -> each
+// palette colour (skipping the text's own, which would not show) -> off
+export function nextOutline(setting: OutlineSetting | undefined, textColor: string): OutlineSetting {
+  const palette = Colors.postColors.filter(c => c.toUpperCase() !== textColor.toUpperCase());
+  if (!setting || setting.mode === 'off') return { mode: 'auto' };
+  if (setting.mode === 'auto') return { mode: 'custom', color: palette[0] };
+  const at = palette.indexOf(setting.color);
+  return at >= 0 && at < palette.length - 1 ? { mode: 'custom', color: palette[at + 1] } : { mode: 'off' };
+}
