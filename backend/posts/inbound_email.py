@@ -2,10 +2,14 @@
 by Resend, which calls this webhook; we fetch the message and forward it to
 the people who answer support (SUPPORT_FORWARD_TO).
 
-The forward comes from the support address with Reply-To set to the
-original sender, so replying from Gmail answers them directly. Attachments
-are not carried over (support mail rarely has them); the forward says so
-and they stay retrievable in the Resend dashboard.
+Replies go out from the support address, never a personal one. The forward's
+Reply-To is a relay address, reply+<email id>.<signature>@<domain>; a reply
+sent there comes back through this same webhook, is checked (it must be
+from a SUPPORT_FORWARD_TO address, pass DKIM or DMARC, and carry a valid
+signature), and is re-sent from SUPPORT_FROM_EMAIL to the original sender,
+threaded onto their message. Attachments are not carried over (support
+mail rarely has them); the forward says so and they stay retrievable in
+the Resend dashboard.
 
 Webhook requests are signed (Svix scheme): an HMAC-SHA256 over
 "{svix-id}.{svix-timestamp}.{body}" with the endpoint's whsec_ secret.
@@ -17,6 +21,7 @@ import hmac
 import json
 import logging
 import time
+from email.utils import parseaddr
 
 import requests
 from django.conf import settings
@@ -59,12 +64,74 @@ def _resend(method, path, **kwargs):
     return response.json()
 
 
-def forward_received_email(email_id):
+RELAY_PREFIX = 'reply+'
+
+
+def _relay_signature(email_id):
+    return hmac.new(settings.RESEND_WEBHOOK_SECRET.encode(), email_id.encode(), hashlib.sha256).hexdigest()[:20]
+
+
+def relay_address(email_id):
+    domain = parseaddr(settings.SUPPORT_FROM_EMAIL)[1].split('@')[1]
+    return f'{RELAY_PREFIX}{email_id}.{_relay_signature(email_id)}@{domain}'
+
+
+def relayed_email_id(address):
+    """The received email a relay address answers, or None if it is not a
+    relay address or its signature is wrong."""
+    local = parseaddr(address)[1].split('@')[0].lower()
+    if not local.startswith(RELAY_PREFIX):
+        return None
+    email_id, _, signature = local[len(RELAY_PREFIX):].rpartition('.')
+    if not email_id or not hmac.compare_digest(signature, _relay_signature(email_id)):
+        return None
+    return email_id
+
+
+def _authenticated(email):
+    """The receiving server's own verdict that the sender is who they say
+    (DKIM or DMARC pass) - a From line alone can be forged."""
+    auth = email.get('authentication') or {}
+    return auth.get('dkim') == 'pass' or auth.get('dmarc') == 'pass'
+
+
+def relay_reply(email, original_id):
+    """A support reply from Gmail, re-sent from the support address."""
+    sender = parseaddr(email.get('from') or '')[1].lower()
+    allowed = {parseaddr(a)[1].lower() for a in settings.SUPPORT_FORWARD_TO}
+    if sender not in allowed or not _authenticated(email):
+        logger.warning('refused a relay reply from %s', sender or 'unknown')
+        return None
+    original = _resend('GET', f'/emails/receiving/{original_id}')
+    subject = original.get('subject') or ''
+    payload = {
+        'from': settings.SUPPORT_FROM_EMAIL,
+        'to': [original.get('from')],
+        'subject': subject if subject.lower().startswith('re:') else f'Re: {subject}'.strip(),
+        'text': email.get('text') or '',
+    }
+    if email.get('html'):
+        payload['html'] = email['html']
+    if original.get('message_id'):
+        payload['headers'] = {'In-Reply-To': original['message_id'], 'References': original['message_id']}
+    return _resend('POST', '/emails', json=payload)
+
+
+def handle_received_email(email_id):
     email = _resend('GET', f'/emails/receiving/{email_id}')
+    for address in email.get('to') or []:
+        original_id = relayed_email_id(address)
+        if original_id:
+            return relay_reply(email, original_id)
+    return forward_received_email(email_id, email)
+
+
+def forward_received_email(email_id, email=None):
+    email = email or _resend('GET', f'/emails/receiving/{email_id}')
     sender = email.get('from') or 'unknown sender'
     subject = email.get('subject') or '(no subject)'
     to = ', '.join(email.get('to') or [])
-    note = f'Forwarded from {to}. Reply to answer {sender} directly.'
+    note = f'From {sender} to {to}. Reply to answer them from the support address.'
     if email.get('attachments'):
         names = ', '.join(a.get('filename') or 'unnamed' for a in email['attachments'])
         note += f' Attachments not included ({names}); see the Resend dashboard.'
@@ -73,7 +140,7 @@ def forward_received_email(email_id):
     payload = {
         'from': settings.SUPPORT_FROM_EMAIL,
         'to': settings.SUPPORT_FORWARD_TO,
-        'reply_to': sender,
+        'reply_to': relay_address(email_id),
         'subject': f'[Support] {subject}',
         'text': text,
     }
@@ -104,7 +171,7 @@ def resend_inbound_webhook(request):
     if not email_id:
         return HttpResponse(status=400)
     try:
-        forward_received_email(email_id)
+        handle_received_email(email_id)
     except requests.RequestException:
         # 5xx makes Resend retry the delivery later
         logger.exception('forwarding inbound email %s failed', email_id)

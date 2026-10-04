@@ -1244,7 +1244,9 @@ class InboundEmailTests(TestCase):
         self.assertEqual(calls[0][:2], ('GET', 'https://api.resend.com/emails/receiving/abc-123'))
         sent = calls[1][2]['json']
         self.assertEqual(sent['to'], ['me@example.com'])
-        self.assertEqual(sent['reply_to'], 'Reader <reader@example.org>')
+        # replies go to a signed relay address, never straight to the reader
+        from posts.inbound_email import relayed_email_id
+        self.assertEqual(relayed_email_id(sent['reply_to']), 'abc-123')
         self.assertEqual(sent['subject'], '[Support] Hello')
         self.assertIn('Love the app', sent['text'])
         self.assertEqual(calls[1][2]['headers']['Authorization'], 'Bearer re_test')
@@ -1436,3 +1438,53 @@ class OutlineTests(RenderTestCase):
         from posts import limits
         shared = json.loads(open(os.path.join(os.path.dirname(__file__), '..', '..', 'shared', 'style.json')).read())
         self.assertEqual(limits.OUTLINE_WIDTH_EM, shared['outlineWidthEm'])
+
+
+@override_settings(RESEND_WEBHOOK_SECRET=InboundEmailTests.SECRET, RESEND_API_KEY='re_test',
+                   SUPPORT_FROM_EMAIL='Support <support@example.com>', SUPPORT_FORWARD_TO=['me@example.com'])
+class ReplyRelayTests(TestCase):
+    """A reply from Gmail to the relay address goes out from support@."""
+
+    def run_relay(self, reply):
+        from unittest import mock
+        from posts.inbound_email import handle_received_email
+        original = {'from': 'Reader <reader@example.org>', 'to': ['support@example.com'],
+                    'subject': 'Hello', 'message_id': '<orig@example.org>'}
+        sent = []
+
+        def fake_request(method, url, **kwargs):
+            response = mock.Mock(status_code=200)
+            if method == 'POST':
+                sent.append(kwargs['json'])
+                response.json.return_value = {'id': 'sent'}
+            else:
+                response.json.return_value = reply if url.endswith('/reply-1') else original
+            return response
+
+        with mock.patch('posts.inbound_email.requests.request', side_effect=fake_request):
+            handle_received_email('reply-1')
+        return sent
+
+    def reply(self, **overrides):
+        from posts.inbound_email import relay_address
+        email = {'from': 'Tom <me@example.com>', 'to': [relay_address('orig-1')], 'subject': 'Re: [Support] Hello',
+                 'text': 'Thanks!', 'authentication': {'dkim': 'pass', 'dmarc': 'pass', 'spf': 'pass'}}
+        email.update(overrides)
+        return email
+
+    def test_reply_goes_out_from_support_threaded(self):
+        (sent,) = self.run_relay(self.reply())
+        self.assertEqual(sent['from'], 'Support <support@example.com>')
+        self.assertEqual(sent['to'], ['Reader <reader@example.org>'])
+        self.assertEqual(sent['subject'], 'Re: Hello')
+        self.assertEqual(sent['headers']['In-Reply-To'], '<orig@example.org>')
+        self.assertNotIn('me@example.com', json.dumps(sent))
+
+    def test_forged_or_foreign_replies_are_refused(self):
+        self.assertEqual(self.run_relay(self.reply(authentication={'dkim': 'fail', 'dmarc': 'fail'})), [])
+        self.assertEqual(self.run_relay(self.reply(**{'from': 'someone@else.com'})), [])
+
+    def test_a_tampered_relay_address_is_not_a_relay(self):
+        from posts.inbound_email import relayed_email_id
+        self.assertIsNone(relayed_email_id('reply+orig-1.0000000000@example.com'))
+        self.assertIsNone(relayed_email_id('support@example.com'))
