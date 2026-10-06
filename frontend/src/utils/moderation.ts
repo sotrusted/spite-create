@@ -1,7 +1,8 @@
 import { api, endpoints } from '../config/api';
 
 // Report, mute and block: the API calls, the copy, and the event that tells
-// the feed an author's posts should go. Used by the post page's menu.
+// the feed an author's posts should go. Used by the post page's menu, which
+// never shows who wrote a post: unsigned posts stay anonymous.
 
 export type ReportReason = 'spam' | 'harassment' | 'inappropriate' | 'fake' | 'other';
 
@@ -16,9 +17,10 @@ export const REPORT_REASONS: { value: ReportReason; label: string }[] = [
 export type HideKind = 'mute' | 'block';
 
 export const MODERATION_COPY = {
-  mute: { title: 'Mute', body: "You won't see their posts anymore.", done: 'Muted' },
+  mute: { title: 'Mute', confirm: 'Mute whoever wrote this?', body: "You won't see their posts anymore.", done: 'Muted' },
   block: {
     title: 'Block',
+    confirm: 'Block whoever wrote this?',
     body: 'Their posts disappear for you, your posts disappear for them, and their quoted posts are hidden.',
     done: 'Blocked',
   },

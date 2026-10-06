@@ -211,7 +211,7 @@ export default function PostDetailScreen() {
   const sheet = (title: string, options: string[], destructive: number[], pick: (i: number) => void) => {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
-        { title, options: [...options, 'Cancel'], cancelButtonIndex: options.length, destructiveButtonIndex: destructive },
+        { ...(title ? { title } : {}), options: [...options, 'Cancel'], cancelButtonIndex: options.length, destructiveButtonIndex: destructive },
         i => { if (i < options.length) pick(i); },
       );
     } else {
@@ -224,7 +224,8 @@ export default function PostDetailScreen() {
   const confirmHide = (kind: HideKind) => {
     if (!post) return;
     const copy = MODERATION_COPY[kind];
-    Alert.alert(`${copy.title} @${post.author.handle}?`, copy.body, [
+    // never the handle: an unsigned post stays anonymous here too
+    Alert.alert(copy.confirm, copy.body, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: copy.title,
@@ -258,7 +259,7 @@ export default function PostDetailScreen() {
       if (post.editable) sheet('Your post', ['Edit again'], [], () => editAgain(navigation as any, post.id));
       return;
     }
-    sheet(`@${post.author.handle}`, ['Report post', 'Mute', 'Block'], [0, 2], i => {
+    sheet('', ['Report post', 'Mute', 'Block'], [0, 2], i => {
       if (i === 0) openReport();
       else confirmHide(i === 1 ? 'mute' : 'block');
     });
