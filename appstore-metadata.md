@@ -6,6 +6,9 @@ Type Magazine
 ## Subtitle (30 chars max)
 Creative Mind's Ideas
 
+## Promotional text (170 chars max; editable any time without review)
+Text as image! Quote anything! Pick a font, pick a color, and your words become a page in the magazine. Creative mind's ideas!
+
 ## Description
 (plain text: the App Store does not render markdown)
 
