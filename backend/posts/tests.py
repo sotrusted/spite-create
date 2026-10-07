@@ -1339,6 +1339,35 @@ class QuoteCropTests(RenderTestCase):
         chain = PostListSerializer(context={}).get_quote_chain(repost)
         self.assertEqual(chain[0]['post_id'], str(parent.id))
 
+    def deep_chain(self, depth):
+        post = self.make_post([text_element('LEVEL 0', color='#000000')], background_color='#00CED1')
+        for level in range(1, depth + 1):
+            post = self.make_post([text_element(f'LEVEL {level}', y=300)], is_repost=True, original_post=post,
+                                  repost_geometry={'x': 60, 'y': 500, 'width': 960})
+        return post
+
+    def test_the_chain_reaches_every_level_of_a_deep_quote(self):
+        # every level's text is drawn over the text-free render, so the
+        # chain must not stop short of the innermost post
+        from posts.serializers import PostListSerializer
+        post = self.deep_chain(11)
+        data = PostListSerializer(post, context={}).data
+        self.assertEqual(len(data['quote_chain']), 11)
+        self.assertEqual(data['quote_chain'][-1]['snippet'], 'LEVEL 0')
+        self.assertIsNotNone(data['textless_image_url'])
+
+    def test_a_chain_past_the_limit_gets_the_full_render(self):
+        from unittest import mock
+        from posts import limits
+        from posts.serializers import PostListSerializer, PostSerializer
+        post = self.deep_chain(4)
+        with mock.patch.object(limits, 'QUOTE_CHAIN_DEPTH', 3):
+            for serializer in (PostListSerializer, PostSerializer):
+                fresh = Post.objects.get(pk=post.pk)
+                data = serializer(fresh, context={}).data
+                self.assertEqual(len(data['quote_chain']), 3)
+                self.assertIsNone(data['textless_image_url'])
+
 
 class LimitsTests(TestCase):
     def test_limits_match_shared_file(self):
@@ -1351,6 +1380,7 @@ class LimitsTests(TestCase):
             'fontSizeMax': limits.FONT_SIZE_MAX, 'maxTextElements': limits.MAX_TEXT_ELEMENTS,
             'maxPostLength': limits.MAX_POST_LENGTH, 'gradientStopsMin': limits.GRADIENT_STOPS_MIN,
             'gradientStopsMax': limits.GRADIENT_STOPS_MAX, 'maxColorRuns': limits.MAX_COLOR_RUNS,
+            'quoteChainDepth': limits.QUOTE_CHAIN_DEPTH,
         }
         self.assertEqual(mine, shared)
 

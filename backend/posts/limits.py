@@ -14,6 +14,9 @@ MAX_POST_LENGTH = 500  # all elements' text together
 GRADIENT_STOPS_MIN = 2
 GRADIENT_STOPS_MAX = 8
 MAX_COLOR_RUNS = 200
+# Quoted levels the post page draws text for; a deeper chain shows its
+# full render instead (the text-free one would leave the rest bare)
+QUOTE_CHAIN_DEPTH = 64
 
 # Text border (shared/style.json): stroke width per 1 of font size
 OUTLINE_WIDTH_EM = 0.07

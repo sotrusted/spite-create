@@ -12,4 +12,5 @@ export const LIMITS = {
   gradientStopsMin: 2,
   gradientStopsMax: 8,
   maxColorRuns: 200,
+  quoteChainDepth: 64, // quoted levels the post page draws text for
 } as const;

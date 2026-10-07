@@ -9,5 +9,6 @@
   "maxPostLength": 500,
   "gradientStopsMin": 2,
   "gradientStopsMax": 8,
-  "maxColorRuns": 200
+  "maxColorRuns": 200,
+  "quoteChainDepth": 64
 }

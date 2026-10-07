@@ -37,13 +37,32 @@ def _absolute(image, context):
 
 
 def quote_chain_for(obj, context):
+    return _quote_chain(obj, context)[0]
+
+
+def textless_url_for(obj, context):
+    """The text-free render, offered only when the quote chain reaches the
+    innermost post: the post page draws text for chain levels alone, so a
+    level past the end of the chain would show bare."""
+    return _absolute(obj.textless_image, context) if _quote_chain(obj, context)[1] else None
+
+
+def _quote_chain(obj, context):
+    """(chain, complete), built once per post per serialization."""
+    cached = getattr(obj, '_quote_chain_cache', None)
+    if cached is None:
+        cached = obj._quote_chain_cache = _build_quote_chain(obj, context)
+    return cached
+
+
+def _build_quote_chain(obj, context):
     """Every quoted ancestor with its strip rect mapped into THIS post's
     canvas coordinates, enabling per-level collapse in the feed.
     Level i entry: where ancestor i's strip sits (rect, root canvas px),
     what to draw when levels >= i collapse (the ancestor's reply-only
     strip source), and the chip content for hiding level i."""
     if not obj.is_repost or not obj.original_post_id:
-        return []
+        return [], True
     blocked_ids = context.get('blocked_author_ids') or set()
     request = context.get('request')
     # The feed batch-loads every ancestor on the page (one query per
@@ -60,13 +79,13 @@ def quote_chain_for(obj, context):
     current = obj
     # Cumulative transform from current level's canvas into root canvas
     offset_x, offset_y, scale = 0.0, 0.0, 1.0
-    for _depth in range(6):
+    for _depth in range(limits.QUOTE_CHAIN_DEPTH):
         if not current.is_repost or not current.original_post_id:
-            break
+            return chain, True
         geometry = current.repost_geometry
         parent = ancestors.get(current.original_post_id) or current.original_post
         if not (isinstance(geometry, dict) and geometry.get('width')):
-            break
+            return chain, False
         parent_width = parent.image_width or 1080
         crop_top, crop_bottom = Post.quoted_crop(parent, geometry)
         level_scale = geometry['width'] / parent_width
@@ -126,7 +145,7 @@ def quote_chain_for(obj, context):
         offset_y = rect['y'] - crop_top * level_scale * scale
         scale = scale * level_scale
         current = parent
-    return chain
+    return chain, not (current.is_repost and current.original_post_id)
 
 
 class PostSerializer(serializers.ModelSerializer):
@@ -175,7 +194,7 @@ class PostSerializer(serializers.ModelSerializer):
         return None
     
     def get_textless_image_url(self, obj):
-        return _absolute(obj.textless_image, self.context)
+        return textless_url_for(obj, self.context)
 
     def get_quote_chain(self, obj):
         return quote_chain_for(obj, self.context)
@@ -577,7 +596,7 @@ class PostListSerializer(serializers.ModelSerializer):
         return quote_chain_for(obj, self.context)
 
     def get_textless_image_url(self, obj):
-        return _absolute(obj.textless_image, self.context)
+        return textless_url_for(obj, self.context)
 
     def get_response_image_url(self, obj):
         """Collapsed-repost render (response only, no quoted strip)"""
