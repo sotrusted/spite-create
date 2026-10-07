@@ -29,6 +29,9 @@ export const CHROME = {
   iconSize: 24,
   // translucent backing that keeps a white icon legible on any post colour
   scrim: 'rgba(0,0,0,0.6)',
+  // over the whole canvas while typing, quote included, so the line being
+  // typed never reads as sitting on top of what is already there
+  editingScrim: 'rgba(0,0,0,0.55)',
   // the quote button on cards and detail
   buttonWidth: 38,
   buttonHeight: 34,

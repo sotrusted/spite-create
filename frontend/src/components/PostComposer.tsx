@@ -51,7 +51,6 @@ import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { applyColorToRange, adjustRuns, colorSpans } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
-import { shownText, typedAfterEdit } from '../utils/capsInput';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
@@ -143,6 +142,9 @@ const LIST_STYLES = ['none', 'bullet', 'dash', 'star', 'number'] as const;
 const LIST_MARKERS: Record<string, string> = { bullet: '\u2022 ', dash: '- ', star: '* ' };
 // Below the top menu: where the text being edited may start
 const EDITING_STAGE_TOP = 90;
+// Where the config row rests (from the bottom) before the keyboard reports
+// its height; it moves onto the keyboard as soon as it does
+const CONFIG_BAR_REST = 330;
 
 // Creating a post renders it server-side before answering
 const POST_TIMEOUT_MS = 30000;
@@ -2147,6 +2149,16 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   const editContentHeight = useRef(0);
   const editSelection = useRef({ start: 0, end: 0 });
   const [configBarTop, setConfigBarTop] = useState<number | null>(null);
+  // The config row rides on the keyboard: its height (suggestion row and
+  // all) varies by phone and keyboard, so it is measured, never assumed
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow',
+      e => setKeyboardHeight(Math.max(0, screenHeight - e.endCoordinates.screenY)));
+    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKeyboardHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
   const configBarRef = useRef<View>(null);
   const keepCaretInView = (length: number) => {
     const view = editViewHeight.current;
@@ -2231,13 +2243,16 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                 backgroundColor: 'transparent',
                 textShadowColor: 'transparent',
                 // on iOS a transform here rewrites the typed value itself, a
-                // keystroke late; the field is given its capitals instead
+                // keystroke late. The field always holds exactly what was
+                // typed (anything else and fast typing drops keys); with
+                // caps on, the keyboard types the capitals itself.
                 textTransform: 'none',
               },
             ]}
             selectionColor={element.rainbow ? Colors.accent : element.color}
-            value={shownText(content, element.capsLock)}
-            onChangeText={(text) => handleTextInputChange(element.id, typedAfterEdit(content, text, element.capsLock))}
+            autoCapitalize={element.capsLock ? 'characters' : 'sentences'}
+            value={content}
+            onChangeText={(text) => handleTextInputChange(element.id, text)}
             onSelectionChange={e => {
               editSelection.current = e.nativeEvent.selection;
               setTextSelection(e.nativeEvent.selection);
@@ -3072,7 +3087,7 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     return (
       <View
         ref={configBarRef}
-        style={styles.bottomControlContainer}
+        style={[styles.bottomControlContainer, { bottom: (keyboardHeight || CONFIG_BAR_REST) + SPACE.sm }]}
         onLayout={() => configBarRef.current?.measureInWindow((_x, y) => setConfigBarTop(y))}
       >
         <ScrollView
@@ -3360,6 +3375,9 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       {/* Bottom Control Bar (when editing) */}
       {renderBottomControlBar()}
 
+      {/* Typing dims the canvas, quote and all, under the staged input */}
+      {isEditingText && <View style={[StyleSheet.absoluteFill, styles.editingScrim]} pointerEvents="none" />}
+
       {/* Staged editing input: screen-fixed just above the config row, like
           the row itself, so keyboard state cannot reorder them */}
       {renderEditingInput()}
@@ -3599,7 +3617,6 @@ const styles = StyleSheet.create({
   // Bottom Control Bar (when editing)
   bottomControlContainer: {
     position: 'absolute',
-    bottom: 150,
     left: 0,
     right: 0,
     zIndex: 200,
@@ -3611,7 +3628,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(128,128,128,0.9)',
     paddingVertical: SPACE.sm,
     paddingHorizontal: SPACE.lg,
-    marginBottom: 180,
     zIndex: 150, // Above overlay and text elements
   },
   controlOption: {
@@ -3795,6 +3811,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   // Staged editing area: centered in the free space above the config row
+  editingScrim: {
+    backgroundColor: CHROME.editingScrim,
+    zIndex: 29, // over the canvas and the quote, under the editing stage (30)
+  },
   editingStage: {
     position: 'absolute',
     top: EDITING_STAGE_TOP,
