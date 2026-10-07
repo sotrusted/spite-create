@@ -51,6 +51,7 @@ import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { applyColorToRange, adjustRuns, colorSpans } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
+import { shownText, typedAfterEdit } from '../utils/capsInput';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
@@ -2202,8 +2203,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
             the text on as a canvas tap: that is what finishes editing */}
         <Pressable style={styles.editingScrollContent} onPress={handleCanvasTap}>
         <View style={{ alignItems: wrapperAlign }} pointerEvents="box-none">
-          {/* Styled mirror - the source of visual truth while editing */}
-          <View pointerEvents="none">
+          {/* Styled mirror - the source of visual truth while editing. iOS
+              does not measure text again when only its transform changes,
+              so turning caps on would clip it at the lower-case width */}
+          <View pointerEvents="none" key={element.capsLock ? 'caps' : 'typed'}>
             <OutlinedText
               style={[
                 textStyle,
@@ -2227,11 +2230,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                 color: 'transparent',
                 backgroundColor: 'transparent',
                 textShadowColor: 'transparent',
+                // on iOS a transform here rewrites the typed value itself, a
+                // keystroke late; the field is given its capitals instead
+                textTransform: 'none',
               },
             ]}
             selectionColor={element.rainbow ? Colors.accent : element.color}
-            value={content}
-            onChangeText={(text) => handleTextInputChange(element.id, text)}
+            value={shownText(content, element.capsLock)}
+            onChangeText={(text) => handleTextInputChange(element.id, typedAfterEdit(content, text, element.capsLock))}
             onSelectionChange={e => {
               editSelection.current = e.nativeEvent.selection;
               setTextSelection(e.nativeEvent.selection);
