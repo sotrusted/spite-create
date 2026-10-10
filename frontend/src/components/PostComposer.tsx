@@ -2736,6 +2736,14 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
               )}
               {/* Text gets the per-letter cycles: rainbow, and a duo built
                   from two taps on the palette. */}
+              {/* No border: an empty cell struck through */}
+              {colorGridMode === 'outline' && el && (
+                <TouchableOpacity onPress={() => { updateTextElement(el.id, { outline: { mode: 'off' } }); closeColorGrid(); }}>
+                  <View style={[styles.colorCell, styles.noneCell, (el.outline?.mode ?? 'off') === 'off' && styles.colorCellActive]}>
+                    <View style={styles.noneStrike} />
+                  </View>
+                </TouchableOpacity>
+              )}
               {/* Border back to following the text colour */}
               {colorGridMode === 'outline' && el && (
                 <TouchableOpacity onPress={() => { updateTextElement(el.id, { outline: { mode: 'auto' } }); closeColorGrid(); }}>
@@ -3496,6 +3504,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#3D3D42',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  noneCell: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  noneStrike: {
+    width: 44 * Math.SQRT2,
+    height: 2,
+    backgroundColor: 'white',
+    transform: [{ rotate: '-45deg' }],
   },
   colorCellActive: {
     borderWidth: 3,
