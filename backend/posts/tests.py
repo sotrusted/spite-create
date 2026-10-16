@@ -1385,6 +1385,28 @@ class LimitsTests(TestCase):
         self.assertEqual(mine, shared)
 
 
+class EmojiTests(TestCase):
+    """Emoji never reach a post; text symbols do."""
+
+    def test_ranges_match_shared_file(self):
+        from posts.emoji import EMOJI_RANGES
+        shared = json.loads(open(os.path.join(os.path.dirname(__file__), '..', '..', 'shared', 'emoji.json')).read())
+        self.assertEqual([(int(a, 16), int(b, 16)) for a, b in shared['ranges']], list(EMOJI_RANGES))
+
+    def test_emoji_are_dropped_and_symbols_kept(self):
+        from posts.models import _sanitize_glyphs
+        cases = {
+            'hi \U0001F600!': 'hi !',
+            'I \u2764\uFE0F u': 'I  u',             # the emoji keyboard's heart
+            'I \u2764 u \u2605': 'I \u2764 u \u2605',  # typed as text symbols
+            '\U0001F468\u200D\U0001F469\u200D\U0001F467 x': ' x',
+            '\U0001F1FA\U0001F1F8 \U0001F44D\U0001F3FD 1\uFE0F\u20E3': '  ',
+            '\u0915\u094D\u200D\u0937': '\u0915\u094D\u200D\u0937',  # a joiner inside Devanagari stays
+        }
+        for text, expected in cases.items():
+            self.assertEqual(_sanitize_glyphs(text), expected, repr(text))
+
+
 @override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
 class PayloadValidationTests(TestCase):
     """The API checks what is drawn, not just the summary the client sends."""
@@ -1432,6 +1454,16 @@ class PayloadValidationTests(TestCase):
         bad = {'content': 'x', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': 'red'}
         self.assertEqual(self.post(self.payload(text_elements=[bad])).status_code, 400)
         self.assertEqual(self.post(self.payload(background_gradient=['#FFF', 'nope'])).status_code, 400)
+
+    def test_emoji_are_dropped_from_the_drawn_text(self):
+        response = self.post(self.payload(text_content='go \U0001F680 now', text_elements=[
+            {'content': 'go \U0001F680 now', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+             'colorRuns': [{'start': 5, 'end': 8, 'color': '#0000EE'}]}]))
+        self.assertEqual(response.status_code, 201, response.content)
+        element = Post.objects.get(id=response.json()['id']).text_elements[0]
+        self.assertEqual(element['content'], 'go  now')
+        # the colour stays on "now"
+        self.assertEqual(element['colorRuns'], [{'start': 4, 'end': 7, 'color': '#0000EE'}])
 
     def test_malformed_quote_geometry_is_dropped_not_a_500(self):
         parent = self.post(self.payload())

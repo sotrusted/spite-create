@@ -22,6 +22,24 @@ def _is_author(post, context):
     return bool(device_id) and getattr(post.author, 'device_id', None) == device_id
 
 
+
+def _follow_kept(runs, kept):
+    """Colour ranges (offsets into the typed text) moved onto the sanitised
+    text, so each colour stays on its letters when characters before it are
+    dropped. Ranges left empty go; malformed ones pass through to the
+    renderer, which ignores them."""
+    from bisect import bisect_left
+    moved = []
+    for run in runs:
+        start, end = (run.get('start'), run.get('end')) if isinstance(run, dict) else (None, None)
+        if not (isinstance(start, int) and isinstance(end, int)):
+            moved.append(run)
+            continue
+        start, end = bisect_left(kept, start), bisect_left(kept, end)
+        if end > start:
+            moved.append({**run, 'start': start, 'end': end})
+    return moved
+
 class AuthorSerializer(serializers.ModelSerializer):
     """Serializer for post author information"""
     class Meta:
@@ -224,7 +242,7 @@ class PostSerializer(serializers.ModelSerializer):
         clamped to the drawable range, colours must be #RRGGBB, fonts must be
         ones the server has. Moderation and the length limit then run on the
         drawn text (validate builds text_content from it)."""
-        from .models import _sanitize_glyphs
+        from .models import _sanitize_kept
         if value is None:
             return []
         if not isinstance(value, list):
@@ -237,7 +255,9 @@ class PostSerializer(serializers.ModelSerializer):
             if not isinstance(element, dict) or not isinstance(element.get('content', ''), str):
                 raise serializers.ValidationError('Each text element must be an object with text content')
             element = dict(element)
-            element['content'] = _sanitize_glyphs(element.get('content') or '')
+            raw = element.get('content') or ''
+            kept = _sanitize_kept(raw)
+            element['content'] = ''.join(raw[i] for i in kept)
             try:
                 size = float(element.get('fontSize', 24))
                 for axis in ('x', 'y'):
@@ -262,6 +282,8 @@ class PostSerializer(serializers.ModelSerializer):
             if runs is not None and (not isinstance(runs, list) or len(runs) > limits.MAX_COLOR_RUNS):
                 raise serializers.ValidationError('colorRuns must be a list of at most '
                                                   f'{limits.MAX_COLOR_RUNS} ranges')
+            if runs and len(kept) < len(raw):
+                element['colorRuns'] = _follow_kept(runs, kept)
             cleaned.append(element)
         return cleaned
 

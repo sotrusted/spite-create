@@ -11,11 +11,13 @@ import uuid
 import hashlib
 
 from . import limits
+from .emoji import emoji_indices
 
 # Glyph-bomb protection: strip what breaks rendering or spoofs layout while
 # keeping the ornamental characters the app celebrates. Removes control
 # chars (except newline), zero-width/invisible spam, directional overrides,
-# and caps combining-mark stacking (zalgo) at 2 marks per base glyph.
+# emoji (posts/emoji.py), and caps combining-mark stacking (zalgo) at 2 marks
+# per base glyph.
 _INVISIBLES = re.compile('[\u0000-\u0008\u000B-\u001F\u007F\u200B\u2060\uFEFF\u202A-\u202E\u2066-\u2069]')
 
 
@@ -45,8 +47,9 @@ def _sanitize_kept(text):
     data (colour ranges) can follow the text through it."""
     kept = []
     marks_on_base = 0
+    emoji = emoji_indices(text or '')
     for i, ch in enumerate(text or ''):
-        if _INVISIBLES.match(ch):
+        if _INVISIBLES.match(ch) or i in emoji:
             continue
         if unicodedata.combining(ch):
             marks_on_base += 1

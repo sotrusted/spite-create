@@ -53,6 +53,7 @@ import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
+import { stripEmoji } from '../utils/emoji';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
 import {
@@ -929,7 +930,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
   };
 
   // Handle text input changes with only local updates (no state updates until editing stops)
-  const handleTextInputChange = useCallback((id: string, text: string) => {
+  const handleTextInputChange = useCallback((id: string, typed: string) => {
+    // No emoji in a post (utils/emoji): one typed or pasted is dropped here.
+    // Plain typing leaves the text as typed, so the field never lags.
+    const text = stripEmoji(typed);
     // Only update local state for immediate UI feedback
     const element = textElementsRef.current.find(el => el.id === id);
     const before = typedTextRef.current[id] ?? element?.content ?? '';
