@@ -43,12 +43,12 @@ import { inkBaselineFor } from '../constants/fontMetrics';
 import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { captureRef } from 'react-native-view-shot';
-import { emitPostCreated } from '../utils/postEvents';
+import { emitPostCreated, emitPostDiscarded } from '../utils/postEvents';
 import { TEXT_WRAP_FRACTION, buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
-import { applyColorToRange, adjustRuns, colorSpans } from '../utils/colorRuns';
+import { applyColorToRange, adjustRuns, colorSpans, RAINBOW_RUN } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
@@ -164,6 +164,8 @@ const LETTER_SPACING_PRESETS = [
 interface Props {
   onPost?: (post: any) => void;
   onClose?: () => void;
+  // after posting, if not onClose (the composer screen goes to the feed)
+  onPosted?: () => void;
   repostData?: RepostData;
   // "Edit again" or a draft: the canvas exactly as it was left
   restoreState?: CanvasState;
@@ -244,7 +246,7 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
   );
 };
 
-export default function PostComposer({ onPost, onClose, repostData, restoreState, draftTarget, onOpenDraft }: Props) {
+export default function PostComposer({ onPost, onClose, onPosted, repostData, restoreState, draftTarget, onOpenDraft }: Props) {
   // A restore replaces every default below; rescaled if this screen differs
   // from the one it was composed on. Read once - it seeds initial state only.
   const restored = useRef((() => {
@@ -1307,7 +1309,10 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
     setIsPosting(false);
     finishPost(null);
     if (optimistic) emitPostCreated(optimistic);
-    submitInBackground(postData, optimistic?.id, openDraftId ?? newDraftId());
+    // One key per post, sent again on Retry: the server answers a repeat with
+    // the post it already made, so a retry never posts twice
+    const postKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    submitInBackground(postData, optimistic?.id, openDraftId ?? newDraftId(), postKey);
   };
 
   // A local snapshot of the canvas, shaped like a feed post. Crop bounds come
@@ -1348,10 +1353,17 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
 
   // keptId: the drawer entry this post lives in until the server has it
   // (its own draft, or a new one if it fails from the scratch canvas)
-  const submitInBackground = async (payload: PostCreate, optimisticId: string | undefined, keptId: string) => {
+  // A failed post's optimistic stand-in stays in the feed while the alert is
+  // up: Retry replaces it with the real post, Discard takes it away.
+  const submitInBackground = async (
+    payload: PostCreate, optimisticId: string | undefined, keptId: string, postKey: string,
+  ) => {
     try {
       // Rendering plus a slow uplink can outlast the client's default 10s
-      const response = await api.post(endpoints.createPost, payload, { timeout: POST_TIMEOUT_MS });
+      const response = await api.post(endpoints.createPost, payload, {
+        timeout: POST_TIMEOUT_MS,
+        headers: { 'Idempotency-Key': postKey },
+      });
       removeDraft(keptId);
       emitPostCreated(response.data, optimisticId);
       onPost?.(response.data);
@@ -1364,15 +1376,23 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
           error.response?.data?.error ||
           'Failed to create post';
       Alert.alert('Post failed', errorMessage, [
-        { text: 'Discard', style: 'destructive', onPress: () => removeDraft(keptId) },
-        { text: 'Retry', onPress: () => submitInBackground(payload, undefined, keptId) },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            removeDraft(keptId);
+            if (optimisticId) emitPostDiscarded(optimisticId);
+          },
+        },
+        { text: 'Retry', onPress: () => submitInBackground(payload, optimisticId, keptId, postKey) },
       ]);
     }
   };
 
   const finishPost = (post: any) => {
     if (post) onPost?.(post);
-    onClose?.();
+    // posted from a post page (a reply): back to the feed, where it lands
+    (onPosted ?? onClose)?.();
     Toast.show({
       type: 'success',
       text1: 'Posted!',
@@ -1654,7 +1674,8 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
       if (element.listStyle === 'number') return `${++counter}. `;
       return LIST_MARKERS[element.listStyle];
     };
-    return colorSpans(raw, element.colorRuns, cyclePalette, prefix).map((span, i) =>
+    const rainbow = rainbowFor(backgroundGradient.length > 0 || backgroundImage ? null : backgroundColor);
+    return colorSpans(raw, element.colorRuns, cyclePalette, prefix, rainbow).map((span, i) =>
       span.color ? <Text key={i} style={{ color: span.color }}>{span.text}</Text> : span.text,
     );
   };
@@ -2754,6 +2775,16 @@ export default function PostComposer({ onPost, onClose, repostData, restoreState
                   <View style={[styles.colorCell, styles.rangeResetCell, el.outline?.mode === 'auto' && styles.colorCellActive]}>
                     <Text style={styles.autoCellLabel}>AUTO</Text>
                   </View>
+                </TouchableOpacity>
+              )}
+              {/* The rainbow over just the selected letters */}
+              {colorGridMode === 'range' && el && (
+                <TouchableOpacity onPress={() => { applyRangeColor(RAINBOW_RUN); closeColorGrid(); }}>
+                  <LinearGradient
+                    {...DIAGONAL}
+                    colors={Colors.rainbowPalette as [string, string, ...string[]]}
+                    style={[styles.colorCell, rangeColor === RAINBOW_RUN && styles.colorCellActive]}
+                  />
                 </TouchableOpacity>
               )}
               {/* The selection back to the text's own colour */}

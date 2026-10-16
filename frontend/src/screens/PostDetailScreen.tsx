@@ -22,7 +22,7 @@ import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
-import { TapGestureHandler, State as GestureState } from 'react-native-gesture-handler';
+import { TapGestureHandler, LongPressGestureHandler, State as GestureState } from 'react-native-gesture-handler';
 import PlanText from '../components/PlanText';
 import { isTextPlan } from '../types/textPlan';
 import { textResolutionFor } from '../utils/zoom';
@@ -130,9 +130,19 @@ export default function PostDetailScreen() {
     // the server's image, which always matches the feed
     const vector = textMode === 'plan' && !!post.textless_image_url && isTextPlan(post.text_plan)
       && levels.every(level => isTextPlan(level.text_plan));
+    // Hold to reply, as on a feed card (same as a double tap: the post, or
+    // the quoted one under the finger). Taps end before the hold would.
+    const tapMaxMs = GESTURES.longPress.cardMs - 1;
     return (
+      <LongPressGestureHandler
+        minDurationMs={GESTURES.longPress.cardMs}
+        onHandlerStateChange={e => {
+          if (e.nativeEvent.state === GestureState.ACTIVE) handleDoubleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
+        }}
+      >
       <TapGestureHandler
         waitFor={doubleTapRef}
+        maxDurationMs={tapMaxMs}
         onHandlerStateChange={e => {
           if (e.nativeEvent.state === GestureState.ACTIVE) handleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
         }}
@@ -140,6 +150,7 @@ export default function PostDetailScreen() {
         <TapGestureHandler
           ref={doubleTapRef}
           numberOfTaps={2}
+          maxDurationMs={tapMaxMs}
           maxDelayMs={GESTURES.tap.doubleTapWindowMs}
           onHandlerStateChange={e => {
             if (e.nativeEvent.state === GestureState.ACTIVE) handleDoubleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
@@ -203,6 +214,7 @@ export default function PostDetailScreen() {
           </View>
         </TapGestureHandler>
       </TapGestureHandler>
+      </LongPressGestureHandler>
     );
   };
 
@@ -395,6 +407,12 @@ export default function PostDetailScreen() {
             <Ionicons name="download-outline" size={CHROME.iconSize} color={chrome} />
           </TouchableOpacity>
 
+          {/* When it was posted: page chrome, so the saved image (the
+              server's render) never has it */}
+          <View style={styles.timestamp} pointerEvents="none">
+            <Text style={[styles.timestampText, { color: chrome }]}>{postedAt(post.created_at)}</Text>
+          </View>
+
           <TouchableOpacity
             style={[styles.quoteButton, { backgroundColor: chrome }]}
             onPress={handleRepost}
@@ -407,6 +425,14 @@ export default function PostDetailScreen() {
     </View>
   );
 }
+
+// "Oct 16, 2026, 3:04 PM" in the reader's own locale and time zone
+const postedAt = (iso: string) => {
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return '';
+  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}, ${
+    date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+};
 
 // Chrome reads against the post's own colour, same rule as the feed's chip
 const chromeColor = (background: string) => {
@@ -474,6 +500,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 10,
+  },
+  // bottom left, level with the quote button
+  timestamp: {
+    position: 'absolute',
+    left: CHROME.inset,
+    bottom: CHROME.bottomInset,
+    height: CHROME.detailButtonHeight,
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  timestampText: {
+    fontFamily: 'CourierPrime',
+    fontSize: 13,
   },
   quoteButtonText: {
     fontFamily: 'CourierPrime',

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyColorToRange, adjustRuns, colorSpans, runsToCodePoints, runsFromCodePoints } from './colorRuns';
+import { applyColorToRange, adjustRuns, colorSpans, runsToCodePoints, runsFromCodePoints, RAINBOW_RUN } from './colorRuns';
 
 const R = '#FF1A1A';
 const B = '#0000EE';
@@ -69,4 +69,17 @@ test('code points come back to UTF-16 offsets', () => {
   assert.deepEqual(runsFromCodePoints('😀ab', runs), [{ start: 2, end: 3, color: R }]);
   assert.deepEqual(runsFromCodePoints('😀ab', runsToCodePoints('😀ab', [{ start: 2, end: 3, color: R }])),
     [{ start: 2, end: 3, color: R }]);
+});
+
+test('a rainbow range cycles over its own letters, as the server does', () => {
+  // 'ab cde f' with "cde" rainbow: the server's charColors are
+  // [None, None, P0, P1, P2, None] over the visible letters
+  const spans = colorSpans('ab cde f', [{ start: 3, end: 6, color: RAINBOW_RUN }], null, none, ['#1', '#2', '#3', '#4']);
+  assert.deepEqual(spans, [
+    { text: 'ab ', color: null },
+    { text: 'c', color: '#1' },
+    { text: 'd', color: '#2' },
+    { text: 'e', color: '#3' },
+    { text: ' f', color: null },
+  ]);
 });

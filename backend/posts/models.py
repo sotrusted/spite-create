@@ -96,6 +96,10 @@ RAINBOW_TEXT_PALETTE = [
     '#FF1A1A', '#FF9500', '#FFD700', '#32CD32', '#00CED1', '#9932CC'
 ]
 
+# A colour range's colour meaning "the rainbow over these letters"
+# (selected words made rainbow). Mirrors RAINBOW_RUN in utils/colorRuns.
+RAINBOW_RUN = 'RAINBOW'
+
 # Raqm applies kerning the way CoreText does in the composer preview; without
 # it Pillow uses raw advance widths and text renders slightly wider than the
 # preview. Requires libfribidi to be loadable at runtime.
@@ -490,6 +494,16 @@ class Post(models.Model):
             # those the same way, whatever the wrapping did
             if char_colors is not None:
                 visible = [c for ch, c in zip(content, char_colors) if not ch.isspace()]
+                # a rainbow range cycles the rainbow over its own letters,
+                # starting again after any letter outside it (colorSpans
+                # in the composer counts the same way)
+                palette, k = self._rainbow_palette(), 0
+                for j, c in enumerate(visible):
+                    if c == RAINBOW_RUN:
+                        visible[j] = palette[k % len(palette)]
+                        k += 1
+                    else:
+                        k = 0
                 normalized_element['charColors'] = visible if any(visible) else None
 
             # The composer displays text in an input that is 90 percent of the
@@ -975,10 +989,11 @@ class Post(models.Model):
     def _normalize_color_runs(cls, value, length):
         """Colour ranges from the composer: [{start, end, color}] over the
         typed text (code points, end exclusive). Palette colours only, like
-        the duo; anything malformed is dropped."""
+        the duo, or 'rainbow' (RAINBOW_RUN: the rainbow cycled over just
+        those letters); anything malformed is dropped."""
         if not isinstance(value, list):
             return []
-        presets = {c.upper() for c in cls.COLOR_PRESETS}
+        presets = {c.upper() for c in cls.COLOR_PRESETS} | {RAINBOW_RUN}
         runs = []
         for entry in value[:cls.MAX_COLOR_RUNS]:
             if not isinstance(entry, dict):

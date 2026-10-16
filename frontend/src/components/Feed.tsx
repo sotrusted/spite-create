@@ -15,6 +15,7 @@ import Toast from 'react-native-toast-message';
 import { bootFeed, saveBootFeed } from '../utils/bootFeed';
 import { separatorColor } from '../utils/feedSeparator';
 import { onAuthorHidden } from '../utils/moderation';
+import { subscribeToPostDiscarded } from '../utils/postEvents';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
 import { api, endpoints, isOfflineError } from '../config/api';
@@ -211,12 +212,35 @@ export default function Feed({
     fetchFeed(true);
   }), [fetchFeed]);
 
+  // Your own handle: your posts arrive over the WebSocket too, often before
+  // the post request itself returns. They are already in the feed (the
+  // optimistic stand-in, replaced when the request returns), so they never
+  // count as [N NEW POSTS]. Learned from the profile, and from each post of
+  // yours the server hands back (a handle can change).
+  const myHandle = useRef<string | null>(null);
+  useEffect(() => {
+    api.get(endpoints.getUserProfile)
+      .then(response => { myHandle.current = response.data?.handle ?? myHandle.current; })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (postEvent && !(postEvent.post as any).__optimistic && postEvent.post.author?.handle) {
+      myHandle.current = postEvent.post.author.handle;
+    }
+  }, [postEvent]);
+
+  // A failed post the author discarded: its stand-in goes
+  useEffect(() => subscribeToPostDiscarded(id => {
+    setPosts(prev => prev.filter(p => p.id !== id));
+  }), []);
+
   // WebSocket event handlers
   const handleNewPost = useCallback((message: WebSocketMessage) => {
     // The consumer wraps the broadcast as 'post'; older code sent 'post_data'
     const payload = message.post ?? message.post_data;
     if (payload) {
       const incoming = payload as Post;
+      if (myHandle.current && incoming.author?.handle === myHandle.current) return;
       setPendingPosts(prev => {
         if (prev.find(p => p.id === incoming.id)) return prev;
         return [incoming, ...prev];

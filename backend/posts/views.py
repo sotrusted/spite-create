@@ -13,6 +13,8 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 import uuid
 import os
+import time
+from django.core.cache import cache
 from .models import Post, PostReport
 from .serializers import (
     PostSerializer, PostListSerializer, PostReportSerializer,
@@ -40,7 +42,45 @@ class PostCreateView(generics.CreateAPIView):
     serializer_class = PostSerializer
     permission_classes = [permissions.AllowAny]  # Anonymous posting allowed
     throttle_classes = [PostCreateThrottle, PostCreateIPThrottle]
-    
+
+    # The app sends one Idempotency-Key per post and the same one on Retry. A
+    # retry of a post the server already made (it timed out on the phone but
+    # went through) gets that post back instead of becoming a second one; a
+    # retry arriving while the first is still rendering waits for it.
+    IDEMPOTENCY_TTL = 24 * 3600
+    IDEMPOTENCY_WAIT = 20  # seconds
+
+    def create(self, request, *args, **kwargs):
+        key = request.headers.get('Idempotency-Key', '')
+        if not 0 < len(key) <= 64:
+            return super().create(request, *args, **kwargs)
+        user = self.get_or_create_user()
+        slot = f'post-idem:{user.pk}:{key}'
+        deadline = time.monotonic() + self.IDEMPOTENCY_WAIT
+        while not cache.add(slot, 'pending', 2 * self.IDEMPOTENCY_WAIT):
+            held = cache.get(slot)
+            if held and held != 'pending':
+                post = Post.objects.filter(pk=held, author=user).first()
+                if post:
+                    return Response(PostSerializer(post, context=self.get_serializer_context()).data,
+                                    status=status.HTTP_201_CREATED)
+                cache.delete(slot)  # deleted since: post it again
+                continue
+            if time.monotonic() > deadline:
+                return Response({'detail': 'Still posting - try again in a moment'},
+                                status=status.HTTP_409_CONFLICT)
+            time.sleep(0.25)
+        try:
+            response = super().create(request, *args, **kwargs)
+        except Exception:
+            cache.delete(slot)
+            raise
+        if response.status_code == status.HTTP_201_CREATED and response.data.get('id'):
+            cache.set(slot, str(response.data['id']), self.IDEMPOTENCY_TTL)
+        else:
+            cache.delete(slot)
+        return response
+
     def perform_create(self, serializer):
         """Save post with author and send realtime notification"""
         # Get or create anonymous user

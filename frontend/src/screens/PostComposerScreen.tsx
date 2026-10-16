@@ -72,6 +72,16 @@ export default function PostComposerScreen({ onPost }: Props) {
 
   const handleClose = returnToFeed;
 
+  // Posting always ends on the feed, where the new post appears - even when
+  // the composer was opened from a post page (a reply), which Close returns to
+  const handlePosted = () => {
+    if (navigation.canGoBack()) {
+      navigation.popToTop();
+    } else {
+      navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+    }
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar hidden />
@@ -80,6 +90,7 @@ export default function PostComposerScreen({ onPost }: Props) {
         draftTarget={session.target}
         onPost={handlePost}
         onClose={handleClose}
+        onPosted={handlePosted}
         onOpenDraft={openDraft}
         repostData={session.repostData}
         restoreState={session.restoreState}

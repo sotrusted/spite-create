@@ -1465,6 +1465,27 @@ class PayloadValidationTests(TestCase):
         # the colour stays on "now"
         self.assertEqual(element['colorRuns'], [{'start': 4, 'end': 7, 'color': '#0000EE'}])
 
+    def test_a_retry_with_the_same_key_returns_the_same_post(self):
+        send = lambda key: self.client.post('/api/posts/', data=json.dumps(self.payload()),
+                                            content_type='application/json',
+                                            HTTP_X_DEVICE_ID='validation-test-device', HTTP_IDEMPOTENCY_KEY=key)
+        first, retry, other = send('k1'), send('k1'), send('k2')
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertEqual(retry.status_code, 201)
+        self.assertEqual(retry.json()['id'], first.json()['id'])
+        self.assertNotEqual(other.json()['id'], first.json()['id'])
+        self.assertEqual(Post.objects.count(), 2)
+
+    def test_rainbow_range_cycles_over_its_own_letters(self):
+        response = self.post(self.payload(text_content='ab cde f', text_elements=[
+            {'content': 'ab cde f', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+             'colorRuns': [{'start': 3, 'end': 6, 'color': 'rainbow'}]}]))
+        self.assertEqual(response.status_code, 201, response.content)
+        post = Post.objects.get(id=response.json()['id'])
+        from posts.models import RAINBOW_TEXT_PALETTE
+        colors = post._collect_text_elements()[0]['charColors']
+        self.assertEqual(colors, [None, None] + RAINBOW_TEXT_PALETTE[:3] + [None])
+
     def test_malformed_quote_geometry_is_dropped_not_a_500(self):
         parent = self.post(self.payload())
         body = self.payload(repost_data={'original_post_id': parent.json()['id'],

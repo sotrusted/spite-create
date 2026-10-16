@@ -37,3 +37,19 @@ export const subscribeToPostCreated = (listener: Listener) => {
     listeners.delete(listener);
   };
 };
+
+// A post that failed and was discarded: its optimistic stand-in leaves the
+// feed (Retry keeps it, to be replaced by the real post)
+type DiscardListener = (optimisticId: string) => void;
+const discardListeners = new Set<DiscardListener>();
+
+export const emitPostDiscarded = (optimisticId: string) => {
+  discardListeners.forEach(listener => listener(optimisticId));
+};
+
+export const subscribeToPostDiscarded = (listener: DiscardListener) => {
+  discardListeners.add(listener);
+  return () => {
+    discardListeners.delete(listener);
+  };
+};

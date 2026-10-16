@@ -6,6 +6,10 @@
 // duo) shows. The payload converts offsets to code points for the server,
 // which carries them through wrapping and list markers per visible letter.
 
+// A run's colour meaning "the rainbow over these letters" (selected words
+// made rainbow). Mirrors RAINBOW_RUN on the server (posts/models.py).
+export const RAINBOW_RUN = 'rainbow';
+
 export interface ColorRun {
   start: number;
   end: number;
@@ -94,6 +98,7 @@ export function colorSpans(
   runs: ColorRun[] | undefined,
   cyclePalette: string[] | null,
   linePrefix: (line: string, index: number) => string,
+  rainbow: string[] = [],
 ): Span[] {
   type Item = { ch: string; color: string | null };
   const lines: Item[][] = [[]];
@@ -113,8 +118,15 @@ export function colorSpans(
 
   const spans: Span[] = [];
   let paletteIndex = 0;
+  // a rainbow range cycles the rainbow over its own letters, starting again
+  // after any letter outside it (the server counts the same way)
+  let rainbowIndex = 0;
   for (const item of items) {
     let color = item.color;
+    if (!/\s/.test(item.ch)) {
+      if (color === RAINBOW_RUN) color = rainbow.length ? rainbow[rainbowIndex++ % rainbow.length] : null;
+      else rainbowIndex = 0;
+    }
     if (!/\s/.test(item.ch) && cyclePalette) {
       const cycled = cyclePalette[paletteIndex++ % cyclePalette.length];
       color = color ?? cycled;
