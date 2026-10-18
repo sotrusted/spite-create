@@ -3130,7 +3130,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     return (
       <View
         ref={configBarRef}
-        style={[styles.bottomControlContainer, { bottom: (keyboardHeight || CONFIG_BAR_REST) + SPACE.sm }]}
+        style={[styles.bottomControlContainer, { bottom: keyboardHeight || CONFIG_BAR_REST }]}
         onLayout={() => configBarRef.current?.measureInWindow((_x, y) => setConfigBarTop(y))}
       >
         <ScrollView

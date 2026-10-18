@@ -1,6 +1,6 @@
 import { displayCropBounds, ContentBox, DisplayCrop } from './displayCrop';
 import { gradientBandPx } from './gradient';
-import type { Point } from './hitTest';
+import type { Point, Rect } from './hitTest';
 
 // How a post's full-canvas render is placed in the box that shows it.
 //
@@ -94,6 +94,15 @@ export const canvasPointIn = (layout: CardLayout, point: Point): Point => ({
   x: (point.x - layout.imageLeft) / layout.scale,
   y: (point.y - layout.imageTop) / layout.scale,
 });
+
+// A canvas rect (px) -> the box (points), clipped to the box
+export const boxRectOf = (layout: CardLayout, rect: Rect): Rect => {
+  const left = Math.max(0, layout.imageLeft + rect.x * layout.scale);
+  const top = Math.max(0, layout.imageTop + rect.y * layout.scale);
+  const right = Math.min(layout.width, layout.imageLeft + (rect.x + rect.width) * layout.scale);
+  const bottom = Math.min(layout.height, layout.imageTop + (rect.y + rect.height) * layout.scale);
+  return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+};
 
 // LinearGradient endpoints (unit coords of a view) that continue a gradient
 // post's background beyond its image: the server fits the ramp to a band,

@@ -31,8 +31,9 @@ import { editAgain } from '../utils/editAgain';
 import Toast from 'react-native-toast-message';
 import { FEATURES } from '../constants/features';
 import { Post } from '../types';
-import { fullPostLayout, gradientEndpoints, canvasPointIn, CardLayout } from '../utils/cardLayout';
-import { quotedPostAt } from '../utils/hitTest';
+import { fullPostLayout, gradientEndpoints, canvasPointIn, boxRectOf, CardLayout } from '../utils/cardLayout';
+import { quotedLevelAt } from '../utils/hitTest';
+import PressFlash, { PressFlashHandle, flashColorOn } from '../components/PressFlash';
 import { GESTURES } from '../constants/gestures';
 import { TEXT_WRAP_FRACTION } from '../utils/buildPostPayload';
 
@@ -80,14 +81,23 @@ export default function PostDetailScreen() {
   // A tap's post: one quoted inside this one when the tap is on its strip
   // (deepest wins), else this post. x/y are in the post box's own
   // coordinates (the gesture handler reports them unzoomed).
-  const postAt = (layout: CardLayout, x: number, y: number) =>
-    quotedPostAt(post?.quote_chain ?? [], canvasPointIn(layout, { x, y }));
+  const levelAt = (layout: CardLayout, x: number, y: number) =>
+    quotedLevelAt(post?.quote_chain ?? [], canvasPointIn(layout, { x, y }));
+  const postAt = (layout: CardLayout, x: number, y: number) => levelAt(layout, x, y)?.post_id ?? null;
+  // A double tap or a hold flashes the post it quotes: the quoted one under
+  // the finger, or the whole post
+  const flashRef = useRef<PressFlashHandle>(null);
   const handleTap = (layout: CardLayout, x: number, y: number) => {
     const id = postAt(layout, x, y);
     if (id) (navigation as any).push('PostDetail', { postId: id });
   };
   const handleDoubleTap = async (layout: CardLayout, x: number, y: number) => {
-    const id = postAt(layout, x, y);
+    const level = levelAt(layout, x, y);
+    const id = level?.post_id;
+    flashRef.current?.flash(
+      level ? boxRectOf(layout, level.rect) : null,
+      flashColorOn(level?.background_color || post?.background_color || '#1B1B1B'),
+    );
     if (!id) {
       handleRepost();
       return;
@@ -211,6 +221,7 @@ export default function PostDetailScreen() {
                 selectable
               />
             )}
+            <PressFlash ref={flashRef} />
           </View>
         </TapGestureHandler>
       </TapGestureHandler>

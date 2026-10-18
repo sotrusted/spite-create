@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CARD, canvasPointIn, feedCardLayout, fullPostLayout } from './cardLayout';
+import { CARD, boxRectOf, canvasPointIn, feedCardLayout, fullPostLayout } from './cardLayout';
 
 const W = 440; // screen points
 const post = (top: number, bottom: number) => ({ image_width: 1080, image_height: 2340, top_y: top, bottom_y: bottom });
@@ -36,4 +36,15 @@ test('box points map back to canvas px', () => {
 
 test('no bounds, no layout', () => {
   assert.equal(feedCardLayout({ image_width: 1080, image_height: 2340, top_y: null, bottom_y: null }, W), null);
+});
+
+test('a quoted strip maps onto the card, clipped to it', () => {
+  const layout = feedCardLayout(post(800, 1300), W)!;
+  const s = layout.scale;
+  const r = boxRectOf(layout, { x: 108, y: 1000, width: 864, height: 1000 });
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
+  near(r.x, layout.imageLeft + 108 * s);
+  near(r.y, layout.imageTop + 1000 * s);
+  near(r.width, 864 * s);
+  near(r.y + r.height, layout.height); // runs past the band's bottom
 });

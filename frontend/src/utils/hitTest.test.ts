@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { atLeast, pickPinchTarget, quotedPostAt } from './hitTest';
+import { atLeast, pickPinchTarget, quotedLevelAt, quotedPostAt } from './hitTest';
 
 const policy = { minTargetWidth: 180, minTargetHeight: 120 };
 const word = (id: string, x: number, y: number) => ({ id, box: { x, y, width: 60, height: 30 } });
@@ -53,4 +53,12 @@ test('a hidden level belongs to the level around it', () => {
     { post_id: 'blocked', rect: { x: 100, y: 900, width: 800, height: 300 }, hidden: true },
   ];
   assert.equal(quotedPostAt(chain, { x: 500, y: 1000 }), 'parent');
+});
+
+test('the level under a tap carries its own strip', () => {
+  const chain = [
+    { post_id: 'parent', rect: { x: 50, y: 500, width: 900, height: 800 }, hidden: false },
+  ];
+  assert.deepEqual(quotedLevelAt(chain, { x: 500, y: 600 })?.rect, chain[0].rect);
+  assert.equal(quotedLevelAt(chain, { x: 500, y: 200 }), null);
 });

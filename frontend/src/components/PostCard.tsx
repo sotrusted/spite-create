@@ -6,7 +6,6 @@ import {
   StyleSheet,
   Dimensions,
   Alert,
-  Animated,
 } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Image as ExpoImage } from 'expo-image';
@@ -16,9 +15,9 @@ import { SPACE, CHROME } from '../constants/layout';
 import { Colors } from '../constants/colors';
 import { Post } from '../types';
 import { absoluteUrl, api, endpoints } from '../config/api';
-import { contrastRatio, hexToRgb } from '../utils/contrast';
-import { feedCardLayout, canvasPointIn, gradientEndpoints, CARD } from '../utils/cardLayout';
-import { quotedPostAt } from '../utils/hitTest';
+import { feedCardLayout, canvasPointIn, gradientEndpoints, boxRectOf, CARD } from '../utils/cardLayout';
+import { quotedLevelAt } from '../utils/hitTest';
+import PressFlash, { PressFlashHandle, flashColorOn } from './PressFlash';
 import { editAgain } from '../utils/editAgain';
 import { GESTURES } from '../constants/gestures';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -30,12 +29,7 @@ interface Props {
   post: Post;
 }
 
-const chipTextColor = (background: string) => {
-  const bg = hexToRgb(background);
-  return contrastRatio(bg, [255, 255, 255]) >= contrastRatio(bg, [0, 0, 0])
-    ? '#FFFFFF'
-    : '#000000';
-};
+const chipTextColor = flashColorOn;
 
 export default function PostCard({ post, onSwipeableOpen }: Props) {
   const swipeableRef = React.useRef<Swipeable | null>(null);
@@ -96,15 +90,20 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
   // fire; with collapse parked the wait costs nothing.
   // A light flash confirms the tap landed - the posts are full-bleed images
   // with no other press feedback. Colour is chosen against the post's own
-  // background so it reads on white and black alike.
-  const flashOpacity = React.useRef(new Animated.Value(0)).current;
+  // background so it reads on white and black alike. A double tap or a hold
+  // flashes just the post it quotes: the quoted one under the finger, or
+  // the whole card.
+  const flashRef = React.useRef<PressFlashHandle>(null);
   const flashColor = chipTextColor(post.background_color || '#1B1B1B');
-  const flash = () => {
-    flashOpacity.stopAnimation();
-    Animated.sequence([
-      Animated.timing(flashOpacity, { toValue: 0.18, duration: 60, useNativeDriver: true }),
-      Animated.timing(flashOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start();
+  const flash = () => flashRef.current?.flash(null, flashColor, 0.18);
+  const flashTarget = () => {
+    const hit = tappedLevel();
+    const layout = hit && feedCardLayout(post, screenWidth);
+    if (hit && layout) {
+      flashRef.current?.flash(boxRectOf(layout, hit.rect), chipTextColor(hit.background_color || post.background_color || '#1B1B1B'));
+    } else {
+      flashRef.current?.flash(null, flashColor);
+    }
   };
 
   const tapTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -117,9 +116,7 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
     if (tapTimer.current) {
       clearTimeout(tapTimer.current);
       tapTimer.current = null;
-      const quoted = tappedPostId();
-      if (quoted) quotePostById(quoted);
-      else handleRepost();
+      handleQuotePress();
       return;
     }
     tapTimer.current = setTimeout(() => {
@@ -131,15 +128,23 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
   // The post a tap means: a quoted post inside this one when the tap is on
   // its strip (deepest wins), else this post. The press location is in the
   // card's box, mapped back to canvas px through the card layout.
-  const tappedPostId = (): string | null => {
+  const tappedLevel = () => {
     const layout = feedCardLayout(post, screenWidth);
     if (!layout || collapsedAt !== null) return null;
-    return quotedPostAt(chain, canvasPointIn(layout, pressLocation.current));
+    return quotedLevelAt(chain, canvasPointIn(layout, pressLocation.current));
+  };
+
+  // Double tap or hold: quote the post under the finger
+  const handleQuotePress = () => {
+    flashTarget();
+    const quoted = tappedLevel()?.post_id;
+    if (quoted) quotePostById(quoted);
+    else handleRepost();
   };
 
   const handleSingleTap = () => {
     if (!FEATURES.collapsePosts) {
-      const quoted = tappedPostId();
+      const quoted = tappedLevel()?.post_id;
       if (quoted) (navigation as any).navigate('PostDetail', { postId: quoted });
       else openDetail();
       return;
@@ -480,7 +485,7 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
           <TouchableOpacity
             style={[styles.collapsedChip, { backgroundColor: post.background_color || Colors.surface }]}
             onPress={() => setCollapsedAt(lockLevel)}
-            onLongPress={handleRepost}
+            onLongPress={() => { flash(); handleRepost(); }}
             delayLongPress={GESTURES.longPress.cardMs}
             activeOpacity={0.85}
           >
@@ -505,20 +510,14 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
               };
             }}
             onPress={handleBodyPress}
-            onLongPress={handleRepost}
+            onLongPress={handleQuotePress}
             delayLongPress={GESTURES.longPress.cardMs}
             activeOpacity={0.95}
           >
             {renderImage()}
           </TouchableOpacity>
         )}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            StyleSheet.absoluteFill,
-            { backgroundColor: flashColor, opacity: flashOpacity },
-          ]}
-        />
+        <PressFlash ref={flashRef} />
         {/* Visible quote affordance - double tap and long press do the same,
             but neither announces itself. Auto-contrasts against the post. */}
         {collapsedAt !== 0 && (

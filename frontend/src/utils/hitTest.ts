@@ -68,10 +68,15 @@ export interface QuoteLevel {
 // level whose strip contains it, or null for the root post itself. A hidden
 // (blocked) level, and everything inside it, belongs to the level around it.
 export function quotedPostAt(chain: QuoteLevel[], canvasPoint: Point): string | null {
-  let hit: string | null = null;
+  return quotedLevelAt(chain, canvasPoint)?.post_id ?? null;
+}
+
+// The same, as the level itself (its strip is what a press flashes)
+export function quotedLevelAt<L extends QuoteLevel>(chain: L[], canvasPoint: Point): L | null {
+  let hit: L | null = null;
   for (const level of chain) {
     if (level.hidden || !level.post_id || !contains(level.rect, canvasPoint)) break;
-    hit = level.post_id;
+    hit = level;
   }
   return hit;
 }
