@@ -1486,6 +1486,19 @@ class PayloadValidationTests(TestCase):
         colors = post._collect_text_elements()[0]['charColors']
         self.assertEqual(colors, [None, None] + RAINBOW_TEXT_PALETTE[:3] + [None])
 
+    def test_duo_range_alternates_over_its_own_letters(self):
+        from posts.models import Post as P
+        a, b = P.COLOR_PRESETS[0].upper(), P.COLOR_PRESETS[1].upper()
+        response = self.post(self.payload(text_content='ab cde f', text_elements=[
+            {'content': 'ab cde f', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+             'colorRuns': [{'start': 1, 'end': 5, 'color': f'duo:{a},{b}'},
+                           {'start': 7, 'end': 8, 'color': f'duo:{a},{a}'}]}]))
+        self.assertEqual(response.status_code, 201, response.content)
+        post = Post.objects.get(id=response.json()['id'])
+        colors = post._collect_text_elements()[0]['charColors']
+        # spaces skipped; a duo of one colour is dropped
+        self.assertEqual(colors, [None, a, b, a, None, None])
+
     def test_malformed_quote_geometry_is_dropped_not_a_500(self):
         parent = self.post(self.payload())
         body = self.payload(repost_data={'original_post_id': parent.json()['id'],

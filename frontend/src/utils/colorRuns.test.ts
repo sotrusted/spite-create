@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyColorToRange, adjustRuns, colorSpans, runsToCodePoints, runsFromCodePoints, RAINBOW_RUN } from './colorRuns';
+import { applyColorToRange, adjustRuns, colorSpans, duoRun, runsToCodePoints, runsFromCodePoints, RAINBOW_RUN } from './colorRuns';
 
 const R = '#FF1A1A';
 const B = '#0000EE';
@@ -81,5 +81,23 @@ test('a rainbow range cycles over its own letters, as the server does', () => {
     { text: 'd', color: '#2' },
     { text: 'e', color: '#3' },
     { text: ' f', color: null },
+  ]);
+});
+
+test('a duo range alternates its two colours over its own letters, as the server does', () => {
+  // 'ab cde fg' with "b cd" one duo and "fg" another: each starts on its
+  // first colour, spaces skipped
+  const spans = colorSpans('ab cde fg', [
+    { start: 1, end: 5, color: duoRun(R, B) },
+    { start: 7, end: 9, color: duoRun(B, R) },
+  ], null, none);
+  assert.deepEqual(spans, [
+    { text: 'a', color: null },
+    { text: 'b ', color: R },
+    { text: 'c', color: B },
+    { text: 'd', color: R },
+    { text: 'e ', color: null },
+    { text: 'f', color: B },
+    { text: 'g', color: R },
   ]);
 });

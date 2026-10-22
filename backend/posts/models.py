@@ -99,6 +99,9 @@ RAINBOW_TEXT_PALETTE = [
 # A colour range's colour meaning "the rainbow over these letters"
 # (selected words made rainbow). Mirrors RAINBOW_RUN in utils/colorRuns.
 RAINBOW_RUN = 'RAINBOW'
+# A colour range's colour meaning "these two colours, letter by letter"
+# (a duo over selected words): 'DUO:#AAAAAA,#BBBBBB'. Mirrors duoRun there.
+DUO_RUN = 'DUO:'
 
 # Raqm applies kerning the way CoreText does in the composer preview; without
 # it Pillow uses raw advance widths and text renders slightly wider than the
@@ -494,16 +497,19 @@ class Post(models.Model):
             # those the same way, whatever the wrapping did
             if char_colors is not None:
                 visible = [c for ch, c in zip(content, char_colors) if not ch.isspace()]
-                # a rainbow range cycles the rainbow over its own letters,
-                # starting again after any letter outside it (colorSpans
-                # in the composer counts the same way)
-                palette, k = self._rainbow_palette(), 0
+                # a rainbow or duo range cycles its colours over its own
+                # letters, starting again after any letter outside it
+                # (colorSpans in the composer counts the same way)
+                rainbow, k, previous = self._rainbow_palette(), 0, None
                 for j, c in enumerate(visible):
-                    if c == RAINBOW_RUN:
-                        visible[j] = palette[k % len(palette)]
-                        k += 1
-                    else:
+                    if c != previous:
                         k = 0
+                    previous = c
+                    cycle = rainbow if c == RAINBOW_RUN else (
+                        c[len(DUO_RUN):].split(',') if c and c.startswith(DUO_RUN) else None)
+                    if cycle:
+                        visible[j] = cycle[k % len(cycle)]
+                        k += 1
                 normalized_element['charColors'] = visible if any(visible) else None
 
             # The composer displays text in an input that is 90 percent of the
@@ -989,17 +995,27 @@ class Post(models.Model):
     def _normalize_color_runs(cls, value, length):
         """Colour ranges from the composer: [{start, end, color}] over the
         typed text (code points, end exclusive). Palette colours only, like
-        the duo, or 'rainbow' (RAINBOW_RUN: the rainbow cycled over just
-        those letters); anything malformed is dropped."""
+        the duo, 'rainbow' (RAINBOW_RUN: the rainbow cycled over just
+        those letters), or 'duo:#A,#B' (DUO_RUN: two palette colours
+        alternating over them); anything malformed is dropped."""
         if not isinstance(value, list):
             return []
-        presets = {c.upper() for c in cls.COLOR_PRESETS} | {RAINBOW_RUN}
+        presets = {c.upper() for c in cls.COLOR_PRESETS}
+
+        def valid(color):
+            if color in presets or color == RAINBOW_RUN:
+                return True
+            if color.startswith(DUO_RUN):
+                pair = color[len(DUO_RUN):].split(',')
+                return len(pair) == 2 and pair[0] != pair[1] and all(c in presets for c in pair)
+            return False
+
         runs = []
         for entry in value[:cls.MAX_COLOR_RUNS]:
             if not isinstance(entry, dict):
                 continue
             color = entry.get('color')
-            if not isinstance(color, str) or color.strip().upper() not in presets:
+            if not isinstance(color, str) or not valid(color.strip().upper()):
                 continue
             try:
                 start, end = int(entry.get('start')), int(entry.get('end'))

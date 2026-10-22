@@ -48,7 +48,7 @@ import { TEXT_WRAP_FRACTION, buildPostPayload, getRepostStripRect, CANVAS_WIDTH 
 import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
-import { applyColorToRange, adjustRuns, colorSpans, RAINBOW_RUN } from '../utils/colorRuns';
+import { applyColorToRange, adjustRuns, colorSpans, duoOf, duoRun, RAINBOW_RUN } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
@@ -2623,6 +2623,27 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const el = selectedElement();
     if (el) updateTextElement(el.id, { color, rainbow: false, alternateColors: undefined });
   };
+  // Shuffle: a random font and text colour for the selected text, on a random
+  // background it reads on (an image background stays). Each differs from
+  // what it was, so every tap visibly changes all three.
+  const shuffleSelectedElement = () => {
+    const el = selectedElement();
+    if (!el) return;
+    const pick = <T,>(options: T[]): T => options[Math.floor(Math.random() * options.length)];
+    const fonts = (FONT_MENU as FontChoice[]).filter(f => f !== el.fontFamily);
+    const font = pick(fonts);
+    let background = backgroundColor;
+    if (!backgroundImage) {
+      const parent = repostData?.originalPost?.background_color;
+      background = pick(backgroundOptions.filter(c => c !== backgroundColor && c !== parent));
+      applyBackground(background);
+    }
+    const readable = Colors.postColors.filter(c =>
+      c !== el.color && contrastRatio(hexToRgb(background), hexToRgb(c)) >= 3.0);
+    const color = readable.length ? pick(readable) : pickReadableColor(background, Colors.postColors, el.color);
+    updateTextElement(el.id, { fontFamily: font, color, rainbow: false, alternateColors: undefined });
+    rememberFont(font);
+  };
   const setSelectedElementRainbow = () => {
     const el = selectedElement();
     if (el) updateTextElement(el.id, { rainbow: true, alternateColors: undefined });
@@ -2647,7 +2668,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         setDuoPending(picked);
         return;
       }
-      setSelectedElementDuo(picked);
+      if (colorGridMode === 'range') applyRangeColor(duoRun(picked[0], picked[1]));
+      else setSelectedElementDuo(picked);
       closeColorGrid();
       return;
     }
@@ -2695,7 +2717,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       const run = el.colorRuns?.find(r => r.start <= range.start && r.end >= range.end);
       return run?.color ?? null;
     })();
-    const duo = el?.alternateColors?.length === 2 ? el.alternateColors : null;
+    const duo = colorGridMode === 'range'
+      ? duoOf(rangeColor)
+      : el?.alternateColors?.length === 2 ? el.alternateColors : null;
     return (
     <Modal visible={colorGridMode !== null} transparent animationType="fade" onRequestClose={closeColorGrid}>
       <TouchableWithoutFeedback onPress={closeColorGrid}>
@@ -2707,7 +2731,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                   {duoPending.length === 0 ? 'PICK FIRST COLOR' : 'PICK SECOND COLOR'}
                 </Text>
               )}
-              {colorGridMode === 'range' && (
+              {colorGridMode === 'range' && !duoPending && (
                 <Text style={styles.colorGridLabel}>COLOR FOR SELECTION</Text>
               )}
               {colorGridMode === 'outline' && (
@@ -2778,7 +2802,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 </TouchableOpacity>
               )}
               {/* The rainbow over just the selected letters */}
-              {colorGridMode === 'range' && el && (
+              {colorGridMode === 'range' && el && !duoPending && (
                 <TouchableOpacity onPress={() => { applyRangeColor(RAINBOW_RUN); closeColorGrid(); }}>
                   <LinearGradient
                     {...DIAGONAL}
@@ -2787,8 +2811,17 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                   />
                 </TouchableOpacity>
               )}
+              {/* Two colours, letter by letter, over just the selection */}
+              {colorGridMode === 'range' && el && !duoPending && (
+                <TouchableOpacity onPress={() => setDuoPending([])}>
+                  <View style={[styles.colorCell, !!duo && styles.colorCellActive]}>
+                    <View style={[styles.duoHalf, { backgroundColor: duo ? duo[0] : '#F8F8FF' }]} />
+                    <View style={[styles.duoHalf, { backgroundColor: duo ? duo[1] : '#000000' }]} />
+                  </View>
+                </TouchableOpacity>
+              )}
               {/* The selection back to the text's own colour */}
-              {colorGridMode === 'range' && el && (
+              {colorGridMode === 'range' && el && !duoPending && (
                 <TouchableOpacity onPress={() => { applyRangeColor(null); closeColorGrid(); }}>
                   <View style={[styles.colorCell, styles.rangeResetCell]}>
                     <Ionicons name="refresh" size={20} color="white" />
@@ -3008,6 +3041,13 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 <Ionicons name="images" size={20} color="white" />
               </TouchableOpacity>
             </>
+          )}
+
+          {/* Shuffle the selected text's font and colour, and the background */}
+          {textElements.length > 0 && (
+            <TouchableOpacity style={styles.topMenuButton} onPress={shuffleSelectedElement}>
+              <Ionicons name="shuffle" size={CHROME.iconSize - 2} color="white" />
+            </TouchableOpacity>
           )}
 
           {/* Background: tap cycles solids, long-press cycles gradients */}

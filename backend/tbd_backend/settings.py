@@ -169,7 +169,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Custom user model
 AUTH_USER_MODEL = 'users.User'
 
-# Channels configuration
+# Channels configuration. Tests get their own in-memory layer: on the shared
+# Redis, every post a test creates was broadcast to the live feeds (the
+# deploy runs the tests on the production box).
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
@@ -178,6 +180,8 @@ CHANNEL_LAYERS = {
         },
     },
 }
+if RUNNING_TESTS:
+    CHANNEL_LAYERS = {'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}}
 
 # REST Framework configuration
 REST_FRAMEWORK = {

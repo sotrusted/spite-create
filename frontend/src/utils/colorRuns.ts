@@ -10,6 +10,16 @@
 // made rainbow). Mirrors RAINBOW_RUN on the server (posts/models.py).
 export const RAINBOW_RUN = 'rainbow';
 
+// A run's colour meaning "these two colours, letter by letter" (a duo over
+// selected words): 'duo:#AAAAAA,#BBBBBB'. Mirrors DUO_RUN on the server.
+const DUO_PREFIX = 'duo:';
+export const duoRun = (first: string, second: string) => `${DUO_PREFIX}${first},${second}`;
+export const duoOf = (color: string | null | undefined): [string, string] | null => {
+  if (!color?.toLowerCase().startsWith(DUO_PREFIX)) return null;
+  const [first, second] = color.slice(DUO_PREFIX.length).split(',');
+  return first && second ? [first, second] : null;
+};
+
 export interface ColorRun {
   start: number;
   end: number;
@@ -118,14 +128,20 @@ export function colorSpans(
 
   const spans: Span[] = [];
   let paletteIndex = 0;
-  // a rainbow range cycles the rainbow over its own letters, starting again
-  // after any letter outside it (the server counts the same way)
-  let rainbowIndex = 0;
+  // a rainbow or duo range cycles its colours over its own letters, starting
+  // again after any letter outside it (the server counts the same way)
+  let runIndex = 0;
+  let previous: string | null = null;
   for (const item of items) {
     let color = item.color;
     if (!/\s/.test(item.ch)) {
-      if (color === RAINBOW_RUN) color = rainbow.length ? rainbow[rainbowIndex++ % rainbow.length] : null;
-      else rainbowIndex = 0;
+      const cycle = color === RAINBOW_RUN ? rainbow : duoOf(color);
+      if (color !== previous) runIndex = 0;
+      previous = color;
+      if (cycle) color = cycle.length ? cycle[runIndex++ % cycle.length] : null;
+    } else if (color === RAINBOW_RUN || duoOf(color)) {
+      // a space inside a cycling range takes no colour of its own
+      color = spans[spans.length - 1]?.color ?? null;
     }
     if (!/\s/.test(item.ch) && cyclePalette) {
       const cycled = cyclePalette[paletteIndex++ % cyclePalette.length];
