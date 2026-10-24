@@ -140,6 +140,14 @@ export const FontChoices = {
     fontWeight: 'normal' as const,
     variants: { bold: 'LexendExaSemiBold' },
   },
+  'monocraft': {
+    // Pixel register: Monocraft (OFL), its code ligatures stripped so the
+    // app and the server draw the same glyphs
+    name: 'Pixel',
+    fontFamily: 'Monocraft',
+    fontWeight: 'normal' as const,
+    variants: { bold: 'MonocraftBold' },
+  },
   'caveat': {
     // Retired from the menus; kept so older posts still edit and render
     name: 'Caveat',
@@ -154,7 +162,7 @@ export const FONT_MENU: (keyof typeof FontChoices)[] = [
   'arial-black', 'crimson-text', 'courier-prime',
   'impact', 'cabin-sketch', 'petit-formal',
   'lexend-exa', 'papyrus', 'freeride',
-  'grutch-shaded',
+  'grutch-shaded', 'monocraft',
 ];
 
 // A tap on the font button cycles this shorter set; the rest live in the grid

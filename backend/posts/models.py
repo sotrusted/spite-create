@@ -130,6 +130,7 @@ class Post(models.Model):
         ('petit-formal', 'Petit Formal Script'),
         ('lexend-exa', 'Lexend Exa'),
         ('caveat', 'Caveat'),
+        ('monocraft', 'Monocraft'),
     ]
     
     # Color presets (old school internet + modern)
@@ -1384,6 +1385,7 @@ class Post(models.Model):
         'grutch-shaded': [os.path.join(_REPO_FONTS, 'GrutchShaded.ttf')],
         'petit-formal': [os.path.join(_REPO_FONTS, 'PetitFormalScript.ttf')],
         'lexend-exa': [os.path.join(_REPO_FONTS, 'LexendExaLight.ttf')],
+        'monocraft': [os.path.join(_REPO_FONTS, 'Monocraft.ttf')],
     }
 
     # Real bold/italic faces per family - families without a face fall back
@@ -1398,6 +1400,7 @@ class Post(models.Model):
         ('caveat', 'bold'): [os.path.join(_REPO_FONTS, 'CaveatBold.ttf')],
         ('cabin-sketch', 'bold'): [os.path.join(_REPO_FONTS, 'CabinSketchBold.ttf')],
         ('lexend-exa', 'bold'): [os.path.join(_REPO_FONTS, 'LexendExaSemiBold.ttf')],
+        ('monocraft', 'bold'): [os.path.join(_REPO_FONTS, 'MonocraftBold.ttf')],
     }
     _resolved_font_paths = {}
 

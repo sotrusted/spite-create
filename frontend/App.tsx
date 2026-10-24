@@ -113,6 +113,8 @@ export default function App() {
     'LexendExaLight': require('./assets/fonts/LexendExaLight.ttf'),
     'LexendExaSemiBold': require('./assets/fonts/LexendExaSemiBold.ttf'),
     'GrutchShaded': require('./assets/fonts/GrutchShaded.ttf'),
+    'Monocraft': require('./assets/fonts/Monocraft.ttf'),
+    'MonocraftBold': require('./assets/fonts/MonocraftBold.ttf'),
   });
 
   // The cached first feed page is read before the first render, alongside

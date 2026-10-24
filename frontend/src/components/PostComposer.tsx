@@ -62,6 +62,7 @@ import {
 } from '../utils/drafts';
 import { CanvasState, CanvasTextElement } from '../types/canvas';
 import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
+import { flashColorOn } from './PressFlash';
 
 
 // Every gradient runs top-left to bottom-right. iOS projects each point onto
@@ -397,7 +398,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   
   // UI state - Instagram Create Mode
   const [showControlBar, setShowControlBar] = useState(false);
-  const [screenDarkened, setScreenDarkened] = useState(false);
 
   // Dev-only WYSIWYG check: after posting, overlay the server render on the
   // live canvas at half opacity so any drift is immediately visible
@@ -1431,7 +1431,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     console.log('🏁 startEditingText called for id:', id);
     setSelectedTextId(id);
     setIsEditingText(true);
-    setScreenDarkened(true);
     setShowControlBar(true);
     // Editing happens in a staged input above the controls (renderEditingInput);
     // the element's canvas position is never moved for editing
@@ -1444,7 +1443,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       setCurrentFontSize(element.fontSize);
     }
     
-    console.log('✅ Edit state set: editing=true, darkened=true, controls=true');
+    console.log('✅ Edit state set: editing=true, controls=true');
   };
 
 
@@ -1460,7 +1459,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     });
     
     setIsEditingText(false);
-    setScreenDarkened(false);
     setShowControlBar(false);
     
     // Clear local text content when stopping edit mode
@@ -2539,9 +2537,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
             <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
               {/* Repost image layer */}
           
-              {/* Dim overlay lives ABOVE the image but BELOW text */}
-              {screenDarkened && <View style={styles.screenOverlay} pointerEvents="none" />}
-              
               {/* Interaction/text layer sits on top */}
               <TouchableOpacity
                 style={[StyleSheet.absoluteFill, { zIndex: 20 }]}
@@ -3459,7 +3454,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       {renderBottomControlBar()}
 
       {/* Typing dims the canvas, quote and all, under the staged input */}
-      {isEditingText && <View style={[StyleSheet.absoluteFill, styles.editingScrim]} pointerEvents="none" />}
+      {isEditingText && (
+        <View
+          style={[StyleSheet.absoluteFill, styles.editingScrim, {
+            backgroundColor: flashColorOn(textElements.find(el => el.id === selectedTextId)?.color ?? '#FFFFFF'),
+          }]}
+          pointerEvents="none"
+        />
+      )}
 
       {/* Staged editing input: screen-fixed just above the config row, like
           the row itself, so keyboard state cannot reorder them */}
@@ -3535,15 +3537,6 @@ const styles = StyleSheet.create({
   },
   
   // Instagram Create Mode Styles
-  screenOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.18)', // Lighter so you can still "feel" the repost
-    zIndex: 13, // Below canvas (10) but above background
-  },
   
   // Top Menu (when not editing)
   colorGridBackdrop: {
@@ -3906,7 +3899,7 @@ const styles = StyleSheet.create({
   },
   // Staged editing area: centered in the free space above the config row
   editingScrim: {
-    backgroundColor: CHROME.editingScrim,
+    opacity: CHROME.editingScrimOpacity,
     zIndex: 29, // over the canvas and the quote, under the editing stage (30)
   },
   editingStage: {

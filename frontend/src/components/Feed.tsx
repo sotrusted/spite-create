@@ -415,8 +415,7 @@ export default function Feed({
     return () => sub.remove();
   }, [fetchFeed]);
 
-  // Between two posts whose touching edges are the same or nearly the same
-  // colour, a hairline keeps them from running together (utils/feedSeparator).
+  // Between two posts whose touching edges are the same colour, a hairline keeps them from running together (utils/feedSeparator).
   // The list hands a separator only the post above it; the one below is the
   // next in the feed.
   const PostSeparator = useCallback(({ leadingItem }: { leadingItem?: Post }) => {
