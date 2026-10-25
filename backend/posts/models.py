@@ -131,6 +131,7 @@ class Post(models.Model):
         ('lexend-exa', 'Lexend Exa'),
         ('caveat', 'Caveat'),
         ('monocraft', 'Monocraft'),
+        ('cavalhatriz', 'Cavalhatriz'),
     ]
     
     # Color presets (old school internet + modern)
@@ -1386,6 +1387,7 @@ class Post(models.Model):
         'petit-formal': [os.path.join(_REPO_FONTS, 'PetitFormalScript.ttf')],
         'lexend-exa': [os.path.join(_REPO_FONTS, 'LexendExaLight.ttf')],
         'monocraft': [os.path.join(_REPO_FONTS, 'Monocraft.ttf')],
+        'cavalhatriz': [os.path.join(_REPO_FONTS, 'Cavalhatriz.ttf')],
     }
 
     # Real bold/italic faces per family - families without a face fall back

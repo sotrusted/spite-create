@@ -33,6 +33,7 @@ export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; wid
   CaveatBold: { ascent: 0.9600, inkDrop: 0.0540, widthPerPt: 1.938 },
   CabinSketch: { ascent: 0.8730, inkDrop: 0.0080, widthPerPt: 2.206 },
   CabinSketchBold: { ascent: 0.8730, inkDrop: 0.0180, widthPerPt: 2.206 },
+  Cavalhatriz: { ascent: 0.7500, inkDrop: 0.0630, widthPerPt: 2.750 },
   Monocraft: { ascent: 0.8889, inkDrop: 0.0000, widthPerPt: 2.667 },
   MonocraftBold: { ascent: 0.8889, inkDrop: 0.0230, widthPerPt: 2.667 },
   Freeride: { ascent: 0.9400, inkDrop: 0.0000, widthPerPt: 2.019 },

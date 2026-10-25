@@ -1,0 +1,5 @@
+Cavalhatriz by MrtheNoronha - https://www.dafont.com/cavalhatriz.font
+Licence: donationware. "To use this font commercially, please, make a
+donation of 1 dollar or more to my pay pal" (see the dafont page).
+Modified for the app: smart quotes mapped to its straight quotes, an
+ellipsis composed of three of its periods, and no built-in line gap.

@@ -128,8 +128,8 @@ export const FontChoices = {
     fontWeight: 'normal' as const,
   },
   'petit-formal': {
-    // Cursive register (replaces Caveat)
-    name: 'Cursive',
+    // Retired from the menus; kept so older posts still edit and render
+    name: 'Formal',
     fontFamily: 'PetitFormalScript',
     fontWeight: 'normal' as const,
   },
@@ -139,6 +139,13 @@ export const FontChoices = {
     fontFamily: 'LexendExaLight',
     fontWeight: 'normal' as const,
     variants: { bold: 'LexendExaSemiBold' },
+  },
+  'cavalhatriz': {
+    // Cursive register: a bitmap script (MrtheNoronha, donationware), given
+    // smart quotes and an ellipsis built from its own glyphs
+    name: 'Cursive',
+    fontFamily: 'Cavalhatriz',
+    fontWeight: 'normal' as const,
   },
   'monocraft': {
     // Pixel register: Monocraft (OFL), its code ligatures stripped so the
@@ -160,7 +167,7 @@ export const FontChoices = {
 // The long-press grid: every font on offer, in grid order (3 across)
 export const FONT_MENU: (keyof typeof FontChoices)[] = [
   'arial-black', 'crimson-text', 'courier-prime',
-  'impact', 'cabin-sketch', 'petit-formal',
+  'impact', 'cabin-sketch', 'cavalhatriz',
   'lexend-exa', 'papyrus', 'freeride',
   'grutch-shaded', 'monocraft',
 ];
