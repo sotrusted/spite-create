@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Type",
+    "name": "Typee",
     "slug": "creative-minds-ideas-magazine",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -19,7 +19,7 @@
       "bundleIdentifier": "com.cmim.magazine",
       "buildNumber": "1",
       "infoPlist": {
-        "CFBundleDisplayName": "Type",
+        "CFBundleDisplayName": "Typee",
         "ITSAppUsesNonExemptEncryption": false,
         "NSPhotoLibraryAddUsageDescription": "Save the posts you compose to your photo library."
       }
@@ -52,9 +52,7 @@
       ]
     ],
     "owner": "sotrusted",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "runtimeVersion": "1.0.0",
     "updates": {
       "url": "https://u.expo.dev/764c896b-b113-4820-a897-68fcbfe4a1ff"
     }

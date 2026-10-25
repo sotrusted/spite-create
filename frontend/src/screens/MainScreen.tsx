@@ -357,7 +357,7 @@ export default function MainScreen() {
             adjustsFontSizeToFit
             minimumFontScale={0.5}
           >
-            Type
+            Typee
           </Text>
           </View>
           <View style={styles.headerRight}>

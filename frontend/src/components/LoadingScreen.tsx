@@ -11,7 +11,7 @@ import { metricsFor } from '../constants/fontMetrics';
 // with zero allocation, so this is safe to mount anywhere as the generic
 // loading state.
 
-const TITLE = "Type";
+const TITLE = "Typee";
 // PHOTOSENSITIVITY FLOOR: keep >= 170ms. WCAG 2.3.1 allows max 3 opposing
 // luminance pairs/sec on a full field; at 240ms we max out at ~2.1. Below
 // ~167ms the worst-case sequence crosses into seizure-trigger territory.
@@ -55,7 +55,7 @@ const FORMATS = [
 ];
 
 // One short word, so it can be set big: sizes swing wide for the strobe while
-// the ceiling still fits "Type" inside the narrowest shape.
+// the ceiling still fits "Typee" inside the narrowest shape.
 const SIZES = [40, 56, 72, 48, 84, 44, 64, 52];
 
 // Chip geometries, strictly alternating wide/narrow (including the
@@ -78,8 +78,9 @@ const P = { chip: 1, textSeed: 1, screen: 1, font: 4, size: 2, shape: 2 };
 const SHAPE_PHASE = 1;
 
 // A size is a wish: capped to what fits the frame's chip, so the one word
-// never breaks mid-letter in a narrow shape. widthPerPt is measured on "TYPE",
-// wider than "Type", so this errs small.
+// never breaks mid-letter in a narrow shape. widthPerPt is measured on the
+// four letters "TYPE", caps being the widest, so it is scaled per letter of
+// the title and errs small.
 const fitSize = (
   size: number,
   fontFamily: string,
@@ -88,7 +89,7 @@ const fitSize = (
 ) => {
   const chipWidth = (Dimensions.get('window').width * parseFloat(shape.maxWidth)) / 100;
   const inner = chipWidth - 2 * shape.padH - 2 - letterSpacing * TITLE.length; // 2 = hairline
-  return Math.min(size, Math.floor(inner / metricsFor(fontFamily).widthPerPt));
+  return Math.min(size, Math.floor(inner / (metricsFor(fontFamily).widthPerPt * TITLE.length / 4)));
 };
 
 const buildFrames = (): Frame[] => {

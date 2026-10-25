@@ -317,7 +317,7 @@ REPORT_DIGEST_EMAIL = config('REPORT_DIGEST_EMAIL', default='tsargentmoore@gmail
 RESEND_API_KEY = config('RESEND_API_KEY', default=EMAIL_HOST_PASSWORD)
 RESEND_WEBHOOK_SECRET = config('RESEND_WEBHOOK_SECRET', default='')
 SUPPORT_FROM_EMAIL = config(
-    'SUPPORT_FROM_EMAIL', default='Type Magazine Support <support@creativemindsideasmagazine.com>')
+    'SUPPORT_FROM_EMAIL', default='Typee Support <support@creativemindsideasmagazine.com>')
 SUPPORT_FORWARD_TO = [a.strip() for a in config(
     'SUPPORT_FORWARD_TO', default=REPORT_DIGEST_EMAIL).split(',') if a.strip()]
 
