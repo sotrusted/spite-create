@@ -1431,6 +1431,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     console.log('🏁 startEditingText called for id:', id);
     setSelectedTextId(id);
     setIsEditingText(true);
+    configWidths.current.touched = false;
     setShowControlBar(true);
     // Editing happens in a staged input above the controls (renderEditingInput);
     // the element's canvas position is never moved for editing
@@ -2183,6 +2184,15 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     return () => { show.remove(); hide.remove(); };
   }, []);
   const configBarRef = useRef<View>(null);
+  // The config row opens centred: when it is wider than the screen it starts
+  // scrolled to its middle, and stays put once the user scrolls it
+  const configScrollRef = useRef<ScrollView>(null);
+  const configWidths = useRef({ view: 0, content: 0, touched: false });
+  const centerConfigRow = () => {
+    const w = configWidths.current;
+    if (w.touched || !w.view || !w.content) return;
+    configScrollRef.current?.scrollTo({ x: Math.max(0, (w.content - w.view) / 2), animated: false });
+  };
   const keepCaretInView = (length: number) => {
     const view = editViewHeight.current;
     const content = editContentHeight.current;
@@ -3169,8 +3179,12 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         onLayout={() => configBarRef.current?.measureInWindow((_x, y) => setConfigBarTop(y))}
       >
         <ScrollView
+          ref={configScrollRef}
           horizontal
           showsHorizontalScrollIndicator={false}
+          onLayout={e => { configWidths.current.view = e.nativeEvent.layout.width; centerConfigRow(); }}
+          onContentSizeChange={w => { configWidths.current.content = w; centerConfigRow(); }}
+          onScrollBeginDrag={() => { configWidths.current.touched = true; }}
           contentContainerStyle={[styles.bottomControlBar, { flexGrow: 1, justifyContent: 'center' }]}
           keyboardShouldPersistTaps="always"
         >
