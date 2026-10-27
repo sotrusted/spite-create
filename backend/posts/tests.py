@@ -1808,7 +1808,7 @@ class FontMetricsTableTests(TestCase):
         for name in os.listdir(Post._REPO_FONTS):
             face = os.path.splitext(name)[0]
             with self.subTest(face=face):
-                m = re.search(r'\b%s: \{ ascent: ([0-9.]+),[^}]*?(?:lineGap: ([0-9.]+))?\s*\}' % face, table)
+                m = re.search(r'\b%s: \{ ascent: ([0-9.]+),(?:[^}]*?lineGap: ([0-9.]+))?[^}]*\}' % face, table)
                 self.assertIsNotNone(m, f'{face} missing from FONT_METRICS')
                 font = TTFont(os.path.join(Post._REPO_FONTS, name))
                 upm = font['head'].unitsPerEm

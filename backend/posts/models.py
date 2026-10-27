@@ -132,13 +132,15 @@ class Post(models.Model):
         ('caveat', 'Caveat'),
         ('monocraft', 'Monocraft'),
         ('cavalhatriz', 'Cavalhatriz'),
+        ('princess-sofia', 'Princess Sofia'),
+        ('pinyon-script', 'Pinyon Script'),
     ]
     
     # Color presets (old school internet + modern)
     COLOR_PRESETS = [
         '#F8F8FF', '#FAEBD7', '#B7BEC7', '#3D3D42', '#000000', '#690016',
-        '#FF1A1A', '#FF940A', '#F0FF00', '#F9FF4F', '#CCFF00', '#32CD32', '#00CED1',
-        '#0000EE', '#2749F5', '#AB00FF', '#9932CC', '#FF1493', '#FF90C2'
+        '#FF1A1A', '#FF940A', '#F0FF00', '#F9FF4F', '#32CD32', '#CCFF00', '#00CED1',
+        '#0000EE', '#2749F5', '#AB00FF', '#9932CC', '#FF1493', '#FF90C2', '#F7B1D1'
     ]
 
     SIGNATURE_STYLES = {
@@ -1074,6 +1076,16 @@ class Post(models.Model):
     def _glow_radius(self, element):
         return max(4, int(element['fontSize'] * 0.12))
 
+    @staticmethod
+    def _multiline_spacing(font):
+        """The `spacing` that makes Pillow's multiline text step its lines the
+        way iOS does in the composer: the font's own line height (hhea ascent
+        + descent + line gap, FreeType's size height). Pillow steps by the
+        bottom of an "A" plus `spacing`, which set lines 10-40% tighter than
+        the composer showed them - a multi-line post came out squashed."""
+        draw = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+        return font.font.height - draw.textbbox((0, 0), 'A', font=font)[3]
+
     def _styled_text_layout(self, element, font):
         """Per-line layout for styled text: (lines[(text, width)], line_height,
         gap, total_height). Anchored like multiline anchor='mm'."""
@@ -1082,7 +1094,9 @@ class Post(models.Model):
         spacing = element.get('letterSpacing') or 0
         ascent, descent = font.getmetrics()
         line_height = ascent + descent
-        gap = 4  # matches PIL multiline_text default spacing
+        # lines step by the font's line height, like the composer (and like
+        # the plain path, see _multiline_spacing)
+        gap = font.font.height - line_height
         lines = [
             (line, self._spaced_text_width(draw, line, font, spacing))
             for line in element['content'].split('\n')
@@ -1109,7 +1123,8 @@ class Post(models.Model):
         try:
             dummy = Image.new('RGB', (10, 10))
             draw = ImageDraw.Draw(dummy)
-            bbox = draw.multiline_textbbox((0, 0), content, font=font, align='center', anchor='mm')
+            bbox = draw.multiline_textbbox((0, 0), content, font=font, align='center', anchor='mm',
+                                           spacing=self._multiline_spacing(font))
         except Exception:
             return None
         return (
@@ -1189,7 +1204,7 @@ class Post(models.Model):
 
         if not self._is_styled_text(element):
             _font, parts = dummy._prepare_multiline_text(
-                (element['x'], element['y']), content, font, 'mm', 4, align,
+                (element['x'], element['y']), content, font, 'mm', self._multiline_spacing(font), align,
                 None, None, None, 0, False, None)
             plan['runs'] = [run(line, xy, anchor, fill_color) for xy, anchor, line in parts if line]
             return plan
@@ -1388,6 +1403,8 @@ class Post(models.Model):
         'lexend-exa': [os.path.join(_REPO_FONTS, 'LexendExaLight.ttf')],
         'monocraft': [os.path.join(_REPO_FONTS, 'Monocraft.ttf')],
         'cavalhatriz': [os.path.join(_REPO_FONTS, 'Cavalhatriz.ttf')],
+        'princess-sofia': [os.path.join(_REPO_FONTS, 'PrincessSofia.ttf')],
+        'pinyon-script': [os.path.join(_REPO_FONTS, 'PinyonScript.ttf')],
     }
 
     # Real bold/italic faces per family - families without a face fall back
