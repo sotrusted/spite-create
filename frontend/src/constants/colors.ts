@@ -143,7 +143,7 @@ export const FontChoices = {
   'cavalhatriz': {
     // Cursive register: a bitmap script (MrtheNoronha, donationware), given
     // smart quotes and an ellipsis built from its own glyphs
-    name: 'Cursive',
+    name: 'Pixel Cursive',
     fontFamily: 'Cavalhatriz',
     fontWeight: 'normal' as const,
   },
@@ -167,9 +167,9 @@ export const FontChoices = {
 // The long-press grid: every font on offer, in grid order (3 across)
 export const FONT_MENU: (keyof typeof FontChoices)[] = [
   'arial-black', 'crimson-text', 'courier-prime',
-  'impact', 'cabin-sketch', 'cavalhatriz',
-  'lexend-exa', 'papyrus', 'freeride',
-  'grutch-shaded', 'monocraft',
+  'impact', 'cabin-sketch', 'lexend-exa',
+  'papyrus', 'freeride', 'grutch-shaded',
+  'monocraft', 'cavalhatriz',
 ];
 
 // A tap on the font button cycles this shorter set; the rest live in the grid
