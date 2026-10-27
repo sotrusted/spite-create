@@ -19,7 +19,7 @@ import os
 import shutil
 import tempfile
 
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from PIL import Image, ImageChops, ImageDraw
 
 from posts.models import Post
@@ -395,31 +395,45 @@ class FormattingTests(RenderTestCase):
 
 
 class HighlightBlockTests(RenderTestCase):
-    """The highlighter is one rectangle spanning the text block edge to edge,
-    not a staircase hugging each line's words."""
+    """The highlighter hugs the lines: a band per line, the bands touching,
+    a long line's band wider than a short one's (one box round the block
+    read as a quoted post) - and near-equal lines share one width, so the
+    outline never has sliver steps."""
 
-    def test_highlight_spans_the_block_not_each_line(self):
+    def white_span_fn(self, post):
+        px = self.open_render(post).load()
+
+        def white_span(y):
+            xs = [x for x in range(0, CANVAS_WIDTH, 2) if px[x, y] == (255, 255, 255)]
+            return (min(xs), max(xs)) if xs else None
+        rows = [y for y in range(post.top_y, post.bottom_y, 2) if white_span(y)]
+        self.assertTrue(rows, 'no highlight rendered')
+        return white_span, rows
+
+    def test_highlight_hugs_each_line_without_gaps(self):
         post = self.make_post(
             [text_element('WIDE LINE OF TEXT HERE\nTINY', fontSize=72,
                           hasBackground=True, backgroundColor='#FFFFFF',
                           color='#000000')],
             background_color='#00CED1',
         )
-        img = self.open_render(post)
-        px = img.load()
-
-        def white_span(y):
-            xs = [x for x in range(0, CANVAS_WIDTH, 2) if px[x, y] == (255, 255, 255)]
-            return (min(xs), max(xs)) if xs else None
-
-        rows = [y for y in range(post.top_y, post.bottom_y, 2) if white_span(y)]
-        self.assertTrue(rows, 'no highlight rendered')
+        white_span, rows = self.white_span_fn(post)
         wide = white_span(rows[len(rows) // 4])       # beside the long line
         tiny = white_span(rows[-max(2, len(rows) // 8)])  # beside "TINY"
-        self.assertEqual(wide, tiny, f'highlight is per-line, not a block ({wide} vs {tiny})')
-        # and it is one solid block: no background-coloured gap between lines
+        self.assertLess(tiny[1] - tiny[0], (wide[1] - wide[0]) / 2, f'one block, not per line ({wide} vs {tiny})')
+        # the bands touch: no background-coloured gap between lines
         for y in range(rows[0], rows[-1], 2):
             self.assertIsNotNone(white_span(y), f'gap in the highlight at y={y}')
+
+    def test_near_equal_lines_share_a_width(self):
+        post = self.make_post(
+            [text_element('HHHHHHHH\nHHHHHHHH.', fontSize=60,
+                          hasBackground=True, backgroundColor='#FFFFFF',
+                          color='#000000')],
+            background_color='#00CED1',
+        )
+        white_span, rows = self.white_span_fn(post)
+        self.assertEqual(white_span(rows[2]), white_span(rows[-3]))
 
 
 class TextSizeInvariantTests(RenderTestCase):
@@ -1828,3 +1842,15 @@ class IsAuthorFieldTests(RenderTestCase):
             request = RequestFactory().get('/', HTTP_X_DEVICE_ID=device)
             for serializer in (PostSerializer, PostListSerializer):
                 self.assertEqual(serializer(post, context={'request': request}).data['is_author'], expected)
+
+
+class HighlighterBandTests(SimpleTestCase):
+    """The highlighter's per-line bands snap like the composer's
+    (frontend/src/utils/lineChips.test.ts runs the same cases)."""
+
+    def test_snap_matches_the_composer(self):
+        from .models import snap_line_widths
+        self.assertEqual(snap_line_widths([500, 530, 300], 100), [530, 530, 300])
+        self.assertEqual(snap_line_widths([400, 440, 480], 100), [480, 480, 480])
+        self.assertEqual(snap_line_widths([500, 0, 520], 100), [500, 0, 520])
+

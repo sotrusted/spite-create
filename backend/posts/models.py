@@ -81,6 +81,26 @@ RAINBOW_MIN_DISTANCE = 90
 # canvas px. Mirrors chipPadding in the composer.
 CHIP_PAD_X, CHIP_PAD_Y = 8, 4
 CHIP_PAD_X_EM, CHIP_PAD_Y_EM = 0.25, 0.1
+# Neighbouring highlighted lines closer in width than this (em of the font
+# size) share the wider width: no sliver steps in the outline
+CHIP_SNAP_EM = 0.6
+
+
+def snap_line_widths(widths, size):
+    """Line widths for the highlighter's bands: two neighbours within
+    CHIP_SNAP_EM of each other both take the wider, repeated until no such
+    pair is left. Mirrors snapLineWidths in frontend/src/utils/lineChips.ts."""
+    out = list(widths)
+    snap = size * CHIP_SNAP_EM
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(out) - 1):
+            a, b = out[i], out[i + 1]
+            if a > 0 and b > 0 and a != b and abs(a - b) < snap:
+                out[i] = out[i + 1] = max(a, b)
+                changed = True
+    return out
 
 # A quote whose author deleted their account renders as this flat block
 REMOVED_FILL, REMOVED_INK = '#3D3D42', '#B7BEC7'
@@ -1228,11 +1248,25 @@ class Post(models.Model):
                 return element['x'] + max_width / 2 - width
             return element['x'] - width / 2
 
-        # Highlighter: ONE rectangle behind the whole text block, spanning
-        # the widest line and every line
+        # Highlighter: a band behind each line, the bands touching, so the
+        # background hugs the text (one box round the block read as a quote).
+        # Neighbouring lines of nearly the same width share one, so every
+        # step in the outline is a real step (snap_line_widths).
         if element.get('hasBackground'):
-            plan['chips'].append({'rect': list(self._chip_rect(element, max_width, top, total_height)),
-                                  'fill': element.get('backgroundColor', '#FFFFFF')})
+            size = element.get('fontSize', 24)
+            pad_x = max(CHIP_PAD_X, size * CHIP_PAD_X_EM)
+            pad_y = max(CHIP_PAD_Y, size * CHIP_PAD_Y_EM)
+            pitch = line_height + gap
+            widths = snap_line_widths([w for _t, w in lines], size)
+            fill = element.get('backgroundColor', '#FFFFFF')
+            for i, ((text, _w), width) in enumerate(zip(lines, widths)):
+                if not text.strip():
+                    continue
+                band_top = top + i * pitch - (pad_y if i == 0 else 0)
+                band_bottom = top + i * pitch + line_height + (pad_y if i == len(lines) - 1 else gap)
+                x = line_x(width)
+                plan['chips'].append({'rect': [x - pad_x, band_top, x + width + pad_x, band_bottom],
+                                      'fill': fill})
 
         # Colour ranges are counted per visible character (see
         # _collect_text_elements) and win over the element's colour, the
