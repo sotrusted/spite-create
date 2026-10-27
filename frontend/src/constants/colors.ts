@@ -29,8 +29,8 @@ export const Colors = {
     '#FF940A', // Bright Orange
     '#F0FF00', // Bright Yellow
     '#F9FF4F', // Lemon
-    '#CCFF00', // Highlighter
     '#32CD32', // Lime Green
+    '#CCFF00', // Highlighter
     '#00CED1', // Dark Turquoise
     '#0000EE', // Link Blue
     '#2749F5', // Royal Blue
@@ -38,6 +38,7 @@ export const Colors = {
     '#9932CC', // Dark Orchid
     '#FF1493', // Deep Pink
     '#FF90C2', // Baby Pink
+    '#F7B1D1', // Blush (the composer overlay's pink)
   ],
   
   // Per-character palette for rainbow text. Must match RAINBOW_TEXT_PALETTE
@@ -147,10 +148,23 @@ export const FontChoices = {
     fontFamily: 'Cavalhatriz',
     fontWeight: 'normal' as const,
   },
+  'princess-sofia': {
+    // Fairytale register: Princess Sofia (Font Diner, OFL), swash capitals
+    name: 'Princess Sofia',
+    fontFamily: 'PrincessSofia',
+    fontWeight: 'normal' as const,
+  },
+  'pinyon-script': {
+    // Cursive register: Pinyon Script (OFL), a connected copperplate; its
+    // ligatures and joins are shaped the same by iOS and the server (HarfBuzz)
+    name: 'Cursive',
+    fontFamily: 'PinyonScript',
+    fontWeight: 'normal' as const,
+  },
   'monocraft': {
     // Pixel register: Monocraft (OFL), its code ligatures stripped so the
     // app and the server draw the same glyphs
-    name: 'Pixel',
+    name: 'Minecraft',
     fontFamily: 'Monocraft',
     fontWeight: 'normal' as const,
     variants: { bold: 'MonocraftBold' },
@@ -167,15 +181,14 @@ export const FontChoices = {
 // The long-press grid: every font on offer, in grid order (3 across)
 export const FONT_MENU: (keyof typeof FontChoices)[] = [
   'arial-black', 'crimson-text', 'courier-prime',
-  'impact', 'cabin-sketch', 'lexend-exa',
-  'papyrus', 'freeride', 'grutch-shaded',
-  'monocraft', 'cavalhatriz',
+  'impact', 'cabin-sketch', 'pinyon-script',
+  'lexend-exa', 'papyrus', 'freeride',
+  'grutch-shaded', 'princess-sofia', 'monocraft',
+  'cavalhatriz',
 ];
 
-// A tap on the font button cycles this shorter set; the rest live in the grid
-export const FONT_TOGGLE: (keyof typeof FontChoices)[] = [
-  'arial-black', 'crimson-text', 'courier-prime', 'impact', 'cabin-sketch',
-];
+// A tap on the font button steps through every font, in the grid's order
+export const FONT_TOGGLE: (keyof typeof FontChoices)[] = FONT_MENU;
 
 // A rainbow letter whose colour sits this close (RGB distance) to a solid
 // background vanishes into it, so those colours are skipped for that post.

@@ -114,6 +114,8 @@ export default function App() {
     'LexendExaSemiBold': require('./assets/fonts/LexendExaSemiBold.ttf'),
     'GrutchShaded': require('./assets/fonts/GrutchShaded.ttf'),
     'Cavalhatriz': require('./assets/fonts/Cavalhatriz.ttf'),
+    'PrincessSofia': require('./assets/fonts/PrincessSofia.ttf'),
+    'PinyonScript': require('./assets/fonts/PinyonScript.ttf'),
     'Monocraft': require('./assets/fonts/Monocraft.ttf'),
     'MonocraftBold': require('./assets/fonts/MonocraftBold.ttf'),
   });

@@ -29,5 +29,6 @@ export const RULE_ON: Record<string, string> = {
   '#9932CC': '#FF90C2', // Dark Orchid    / Baby Pink
   '#FF1493': '#FF90C2', // Deep Pink      / Baby Pink
   '#FF90C2': '#FF1493', // Baby Pink      / Deep Pink
+  '#F7B1D1': '#690016', // Blush          / Oxblood
 };
 

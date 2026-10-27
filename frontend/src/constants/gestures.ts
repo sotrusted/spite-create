@@ -14,6 +14,9 @@ export interface GesturePolicy {
     // Spread change (fraction) before a pinch counts: resting or wobbling
     // fingers never nudge the size, and crossing it never jumps
     deadZone: number;
+    // Response to the fingers: the text's size changes as the spread raised
+    // to this power, so a small pinch does a lot (1 = follows the fingers)
+    gain: number;
     // Text scale limits
     minScale: number;
     maxScale: number;
@@ -51,7 +54,7 @@ export interface GesturePolicy {
 
 export const GESTURES: GesturePolicy = {
   drag: { canvasMinDistance: 28, elementMinDistance: 4 },
-  pinch: { deadZone: 0.06, minScale: 0.3, maxScale: 5, minTargetWidth: 180, minTargetHeight: 120 },
+  pinch: { deadZone: 0.03, gain: 1.8, minScale: 0.3, maxScale: 5, minTargetWidth: 240, minTargetHeight: 180 },
   touch: { minElementTarget: 120 },
   tap: { doubleTapWindowMs: 260 },
   zoom: { maxScale: 8, settleMs: 120, maxTextResolution: 6 },

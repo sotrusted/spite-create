@@ -17,35 +17,41 @@
 // lineGap: the font's built-in line gap (hhea.lineGap / unitsPerEm), counted
 //   into `ascent` above. A single line of text drawn by iOS puts its baseline
 //   at ascent - lineGap below the top (utils/planLayout). Only Times has one.
-export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; widthPerPt: number; lineGap?: number }> = {
-  ArialBlack: { ascent: 1.1006, inkDrop: 0.0124, widthPerPt: 2.944 },
-  TimesNewRoman: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500, lineGap: 0.0425 },
-  TimesNewRomanBold: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.667, lineGap: 0.0425 },
-  TimesNewRomanItalic: { ascent: 0.9336, inkDrop: -0.0306, widthPerPt: 2.334, lineGap: 0.0425 },
-  TimesNewRomanBoldItalic: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500, lineGap: 0.0425 },
-  Papyrus: { ascent: 0.9399, inkDrop: 0.0211, widthPerPt: 2.691 },
-  Impact: { ascent: 1.0088, inkDrop: 0.0122, widthPerPt: 1.876 },
-  CourierPrime: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398 },
-  CourierPrimeBold: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398 },
-  CourierPrimeItalic: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398 },
-  CourierPrimeBoldItalic: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398 },
-  Caveat: { ascent: 0.9600, inkDrop: 0.0450, widthPerPt: 1.933 },
-  CaveatBold: { ascent: 0.9600, inkDrop: 0.0540, widthPerPt: 1.938 },
-  CabinSketch: { ascent: 0.8730, inkDrop: 0.0080, widthPerPt: 2.206 },
-  CabinSketchBold: { ascent: 0.8730, inkDrop: 0.0180, widthPerPt: 2.206 },
-  Cavalhatriz: { ascent: 0.7500, inkDrop: 0.0630, widthPerPt: 2.750 },
-  Monocraft: { ascent: 0.8889, inkDrop: 0.0000, widthPerPt: 2.667 },
-  MonocraftBold: { ascent: 0.8889, inkDrop: 0.0230, widthPerPt: 2.667 },
-  Freeride: { ascent: 0.9400, inkDrop: 0.0000, widthPerPt: 2.019 },
-  FrederickaTheGreat: { ascent: 0.9775, inkDrop: 0.0160, widthPerPt: 2.771 },
-  PetitFormalScript: { ascent: 0.9927, inkDrop: 0.0200, widthPerPt: 3.063 },
-  LexendExaLight: { ascent: 1.0000, inkDrop: 0.0100, widthPerPt: 2.901 },
-  LexendExaSemiBold: { ascent: 1.0000, inkDrop: 0.0100, widthPerPt: 3.087 },
-  GrutchShaded: { ascent: 0.9230, inkDrop: 0.0850, widthPerPt: 2.726 },
+// prose: the average advance per character, per 1pt, of a mixed-case
+//   sentence ("The quick brown fox jumps over the lazy dog") - how wide the
+//   face sets ordinary text, which caps-only TYPE misjudges for swash and
+//   script faces. Used to keep a text's width when its font changes.
+export const FONT_METRICS: Record<string, { ascent: number; inkDrop: number; widthPerPt: number; lineGap?: number; prose: number }> = {
+  ArialBlack: { ascent: 1.1006, inkDrop: 0.0124, widthPerPt: 2.944, prose: 0.5662 },
+  TimesNewRoman: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500, lineGap: 0.0425, prose: 0.4250 },
+  TimesNewRomanBold: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.667, lineGap: 0.0425, prose: 0.4488 },
+  TimesNewRomanItalic: { ascent: 0.9336, inkDrop: -0.0306, widthPerPt: 2.334, lineGap: 0.0425, prose: 0.4164 },
+  TimesNewRomanBoldItalic: { ascent: 0.9336, inkDrop: -0.0286, widthPerPt: 2.500, lineGap: 0.0425, prose: 0.4302 },
+  Papyrus: { ascent: 0.9399, inkDrop: 0.0211, widthPerPt: 2.691, prose: 0.4563 },
+  Impact: { ascent: 1.0088, inkDrop: 0.0122, widthPerPt: 1.876, prose: 0.4157 },
+  CourierPrime: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398, prose: 0.5996 },
+  CourierPrimeBold: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398, prose: 0.5996 },
+  CourierPrimeItalic: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398, prose: 0.5996 },
+  CourierPrimeBoldItalic: { ascent: 0.7812, inkDrop: 0.0118, widthPerPt: 2.398, prose: 0.5996 },
+  Caveat: { ascent: 0.9600, inkDrop: 0.0450, widthPerPt: 1.933, prose: 0.3410 },
+  CaveatBold: { ascent: 0.9600, inkDrop: 0.0540, widthPerPt: 1.938, prose: 0.3456 },
+  CabinSketch: { ascent: 0.8730, inkDrop: 0.0080, widthPerPt: 2.206, prose: 0.4559 },
+  CabinSketchBold: { ascent: 0.8730, inkDrop: 0.0180, widthPerPt: 2.206, prose: 0.4559 },
+  Cavalhatriz: { ascent: 0.7500, inkDrop: 0.0630, widthPerPt: 2.750, prose: 0.3895 },
+  PrincessSofia: { ascent: 0.9863, inkDrop: 0.3180, widthPerPt: 2.828, prose: 0.3611 },
+  PinyonScript: { ascent: 0.8633, inkDrop: 0.0030, widthPerPt: 2.294, prose: 0.3619 },
+  Monocraft: { ascent: 0.8889, inkDrop: 0.0000, widthPerPt: 2.667, prose: 0.6667 },
+  MonocraftBold: { ascent: 0.8889, inkDrop: 0.0230, widthPerPt: 2.667, prose: 0.6667 },
+  Freeride: { ascent: 0.9400, inkDrop: 0.0000, widthPerPt: 2.019, prose: 0.3899 },
+  FrederickaTheGreat: { ascent: 0.9775, inkDrop: 0.0160, widthPerPt: 2.771, prose: 0.4795 },
+  PetitFormalScript: { ascent: 0.9927, inkDrop: 0.0200, widthPerPt: 3.063, prose: 0.5602 },
+  LexendExaLight: { ascent: 1.0000, inkDrop: 0.0100, widthPerPt: 2.901, prose: 0.6159 },
+  LexendExaSemiBold: { ascent: 1.0000, inkDrop: 0.0100, widthPerPt: 3.087, prose: 0.6545 },
+  GrutchShaded: { ascent: 0.9230, inkDrop: 0.0850, widthPerPt: 2.726, prose: 0.5292 },
 };
 
 export const metricsFor = (fontFamily: string) =>
-  FONT_METRICS[fontFamily] || { ascent: 1.0, inkDrop: 0, widthPerPt: 10 };
+  FONT_METRICS[fontFamily] || { ascent: 1.0, inkDrop: 0, widthPerPt: 10, prose: 0.5 };
 
 // Top of a single-line Text to its baseline, per 1pt of size
 export const baselineFromTop = (fontFamily: string) => {

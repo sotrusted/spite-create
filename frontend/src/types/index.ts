@@ -16,7 +16,7 @@ export interface User {
   signature_color?: string;
 }
 
-export type FontChoice = 'arial-black' | 'crimson-text' | 'papyrus' | 'impact' | 'courier-prime' | 'cabin-sketch' | 'freeride' | 'fredericka' | 'grutch-shaded' | 'petit-formal' | 'lexend-exa' | 'caveat' | 'monocraft' | 'cavalhatriz';
+export type FontChoice = 'arial-black' | 'crimson-text' | 'papyrus' | 'impact' | 'courier-prime' | 'cabin-sketch' | 'freeride' | 'fredericka' | 'grutch-shaded' | 'petit-formal' | 'lexend-exa' | 'caveat' | 'monocraft' | 'cavalhatriz' | 'princess-sofia' | 'pinyon-script';
 
 export interface Author {
   handle: string;

@@ -39,7 +39,7 @@ import Toast from 'react-native-toast-message';
 import { Colors, FontChoices, FONT_MENU, FONT_TOGGLE, resolveFontFace, rainbowFor } from '../constants/colors';
 import { FEATURES } from '../constants/features';
 import { SPACE, CHROME } from '../constants/space';
-import { inkBaselineFor } from '../constants/fontMetrics';
+import { inkBaselineFor, metricsFor } from '../constants/fontMetrics';
 import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { captureRef } from 'react-native-view-shot';
@@ -93,6 +93,9 @@ const gradientLineFor = (band: { top: number; bottom: number }) => ({
 // Gap between a caption's centre line and the top of the quote below it:
 // half the placeholder's line plus a gutter, so the two never touch.
 const CAPTION_CLEARANCE = SPACE.lg + SPACE.lg;
+// The size slider's range (pt), which font switching also keeps to
+const SLIDER_MIN_FONT = 8;
+const SLIDER_MAX_FONT = 72;
 
 // Every text label in the config row sits on ONE baseline whatever its font.
 // Centring each label in its button left each face floating at its own
@@ -482,6 +485,25 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const rememberFont = (font: FontChoice) => {
     lastFontRef.current = font;
     persistComposerPrefs();
+  };
+
+  // A new font keeps the text's width: the size scales by how much wider or
+  // narrower the face is, so big text keeps its lines instead of wrapping or
+  // running off the canvas, and switching back gives the size back
+  const switchFont = (el: TextElement, font: FontChoice, extra: Partial<TextElement> = {}) => {
+    // how wide the face sets this text per pt: capitals when caps are on,
+    // ordinary mixed-case prose otherwise
+    const widthOf = (key: FontChoice) => {
+      const m = metricsFor(resolveFontFace(key, !!el.bold, !!el.italic));
+      return el.capsLock ? m.widthPerPt / 4 : m.prose;
+    };
+    const editing = isEditingText && selectedTextId === el.id;
+    const size = editing ? currentFontSize : el.fontSize;
+    const next = Math.max(SLIDER_MIN_FONT, Math.min(SLIDER_MAX_FONT,
+      Math.round(size * widthOf(el.fontFamily) / widthOf(font) * 10) / 10));
+    if (editing) setCurrentFontSize(next);
+    updateTextElement(el.id, { fontFamily: font, fontSize: next, ...extra });
+    rememberFont(font);
   };
 
   // A quote may be enlarged past the canvas edges. When it is bigger than the
@@ -1839,7 +1861,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     }
     const engagedAt = pinch.engagedAt ?? scale;
     updateTextElement(elementId, {
-      scale: Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale, pinch.base * (scale / engagedAt))),
+      scale: Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale,
+        pinch.base * Math.pow(scale / engagedAt, GESTURES.pinch.gain))),
     });
   };
 
@@ -2655,8 +2678,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const readable = Colors.postColors.filter(c =>
       c !== el.color && contrastRatio(hexToRgb(background), hexToRgb(c)) >= 3.0);
     const color = readable.length ? pick(readable) : pickReadableColor(background, Colors.postColors, el.color);
-    updateTextElement(el.id, { fontFamily: font, color, rainbow: false, alternateColors: undefined });
-    rememberFont(font);
+    switchFont(el, font, { color, rainbow: false, alternateColors: undefined });
   };
   const setSelectedElementRainbow = () => {
     const el = selectedElement();
@@ -2878,8 +2900,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const keys = FONT_MENU as FontChoice[];
     const pick = (key: FontChoice) => {
       if (el) {
-        updateTextElement(el.id, { fontFamily: key });
-        rememberFont(key);
+        switchFont(el, key);
       }
       setFontGridOpen(false);
     };
@@ -3125,8 +3146,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       const next = at >= 0
         ? toggle[(at + 1) % toggle.length]
         : toggle.find(k => FONT_MENU.indexOf(k) > menuAt) ?? toggle[0];
-      updateTextElement(el.id, { fontFamily: next });
-      rememberFont(next);
+      switchFont(el, next);
     };
 
     const cycleColor = () => {
@@ -3339,8 +3359,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     );
   };
 
-  const SLIDER_MIN_FONT = 8;
-  const SLIDER_MAX_FONT = 72;
   const SLIDER_HEIGHT = 200;
   const sliderBaseFont = useRef(24);
 
