@@ -37,6 +37,10 @@ interface Props {
   contentInset?: { top?: number; left?: number; bottom?: number; right?: number };
 }
 
+// Posts are anonymous unless signed: the server sends the quoter's handle
+// only with a signed quote
+const quotedYou = (handle?: string | null) => handle ? `@${handle} quoted you` : 'Someone quoted you';
+
 export default function Feed({ 
   newPost, 
   onNewPostDisplayed, 
@@ -264,7 +268,7 @@ export default function Feed({
   const handleRepostNotification = useCallback((message: WebSocketMessage) => {
     Toast.show({
       type: 'success',
-      text1: `@${message.actor_handle} reposted you`,
+      text1: quotedYou(message.actor_handle),
       text2: message.snippet ? `"${message.snippet}"` : undefined,
       position: 'top',
       visibilityTime: 3500,
@@ -349,7 +353,7 @@ export default function Feed({
         if (items.length === 1) {
           Toast.show({
             type: 'success',
-            text1: `@${items[0].actor_handle} reposted you`,
+            text1: quotedYou(items[0].actor_handle),
             text2: items[0].snippet ? `"${items[0].snippet}"` : undefined,
             position: 'top',
             visibilityTime: 3500,

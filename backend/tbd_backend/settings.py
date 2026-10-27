@@ -201,8 +201,8 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '1000/hour',          # per real client IP (carrier NAT shares IPs)
         'user': '300/hour',           # per device id
-        'post_create': '10/hour',     # per device id - the product rule
-        'post_create_ip': '60/hour',  # per IP - stops device-id rotation
+        'post_create': '30/hour',     # per device id - the product rule (10 cut off people trying fonts)
+        'post_create_ip': '120/hour', # per IP - stops device-id rotation
     }
 }
 

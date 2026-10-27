@@ -500,7 +500,8 @@ def notifications_list(request):
         {
             'id': n.id,
             'type': n.notif_type,
-            'actor_handle': n.actor.handle,
+            # anonymous unless the quoting post is signed
+            'actor_handle': n.actor.handle if n.post.is_signed else None,
             'post_id': str(n.post_id),
             'snippet': (n.post.original_post.text_content or '').strip()[:40] if n.post.original_post else '',
             'created_at': n.created_at.isoformat(),

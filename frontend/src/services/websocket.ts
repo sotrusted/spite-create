@@ -14,7 +14,7 @@ export interface WebSocketMessage {
   message?: string;
   timestamp?: string;
   notification_id?: number;
-  actor_handle?: string;
+  actor_handle?: string | null;
   snippet?: string;
 }
 

@@ -526,7 +526,9 @@ class PostSerializer(serializers.ModelSerializer):
                     {
                         "type": "repost_notification",
                         "notification_id": notification.id,
-                        "actor_handle": post.author.handle,
+                        # posts are anonymous unless signed: the quoter's
+                        # handle goes out only with a signed quote
+                        "actor_handle": post.author.handle if post.is_signed else None,
                         "post_id": str(post.id),
                         "snippet": (original.text_content or '').strip()[:40],
                     }
