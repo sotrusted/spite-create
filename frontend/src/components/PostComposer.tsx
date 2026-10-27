@@ -2119,7 +2119,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               enabled={!isEditingText}
               minDist={GESTURES.drag.elementMinDistance}
             >
-              <AnimatedReanimated.View style={styles.textElement}>
+              {/* Pinch scales the drawn text (a transform), but the server lays
+                  it out again at fontSize x scale and wraps at the canvas's
+                  wrap width: so the unscaled layout wraps at that width / scale */}
+              <AnimatedReanimated.View style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}>
                 {isEditingText && selectedTextId === element.id ? (
                   // The editing input is rendered at canvas level (see
                   // renderEditingInput) so it centers on the element anchor
@@ -2211,11 +2214,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const element = textElements.find(el => el.id === selectedTextId);
     if (!element) return null;
 
-    const inputWidth = screenWidth * 0.9;
+    const inputWidth = screenWidth * TEXT_WRAP_FRACTION;
+    // the text is drawn at its pinch scale (a transform), so it lays out at
+    // the wrap width / scale and lands on the server's wrap width
+    const layoutWidth = inputWidth / (element.scale || 1);
     const content = getDisplayText(element);
     const textStyle = [
       getTextStyle(element),
-      { fontSize: currentFontSize, maxWidth: inputWidth },
+      { fontSize: currentFontSize, maxWidth: layoutWidth },
     ];
     const wrapperAlign =
       element.align === 'left' ? 'flex-start' as const
@@ -2271,7 +2277,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               textStyle,
               StyleSheet.absoluteFillObject,
               {
-                width: inputWidth,
+                // centred on the stage, so its scale transform (about its
+                // centre) lands it exactly over the drawn text
+                left: (inputWidth - layoutWidth) / 2,
+                width: layoutWidth,
                 color: 'transparent',
                 backgroundColor: 'transparent',
                 textShadowColor: 'transparent',
