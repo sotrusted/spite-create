@@ -153,6 +153,8 @@ const CONFIG_BAR_REST = 330;
 
 // Creating a post renders it server-side before answering
 const POST_TIMEOUT_MS = 30000;
+// How long a new post's snapshot waits for the server render to download
+const IMAGE_WAIT_MS = 8000;
 
 const LAST_FONT_KEY = 'last-font.json';
 
@@ -1387,6 +1389,16 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         headers: { 'Idempotency-Key': postKey },
       });
       removeDraft(keptId);
+      // The snapshot holds the slot until the server render is on the
+      // device: swapped in before it downloads, the card showed nothing but
+      // its background colour. Bounded, so a slow image still lands.
+      const url = response.data?.rendered_image_url;
+      if (optimisticId && url) {
+        await Promise.race([
+          ExpoImage.prefetch(absoluteUrl(url)!, 'memory-disk').catch(() => false),
+          new Promise(resolve => setTimeout(resolve, IMAGE_WAIT_MS)),
+        ]);
+      }
       emitPostCreated(response.data, optimisticId);
       onPost?.(response.data);
     } catch (error: any) {

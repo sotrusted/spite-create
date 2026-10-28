@@ -66,6 +66,22 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
   const hasResponseRender = !!post.response_image_url;
   const levelCollapsed = collapsedAt !== null && collapsedAt >= 1 && hasResponseRender;
   const displayUri = post.rendered_image_url;
+  // A render that fails to download (flaky signal right after posting)
+  // would leave the card as bare background: remount the image to fetch it
+  // again, backing off, a few times
+  const [imageAttempt, setImageAttempt] = useState(0);
+  const retryTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+  }, []);
+  const handleImageError = (event: { error: string }) => {
+    console.log('Post image error:', event.error);
+    if (imageAttempt >= 4 || retryTimer.current) return;
+    retryTimer.current = setTimeout(() => {
+      retryTimer.current = null;
+      setImageAttempt(a => a + 1);
+    }, 1000 * 2 ** imageAttempt);
+  };
   const displayTopY = post.top_y;
   const displayBottomY = post.bottom_y;
 
@@ -395,6 +411,7 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
             />
           )}
           <ExpoImage
+            key={imageAttempt}
             source={{ uri: absoluteUrl(displayUri) }}
             style={{
               position: 'absolute',
@@ -405,7 +422,7 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
             }}
             contentFit="cover"
             cachePolicy="memory-disk"
-            onError={(event) => console.log('Post image error:', event.error)}
+            onError={handleImageError}
           />
         </View>
       );
@@ -414,10 +431,12 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
     return (
       <View style={[styles.postImageWrapper, { aspectRatio: imageAspectRatio, maxHeight: screenWidth * CARD.maxAspect }]}>
         <ExpoImage
+          key={imageAttempt}
           source={{ uri: absoluteUrl(displayUri) }}
           style={[styles.postImage, { aspectRatio: imageAspectRatio }]}
           contentFit="cover"
-            cachePolicy="memory-disk"
+          cachePolicy="memory-disk"
+          onError={handleImageError}
           onLoad={(event) => {
             const { width, height } = event.source;
             setImageAspectRatio(width / height);
