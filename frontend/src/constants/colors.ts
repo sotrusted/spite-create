@@ -149,8 +149,10 @@ export const FontChoices = {
     fontWeight: 'normal' as const,
   },
   'princess-sofia': {
-    // Fairytale register: Princess Sofia (Font Diner, OFL), swash capitals
-    name: 'Princess Sofia',
+    // Fairytale register: Princess Sofia (Font Diner, OFL), swash capitals.
+    // Shown as Spite: the OFL's reserved name binds modified font files,
+    // not the label an app gives the unmodified face.
+    name: 'Spite',
     fontFamily: 'PrincessSofia',
     fontWeight: 'normal' as const,
   },
