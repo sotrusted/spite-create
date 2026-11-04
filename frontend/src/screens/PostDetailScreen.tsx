@@ -112,8 +112,7 @@ export default function PostDetailScreen() {
   const doubleTapRef = useRef(null);
 
   // The whole post, full width, never cropped (fullPostLayout); tall posts
-  // scroll. Taps and double taps are gesture handlers so their coordinates
-  // are the box's own.
+  // scroll. Its taps are the page's (renderGestures).
   //
   // With a text-free render, the text is drawn here as real text (PostText):
   // the post's own, and each visible quoted level's, clipped to its strip -
@@ -140,21 +139,98 @@ export default function PostDetailScreen() {
     // the server's image, which always matches the feed
     const vector = textMode === 'plan' && !!post.textless_image_url && isTextPlan(post.text_plan)
       && levels.every(level => isTextPlan(level.text_plan));
-    // Hold to reply, as on a feed card (same as a double tap: the post, or
-    // the quoted one under the finger). Taps end before the hold would.
-    const tapMaxMs = GESTURES.longPress.cardMs - 1;
     return (
-      <LongPressGestureHandler
-        minDurationMs={GESTURES.longPress.cardMs}
-        onHandlerStateChange={e => {
-          if (e.nativeEvent.state === GestureState.ACTIVE) handleDoubleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
-        }}
-      >
+      <View style={{ width: layout.width, height: layout.height, overflow: 'hidden' }}>
+        {/* the feed's own image component and cache: the post is already
+            on disk from the feed, so it is there on the first frame */}
+        <ExpoImage
+          source={{ uri: absoluteUrl(vector ? post.textless_image_url! : post.rendered_image_url) }}
+          style={{
+            position: 'absolute',
+            left: layout.imageLeft,
+            top: layout.imageTop,
+            width: layout.imageWidth,
+            height: layout.imageHeight,
+          }}
+          contentFit="cover"
+          cachePolicy="memory-disk"
+          transition={0}
+        />
+        {vector && levels.map((level, i) => {
+          const width = level.strip.image_width;
+          if (!width || !isTextPlan(level.text_plan)) return null;
+          // level px -> root px, and where the level's own canvas sits
+          const levelScale = level.rect.width / width;
+          return (
+            <View
+              key={i}
+              pointerEvents="box-none"
+              style={{
+                position: 'absolute',
+                left: layout.imageLeft + level.rect.x * scale,
+                top: layout.imageTop + level.rect.y * scale,
+                width: level.rect.width * scale,
+                height: level.rect.height * scale,
+                overflow: 'hidden',
+              }}
+            >
+              <PlanText
+                plan={level.text_plan}
+                resolution={textResolution}
+                scale={scale * levelScale}
+                offsetX={0}
+                offsetY={-(level.crop_top ?? 0) * levelScale * scale}
+                selectable
+              />
+            </View>
+          );
+        })}
+        {vector && isTextPlan(post.text_plan) && (
+          <PlanText
+            plan={post.text_plan}
+            resolution={textResolution}
+            scale={scale}
+            offsetX={layout.imageLeft}
+            offsetY={layout.imageTop}
+            selectable
+          />
+        )}
+        <PressFlash ref={flashRef} />
+      </View>
+    );
+  };
+
+  // Taps, double taps and holds cover the whole page, not just the post's
+  // box: the post's own colour around it is the post too, so a double tap
+  // or hold there quotes it. x/y arrive in the content's coordinates
+  // (unzoomed); inside the box they hit-test its quoted levels.
+  const inBox = (layout: CardLayout, y: number) => y >= boxTop && y < boxTop + layout.height;
+  const onTap = (x: number, y: number) => {
+    if (layout && inBox(layout, y)) handleTap(layout, x, y - boxTop);
+  };
+  const onDoubleTap = (x: number, y: number) => {
+    if (!layout) return;
+    if (inBox(layout, y)) {
+      handleDoubleTap(layout, x, y - boxTop);
+      return;
+    }
+    flashRef.current?.flash(null, flashColorOn(post?.background_color || '#1B1B1B'));
+    handleRepost();
+  };
+  // Taps end before the hold would
+  const tapMaxMs = GESTURES.longPress.cardMs - 1;
+  const renderGestures = (children: React.ReactNode) => (
+    <LongPressGestureHandler
+      minDurationMs={GESTURES.longPress.cardMs}
+      onHandlerStateChange={e => {
+        if (e.nativeEvent.state === GestureState.ACTIVE) onDoubleTap(e.nativeEvent.x, e.nativeEvent.y);
+      }}
+    >
       <TapGestureHandler
         waitFor={doubleTapRef}
         maxDurationMs={tapMaxMs}
         onHandlerStateChange={e => {
-          if (e.nativeEvent.state === GestureState.ACTIVE) handleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
+          if (e.nativeEvent.state === GestureState.ACTIVE) onTap(e.nativeEvent.x, e.nativeEvent.y);
         }}
       >
         <TapGestureHandler
@@ -163,71 +239,14 @@ export default function PostDetailScreen() {
           maxDurationMs={tapMaxMs}
           maxDelayMs={GESTURES.tap.doubleTapWindowMs}
           onHandlerStateChange={e => {
-            if (e.nativeEvent.state === GestureState.ACTIVE) handleDoubleTap(layout, e.nativeEvent.x, e.nativeEvent.y);
+            if (e.nativeEvent.state === GestureState.ACTIVE) onDoubleTap(e.nativeEvent.x, e.nativeEvent.y);
           }}
         >
-          <View style={{ width: layout.width, height: layout.height, overflow: 'hidden' }}>
-            {/* the feed's own image component and cache: the post is already
-                on disk from the feed, so it is there on the first frame */}
-            <ExpoImage
-              source={{ uri: absoluteUrl(vector ? post.textless_image_url! : post.rendered_image_url) }}
-              style={{
-                position: 'absolute',
-                left: layout.imageLeft,
-                top: layout.imageTop,
-                width: layout.imageWidth,
-                height: layout.imageHeight,
-              }}
-              contentFit="cover"
-              cachePolicy="memory-disk"
-              transition={0}
-            />
-            {vector && levels.map((level, i) => {
-              const width = level.strip.image_width;
-              if (!width || !isTextPlan(level.text_plan)) return null;
-              // level px -> root px, and where the level's own canvas sits
-              const levelScale = level.rect.width / width;
-              return (
-                <View
-                  key={i}
-                  pointerEvents="box-none"
-                  style={{
-                    position: 'absolute',
-                    left: layout.imageLeft + level.rect.x * scale,
-                    top: layout.imageTop + level.rect.y * scale,
-                    width: level.rect.width * scale,
-                    height: level.rect.height * scale,
-                    overflow: 'hidden',
-                  }}
-                >
-                  <PlanText
-                    plan={level.text_plan}
-                    resolution={textResolution}
-                    scale={scale * levelScale}
-                    offsetX={0}
-                    offsetY={-(level.crop_top ?? 0) * levelScale * scale}
-                    selectable
-                  />
-                </View>
-              );
-            })}
-            {vector && isTextPlan(post.text_plan) && (
-              <PlanText
-                plan={post.text_plan}
-                resolution={textResolution}
-                scale={scale}
-                offsetX={layout.imageLeft}
-                offsetY={layout.imageTop}
-                selectable
-              />
-            )}
-            <PressFlash ref={flashRef} />
-          </View>
+          <View style={{ minHeight: contentHeight }}>{children}</View>
         </TapGestureHandler>
       </TapGestureHandler>
-      </LongPressGestureHandler>
-    );
-  };
+    </LongPressGestureHandler>
+  );
 
   // The [...] menu. Someone else's post: report it, or mute or block its
   // author (Apple's UGC rules want both a tap away). Your own: edit it again.
@@ -386,7 +405,7 @@ export default function PostDetailScreen() {
               key={post.id}
               ref={scrollRef}
               style={StyleSheet.absoluteFill}
-              contentContainerStyle={{ minHeight: contentHeight, paddingTop: boxTop }}
+              contentContainerStyle={{ minHeight: contentHeight }}
               maximumZoomScale={GESTURES.zoom.maxScale}
               minimumZoomScale={1}
               bouncesZoom
@@ -395,8 +414,13 @@ export default function PostDetailScreen() {
               showsVerticalScrollIndicator={false}
               showsHorizontalScrollIndicator={false}
             >
-              {renderGradient()}
-              {renderImage(layout)}
+              {renderGestures(
+                <>
+                  {renderGradient()}
+                  <View style={{ height: boxTop }} />
+                  {renderImage(layout)}
+                </>,
+              )}
             </ScrollView>
           </View>
 
