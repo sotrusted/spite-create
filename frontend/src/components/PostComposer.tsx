@@ -2316,6 +2316,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 // centre) lands it exactly over the drawn text
                 left: (inputWidth - layoutWidth) / 2,
                 width: layoutWidth,
+                // Room below the text. A return (or a bigger size) makes the
+                // text a line taller a frame before the field grows; iOS then
+                // scrolls the field to keep the caret in view, and leaves it
+                // scrolled, so its caret floats above the drawn lines
+                bottom: -2 * currentFontSize,
                 color: 'transparent',
                 backgroundColor: 'transparent',
                 textShadowColor: 'transparent',
