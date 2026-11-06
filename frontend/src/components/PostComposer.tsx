@@ -20,6 +20,7 @@ import {
   Modal,
   Pressable,
   AppState,
+  TextStyle,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -53,6 +54,9 @@ import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
+import DrawnCaret, { CaretRect } from './DrawnCaret';
+import { displayIndex } from '../utils/caret';
+import type { LineBox } from '../utils/lineChips';
 import { stripEmoji } from '../utils/emoji';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
@@ -1650,6 +1654,12 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     }).join('\n');
   };
 
+  // The marker drawn before the nth non-blank line (applyListPrefixes)
+  const listMarker = (element: TextElement) => (n: number) =>
+    element.listStyle === 'none' ? ''
+      : element.listStyle === 'number' ? `${n}. `
+      : LIST_MARKERS[element.listStyle];
+
   const anyElementHasInk = () =>
     textElements.some(el => (getDisplayText(el) || '').trim().length > 0);
 
@@ -2210,6 +2220,12 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const editViewHeight = useRef(0);
   const editContentHeight = useRef(0);
   const editSelection = useRef({ start: 0, end: 0 });
+  // The drawn text's lines and box (the caret is drawn on them), and where
+  // the drawn text sits in the stage's scrolling content
+  const [editLines, setEditLines] = useState<LineBox[]>([]);
+  const [editBox, setEditBox] = useState<{ width: number; height: number } | null>(null);
+  const editTextTop = useRef(0);
+  const editScrollY = useRef(0);
   const [configBarTop, setConfigBarTop] = useState<number | null>(null);
   // The config row rides on the keyboard: its height (suggestion row and
   // all) varies by phone and keyboard, so it is measured, never assumed
@@ -2231,17 +2247,19 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (w.touched || !w.view || !w.content) return;
     configScrollRef.current?.scrollTo({ x: Math.max(0, (w.content - w.view) / 2), animated: false });
   };
-  const keepCaretInView = (length: number) => {
+  // Scroll the stage just enough to show the caret's line, with a little
+  // room around it
+  const keepCaretInView = (caret: CaretRect) => {
     const view = editViewHeight.current;
     const content = editContentHeight.current;
     if (!view || content <= view) return;
-    const caret = editSelection.current.end;
-    if (caret >= length) {
-      editScrollRef.current?.scrollToEnd({ animated: false });
-      return;
-    }
-    const y = (caret / Math.max(1, length)) * content - view / 2;
-    editScrollRef.current?.scrollTo({ y: Math.max(0, Math.min(content - view, y)), animated: false });
+    const margin = currentFontSize * 0.5;
+    const top = editTextTop.current + caret.y - margin;
+    const bottom = editTextTop.current + caret.y + caret.height + margin;
+    const y = editScrollY.current;
+    const to = top < y ? top : bottom > y + view ? bottom - view : null;
+    if (to === null) return;
+    editScrollRef.current?.scrollTo({ y: Math.max(0, Math.min(content - view, to)), animated: false });
   };
 
   const renderEditingInput = () => {
@@ -2258,6 +2276,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       getTextStyle(element),
       { fontSize: currentFontSize, maxWidth: layoutWidth },
     ];
+    const flatStyle = StyleSheet.flatten(textStyle) as TextStyle;
+    // A selection of letters shows as the field's own highlight; the caret
+    // only when nothing is selected
+    const selection = textSelection ?? { start: content.length, end: content.length };
+    const caretIndex = selection.start === selection.end ? selection.end : null;
     const wrapperAlign =
       element.align === 'left' ? 'flex-start' as const
       : element.align === 'right' ? 'flex-end' as const
@@ -2280,19 +2303,26 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="always"
           onLayout={e => { editViewHeight.current = e.nativeEvent.layout.height; }}
-          onContentSizeChange={(_w, h) => {
-            editContentHeight.current = h;
-            keepCaretInView(content.length);
-          }}
+          onContentSizeChange={(_w, h) => { editContentHeight.current = h; }}
+          onScroll={e => { editScrollY.current = e.nativeEvent.contentOffset.y; }}
+          scrollEventThrottle={16}
         >
         {/* The stage covers the canvas while typing, so it passes a tap off
             the text on as a canvas tap: that is what finishes editing */}
         <Pressable style={styles.editingScrollContent} onPress={handleCanvasTap}>
-        <View style={{ alignItems: wrapperAlign }} pointerEvents="box-none">
+        <View
+          style={{ alignItems: wrapperAlign }}
+          pointerEvents="box-none"
+          onLayout={e => { editTextTop.current = e.nativeEvent.layout.y; }}
+        >
           {/* Styled mirror - the source of visual truth while editing. iOS
               does not measure text again when only its transform changes,
               so turning caps on would clip it at the lower-case width */}
-          <View pointerEvents="none" key={element.capsLock ? 'caps' : 'typed'}>
+          <View
+            pointerEvents="none"
+            key={element.capsLock ? 'caps' : 'typed'}
+            onLayout={e => setEditBox({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
+          >
             <OutlinedText
               style={[
                 textStyle,
@@ -2301,9 +2331,25 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               outlineColor={content ? outlineColorFor(element) : null}
               outlineWidth={currentFontSize * OUTLINE.widthEm}
               plain={displayPlain(element)}
+              onLines={setEditLines}
             >
               {content ? renderDisplayContent(element) : (isEditingText || anyElementHasInk()) ? '' : placeholderNode(element)}
             </OutlinedText>
+            {editBox && caretIndex !== null && (
+              <DrawnCaret
+                lines={editLines}
+                text={displayPlain(element)}
+                index={displayIndex(content, caretIndex, listMarker(element))}
+                box={editBox}
+                pad={{ x: Number(flatStyle.paddingHorizontal ?? 0), y: Number(flatStyle.paddingVertical ?? 0) }}
+                scale={element.scale || 1}
+                align={(flatStyle.textAlign as 'left' | 'center' | 'right') ?? 'center'}
+                // the letters' own colour (white on the filled highlighter)
+                color={element.rainbow ? Colors.accent : String(flatStyle.color ?? element.color)}
+                measureStyle={textStyle}
+                onPlace={keepCaretInView}
+              />
+            )}
           </View>
           {/* Invisible-text input on top: caret and typing only */}
           <TextInput
@@ -2316,11 +2362,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 // centre) lands it exactly over the drawn text
                 left: (inputWidth - layoutWidth) / 2,
                 width: layoutWidth,
-                // Room below the text. A return (or a bigger size) makes the
-                // text a line taller a frame before the field grows; iOS then
-                // scrolls the field to keep the caret in view, and leaves it
-                // scrolled, so its caret floats above the drawn lines
-                bottom: -2 * currentFontSize,
                 color: 'transparent',
                 backgroundColor: 'transparent',
                 textShadowColor: 'transparent',
@@ -2338,8 +2379,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
             onSelectionChange={e => {
               editSelection.current = e.nativeEvent.selection;
               setTextSelection(e.nativeEvent.selection);
-              keepCaretInView(content.length);
             }}
+            // the caret is drawn on the drawn text (DrawnCaret): the field's
+            // own lays the text out by other rules and wanders off it
+            caretHidden
             autoFocus
             multiline={true}
             scrollEnabled={false}

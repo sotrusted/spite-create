@@ -20,18 +20,27 @@ interface Props {
   outlineWidth: number; // points, before the element's scale
   plain: string; // the displayed text without colour spans (for the copies)
   onLayout?: React.ComponentProps<typeof Text>['onLayout'];
+  // the laid-out lines of the drawn text (the composer's caret sits on them)
+  onLines?: (lines: LineBox[]) => void;
   selectable?: boolean;
   children: React.ReactNode;
 }
 
-export default function OutlinedText({ style, outlineColor, outlineWidth, plain, onLayout, selectable, children }: Props) {
+export default function OutlinedText({ style, outlineColor, outlineWidth, plain, onLayout, onLines, selectable, children }: Props) {
   const [lines, setLines] = useState<LineBox[]>([]);
   const { transform, opacity, backgroundColor, ...text } = StyleSheet.flatten(style) as TextStyle;
   const chip = backgroundColor && backgroundColor !== 'transparent' ? (backgroundColor as string) : null;
   const outlined = !!outlineColor && outlineWidth > 0;
 
+  const reportLines = chip || onLines
+    ? (e: { nativeEvent: { lines: LineBox[] } }) => {
+        if (chip) setLines(e.nativeEvent.lines);
+        onLines?.(e.nativeEvent.lines);
+      }
+    : undefined;
+
   if (!chip && !outlined) {
-    return <Text style={style} onLayout={onLayout} selectable={selectable}>{children}</Text>;
+    return <Text style={style} onLayout={onLayout} onTextLayout={reportLines} selectable={selectable}>{children}</Text>;
   }
 
   // The text keeps its padding (so the element's box and wrapping do not
@@ -88,7 +97,7 @@ export default function OutlinedText({ style, outlineColor, outlineWidth, plain,
         style={text}
         onLayout={onLayout}
         selectable={selectable}
-        onTextLayout={chip ? e => setLines(e.nativeEvent.lines) : undefined}
+        onTextLayout={reportLines}
       >
         {children}
       </Text>
