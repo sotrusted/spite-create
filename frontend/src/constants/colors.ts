@@ -142,8 +142,9 @@ export const FontChoices = {
     variants: { bold: 'LexendExaSemiBold' },
   },
   'cavalhatriz': {
-    // Cursive register: a bitmap script (MrtheNoronha, donationware), given
-    // smart quotes and an ellipsis built from its own glyphs
+    // Retired from the menus; kept so older posts still edit and render.
+    // A bitmap script (MrtheNoronha, donationware), given smart quotes and
+    // an ellipsis built from its own glyphs
     name: 'Pixel Cursive',
     fontFamily: 'Cavalhatriz',
     fontWeight: 'normal' as const,
@@ -186,7 +187,6 @@ export const FONT_MENU: (keyof typeof FontChoices)[] = [
   'impact', 'cabin-sketch', 'pinyon-script',
   'lexend-exa', 'papyrus', 'freeride',
   'grutch-shaded', 'princess-sofia', 'monocraft',
-  'cavalhatriz',
 ];
 
 // A tap on the font button steps through every font, in the grid's order

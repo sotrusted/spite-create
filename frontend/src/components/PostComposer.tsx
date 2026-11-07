@@ -457,7 +457,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       try {
         const raw = await LegacyFS.readAsStringAsync(LegacyFS.documentDirectory + LAST_FONT_KEY);
         const saved = JSON.parse(raw)?.font;
-        if (saved && FontChoices[saved as FontChoice]) {
+        // (a font since retired from the menus is not one to start in)
+        if (saved && FONT_MENU.includes(saved as FontChoice)) {
           lastFontRef.current = saved;
           setTextElements(prev => prev.map(el =>
             el.content ? el : { ...el, ...applyFontChange(el, saved) }
