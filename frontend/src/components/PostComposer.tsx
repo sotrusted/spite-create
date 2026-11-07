@@ -31,6 +31,7 @@ import * as LegacyFS from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import AnimatedReanimated, {
+  makeMutable,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -54,7 +55,7 @@ import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
-import HeldTransform from './HeldTransform';
+import PlacedText, { Placement } from './PlacedText';
 import DrawnCaret, { CaretRect } from './DrawnCaret';
 import { displayIndex } from '../utils/caret';
 import type { LineBox } from '../utils/lineChips';
@@ -1820,7 +1821,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // A text element is HELD from its first finger down to its last finger
   // up: one finger or two, its place follows the touch and, with two, its
   // size the spread - moving and resizing in one gesture. Mid-hold it moves
-  // on the UI thread (HeldTransform), not through state: a state change
+  // on the UI thread (its PlacedText placement), not through state: a state change
   // re-renders the whole composer and lays the text out again, a frame or
   // more behind the fingers. Place and size are committed, and the text
   // wrapped for its size, when the hold ends.
@@ -1836,27 +1837,23 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     engagedAt: number | null; // the pinch's spread when it engaged
   };
   const hold = useRef<Hold | null>(null);
+  // each text element's place and scale on the UI thread (PlacedText)
+  const placements = useRef<Record<string, Placement>>({});
+  const placement = (el: TextElement) => (placements.current[el.id] ??= {
+    x: makeMutable(el.x), y: makeMutable(el.y), scale: makeMutable(el.scale || 1),
+  });
   // The canvas's pinch and each text's pan, so they can run together
   const canvasPinchRef = useRef(null);
   const textPanRefs = useRef<Record<string, React.RefObject<any>>>({});
   const textPanRef = (id: string) => (textPanRefs.current[id] ??= React.createRef());
-  const [heldId, setHeldId] = useState<string | null>(null);
-  const heldDx = useSharedValue(0);
-  const heldDy = useSharedValue(0);
-  const heldScale = useSharedValue(1); // held scale / committed scale
-
   const beginHold = (elementId: string): Hold | null => {
     if (hold.current?.id === elementId) return hold.current;
     const el = textElements.find(e => e.id === elementId);
     if (!el) return null;
-    heldDx.value = 0;
-    heldDy.value = 0;
-    heldScale.value = 1;
     hold.current = {
       id: elementId, base: { x: el.x, y: el.y, scale: el.scale || 1 },
       dx: 0, dy: 0, scale: el.scale || 1, pan: false, pinch: false, anchor: null, engagedAt: null,
     };
-    setHeldId(elementId);
     return hold.current;
   };
   // The touch point (pan: the fingers' centroid; pinch: its focal point)
@@ -1864,8 +1861,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (h.anchor?.key !== key) h.anchor = { key, x, y, dx: h.dx, dy: h.dy };
     h.dx = h.anchor.dx + x - h.anchor.x;
     h.dy = h.anchor.dy + y - h.anchor.y;
-    heldDx.value = h.dx;
-    heldDy.value = h.dy;
+    const place = placements.current[h.id];
+    if (place) {
+      place.x.value = h.base.x + h.dx;
+      place.y.value = h.base.y + h.dy;
+    }
   };
   const releaseHold = (elementId: string, part: 'pan' | 'pinch') => {
     const h = hold.current;
@@ -1878,11 +1878,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (h.dx || h.dy || h.scale !== h.base.scale) {
       updateTextElement(elementId, { x: h.base.x + h.dx, y: h.base.y + h.dy, scale: h.scale });
     }
-    setHeldId(null);
   };
   const dropHold = () => {
     hold.current = null;
-    setHeldId(null);
   };
 
   const handlePanStateChange = (event: any, elementId: string) => {
@@ -1946,7 +1944,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     }
     h.scale = Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale,
       h.base.scale * Math.pow(scale / h.engagedAt, GESTURES.pinch.gain)));
-    heldScale.value = h.scale / h.base.scale;
+    const place = placements.current[h.id];
+    if (place) place.scale.value = h.scale;
   };
 
 
@@ -2193,17 +2192,15 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const renderEditableText = () => {
     return textElements.map((element) => {
       return (
-          <AnimatedReanimated.View
+          <PlacedText
             key={`text-${element.id}`}
-            style={[
-              styles.textElementTouchArea,
-              {
-                // Center the measured box on the (x, y) anchor
-                left: element.x - (elementSizes[element.id]?.width ?? GESTURES.touch.minElementTarget) / 2,
-                top: element.y - (elementSizes[element.id]?.height ?? GESTURES.touch.minElementTarget) / 2,
-              },
-              selectedTextId === element.id ? deletionAnimatedStyle : {},
-            ]}
+            place={placement(element)}
+            x={element.x}
+            y={element.y}
+            scale={element.scale || 1}
+            size={elementSizes[element.id] ?? { width: GESTURES.touch.minElementTarget, height: GESTURES.touch.minElementTarget }}
+            deletion={selectedTextId === element.id ? { scale: deletionScale, opacity: deletionOpacity } : null}
+            style={styles.textElementTouchArea}
             onLayout={(event) => {
               // While this element is being edited its display collapses to
               // the touch-area minimum; recording that stale size made the
@@ -2230,13 +2227,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               {/* Pinch scales the drawn text (a transform), but the server lays
                   it out again at fontSize x scale and wraps at the canvas's
                   wrap width: so the unscaled layout wraps at that width / scale */}
-              <HeldTransform
-                active={heldId === element.id}
-                dx={heldDx}
-                dy={heldDy}
-                scale={heldScale}
-                style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}
-              >
+              <AnimatedReanimated.View style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}>
                 {isEditingText && selectedTextId === element.id ? (
                   // The editing input is rendered at canvas level (see
                   // renderEditingInput) so it centers on the element anchor
@@ -2248,7 +2239,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                     onLongPress={() => deleteTextElement(element.id)}
                   >
                     <OutlinedText
-                      style={getTextStyle(element)}
+                      // (scaled by its placement, not by its own style)
+                      style={[getTextStyle(element), { transform: [] }]}
                       outlineColor={outlineColorFor(element)}
                       outlineWidth={element.fontSize * OUTLINE.widthEm}
                       plain={displayPlain(element)}
@@ -2269,9 +2261,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                     </OutlinedText>
                   </TouchableOpacity>
                 )}
-              </HeldTransform>
+              </AnimatedReanimated.View>
             </PanGestureHandler>
-          </AnimatedReanimated.View>
+          </PlacedText>
       );
     });
   };
