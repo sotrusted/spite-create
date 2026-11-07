@@ -789,16 +789,19 @@ class UserProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Invalid font')
         return value
 
-    def validate_signature_color(self, value):
-        if not value:
-            return value
-        if not value.startswith('#') or len(value) != 7:
+    @staticmethod
+    def _hex_color(value):
+        import re
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', value or ''):
             raise serializers.ValidationError('Color must be in #RRGGBB format')
-        try:
-            int(value[1:], 16)
-        except ValueError:
-            raise serializers.ValidationError('Invalid color format')
-        return value
+        return value.upper()
+
+    def validate_signature_color(self, value):
+        return self._hex_color(value) if value else value
+
+    # The profile square's colour, chosen by its owner
+    def validate_avatar_color(self, value):
+        return self._hex_color(value)
 
     def validate_preferred_signature_style(self, value):
         value = (value or '').lower()

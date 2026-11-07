@@ -27,6 +27,7 @@ export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
   const [editingHandle, setEditingHandle] = useState(false);
   const [handleDraft, setHandleDraft] = useState('');
+  const [pickingColor, setPickingColor] = useState(false);
 
   useEffect(() => {
     fetchProfile();
@@ -55,6 +56,22 @@ export default function ProfileScreen() {
       console.error('Error updating signature:', error);
       setUser(previous);
       Alert.alert('Error', 'Failed to update signature');
+    }
+  };
+
+  // The profile square's colour, from the posts' own palette; shown at once,
+  // put back if the server refuses it
+  const updateAvatarColor = async (color: string) => {
+    if (!user || color.toUpperCase() === user.avatar_color.toUpperCase()) return;
+    const previous = user;
+    setUser({ ...user, avatar_color: color });
+    try {
+      const response = await api.patch(endpoints.getUserProfile, { avatar_color: color });
+      setUser(response.data);
+    } catch (error) {
+      console.error('Error updating avatar color:', error);
+      setUser(previous);
+      Alert.alert('Error', 'Failed to update color');
     }
   };
 
@@ -103,12 +120,32 @@ export default function ProfileScreen() {
         {user && (
           <>
             <View style={styles.profileSection}>
-              <View 
-                style={[
-                  styles.avatar, 
-                  { backgroundColor: user.avatar_color }
-                ]} 
-              />
+              <TouchableOpacity
+                onPress={() => setPickingColor(p => !p)}
+                accessibilityLabel="Change profile colour"
+              >
+                <View style={[styles.avatar, { backgroundColor: user.avatar_color }]}>
+                  <View style={styles.avatarBadge}>
+                    <Ionicons name={pickingColor ? 'close' : 'color-palette'} size={14} color={Colors.background} />
+                  </View>
+                </View>
+              </TouchableOpacity>
+              {pickingColor && (
+                <View style={styles.avatarPalette}>
+                  {Colors.postColors.map(color => (
+                    <TouchableOpacity
+                      key={color}
+                      style={[
+                        styles.avatarSwatch,
+                        { backgroundColor: color },
+                        color.toUpperCase() === user.avatar_color.toUpperCase() && styles.avatarSwatchActive,
+                      ]}
+                      onPress={() => updateAvatarColor(color)}
+                      accessibilityLabel={color}
+                    />
+                  ))}
+                </View>
+              )}
               {editingHandle ? (
                 <View style={styles.handleEditRow}>
                   <Text style={styles.handle}>@</Text>
@@ -276,6 +313,35 @@ const styles = StyleSheet.create({
     height: 80,
     marginBottom: SPACE.lg,
     borderWidth: 2,
+    borderColor: Colors.primary,
+  },
+  avatarBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 24,
+    height: 24,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // 5 across: the 20 post colours in four rows
+  avatarPalette: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: SPACE.sm,
+    width: 5 * 40 + 4 * SPACE.sm,
+    marginBottom: SPACE.lg,
+  },
+  avatarSwatch: {
+    width: 40,
+    height: 40,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  avatarSwatchActive: {
+    borderWidth: 3,
     borderColor: Colors.primary,
   },
   handle: {

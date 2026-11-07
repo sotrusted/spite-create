@@ -812,6 +812,26 @@ class SignatureRenderTests(RenderTestCase):
         self.assertIsNotNone(ink_bbox(zone, '#FFFFFF'), 'signature line not rendered')
 
 
+class ProfileColorTests(RenderTestCase):
+    def test_owner_sets_avatar_color(self):
+        response = self.client.patch(
+            '/api/users/profile/', {'avatar_color': '#ff1a1a'},
+            content_type='application/json', HTTP_X_DEVICE_ID='device-a',
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['avatar_color'], '#FF1A1A')
+        again = self.client.get('/api/users/profile/', HTTP_X_DEVICE_ID='device-a').json()
+        self.assertEqual(again['avatar_color'], '#FF1A1A')
+
+    def test_avatar_color_must_be_hex(self):
+        for bad in ['red', '#FF1A1', '#GGGGGG', '']:
+            response = self.client.patch(
+                '/api/users/profile/', {'avatar_color': bad},
+                content_type='application/json', HTTP_X_DEVICE_ID='device-a',
+            )
+            self.assertEqual(response.status_code, 400, bad)
+
+
 class BlockTests(RenderTestCase):
     def _post_as(self, device_id, text):
         response = self.client.post(
