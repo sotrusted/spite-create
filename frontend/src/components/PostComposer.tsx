@@ -54,6 +54,7 @@ import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
+import PinchScaled from './PinchScaled';
 import DrawnCaret, { CaretRect } from './DrawnCaret';
 import { displayIndex } from '../utils/caret';
 import type { LineBox } from '../utils/lineChips';
@@ -1865,27 +1866,41 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // Like the drag's minimum distance, a pinch has to mean it: nothing changes
   // until the spread has changed by GESTURES.pinch.deadZone, and from there
   // scaling runs from that point, so the size never jumps by the dead zone.
-  const textPinch = useRef<Record<string, { base: number; engagedAt: number | null }>>({});
+  //
+  // Mid-pinch the text is scaled on the UI thread (PinchScaled), not through
+  // state: a state change re-renders the whole composer and lays the text out
+  // again, a frame or more behind the fingers. The scale is committed, and
+  // the text wrapped for it, when the fingers lift.
+  const textPinch = useRef<Record<string, { base: number; engagedAt: number | null; scale: number | null }>>({});
+  const [pinchingId, setPinchingId] = useState<string | null>(null);
+  const pinchLive = useSharedValue(1);
   const handlePinchGesture = (event: any, elementId: string) => {
     const { state, scale } = event.nativeEvent;
-    if (isEditingText) return;
-    const element = textElements.find(el => el.id === elementId);
+    // (a pinch ends however it ends, editing or not)
     if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+      const pinched = textPinch.current[elementId]?.scale;
       delete textPinch.current[elementId];
+      if (pinched != null) updateTextElement(elementId, { scale: pinched });
+      setPinchingId(null);
       return;
     }
+    if (isEditingText) return;
+    const element = textElements.find(el => el.id === elementId);
     // BEGAN, or the first ACTIVE of a pinch whose BEGAN went elsewhere
-    const pinch = textPinch.current[elementId] ??= { base: element?.scale ?? 1, engagedAt: null };
+    let pinch = textPinch.current[elementId];
+    if (!pinch) {
+      pinch = textPinch.current[elementId] = { base: element?.scale ?? 1, engagedAt: null, scale: null };
+      pinchLive.value = 1;
+      setPinchingId(elementId);
+    }
     if (state !== State.ACTIVE || !scale) return;
     if (pinch.engagedAt === null) {
       if (Math.abs(Math.log(scale)) < Math.log(1 + GESTURES.pinch.deadZone)) return;
       pinch.engagedAt = scale;
     }
-    const engagedAt = pinch.engagedAt ?? scale;
-    updateTextElement(elementId, {
-      scale: Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale,
-        pinch.base * Math.pow(scale / engagedAt, GESTURES.pinch.gain))),
-    });
+    pinch.scale = Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale,
+      pinch.base * Math.pow(scale / pinch.engagedAt!, GESTURES.pinch.gain)));
+    pinchLive.value = pinch.scale / pinch.base;
   };
 
 
@@ -2029,7 +2044,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       // least GESTURES.pinch.minTarget big (see pickPinchTarget), else the
       // selected one. Resolved once per gesture, at its first movement, when
       // the focal point between the two fingers is known.
-      if (!isEditingText && !selectedStickerId) {
+      const ending = state === State.END || state === State.CANCELLED || state === State.FAILED;
+      if ((!isEditingText && !selectedStickerId) || (ending && pinchTargetRef.current)) {
         const { focalX, focalY } = event.nativeEvent;
         if (pinchTargetRef.current === undefined && state === State.ACTIVE) {
           const target = pickPinchTarget(pinchCandidates(), { x: focalX, y: focalY },
@@ -2038,9 +2054,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           if (target && target !== selectedTextId) setSelectedTextId(target);
         }
         const target = pinchTargetRef.current;
-        if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
-          pinchTargetRef.current = undefined;
-        }
+        if (ending) pinchTargetRef.current = undefined;
         if (target) {
           handlePinchGesture(event, target);
           return;
@@ -2167,7 +2181,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               {/* Pinch scales the drawn text (a transform), but the server lays
                   it out again at fontSize x scale and wraps at the canvas's
                   wrap width: so the unscaled layout wraps at that width / scale */}
-              <AnimatedReanimated.View style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}>
+              <PinchScaled
+                active={pinchingId === element.id}
+                live={pinchLive}
+                style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}
+              >
                 {isEditingText && selectedTextId === element.id ? (
                   // The editing input is rendered at canvas level (see
                   // renderEditingInput) so it centers on the element anchor
@@ -2200,7 +2218,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                     </OutlinedText>
                   </TouchableOpacity>
                 )}
-              </AnimatedReanimated.View>
+              </PinchScaled>
             </PanGestureHandler>
           </AnimatedReanimated.View>
       );
