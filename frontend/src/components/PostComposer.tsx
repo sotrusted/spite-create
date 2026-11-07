@@ -54,7 +54,7 @@ import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText from './OutlinedText';
-import PinchScaled from './PinchScaled';
+import HeldTransform from './HeldTransform';
 import DrawnCaret, { CaretRect } from './DrawnCaret';
 import { displayIndex } from '../utils/caret';
 import type { LineBox } from '../utils/lineChips';
@@ -1725,8 +1725,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     );
   };
 
-  // Keep the start positions per element (text and stickers)
-  const dragStart = useRef<Record<string, { x: number; y: number }>>({});
+  // Keep the start positions per sticker (text is held: see beginHold)
   const stickerDragStart = useRef<Record<string, { x: number; y: number }>>({});
 
   // Shared deletion check logic
@@ -1818,90 +1817,136 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     return false; // Element was not deleted
   };
 
+  // A text element is HELD from its first finger down to its last finger
+  // up: one finger or two, its place follows the touch and, with two, its
+  // size the spread - moving and resizing in one gesture. Mid-hold it moves
+  // on the UI thread (HeldTransform), not through state: a state change
+  // re-renders the whole composer and lays the text out again, a frame or
+  // more behind the fingers. Place and size are committed, and the text
+  // wrapped for its size, when the hold ends.
+  type Hold = {
+    id: string;
+    base: { x: number; y: number; scale: number }; // committed
+    dx: number; dy: number; scale: number; // where the hold has taken it
+    pan: boolean; pinch: boolean; // which gestures are still down
+    // the touch point the move is measured from, and the offset then: taken
+    // again whenever the point's source or finger count changes, which moves
+    // the point (a centroid) without the fingers moving
+    anchor: { key: string; x: number; y: number; dx: number; dy: number } | null;
+    engagedAt: number | null; // the pinch's spread when it engaged
+  };
+  const hold = useRef<Hold | null>(null);
+  // The canvas's pinch and each text's pan, so they can run together
+  const canvasPinchRef = useRef(null);
+  const textPanRefs = useRef<Record<string, React.RefObject<any>>>({});
+  const textPanRef = (id: string) => (textPanRefs.current[id] ??= React.createRef());
+  const [heldId, setHeldId] = useState<string | null>(null);
+  const heldDx = useSharedValue(0);
+  const heldDy = useSharedValue(0);
+  const heldScale = useSharedValue(1); // held scale / committed scale
+
+  const beginHold = (elementId: string): Hold | null => {
+    if (hold.current?.id === elementId) return hold.current;
+    const el = textElements.find(e => e.id === elementId);
+    if (!el) return null;
+    heldDx.value = 0;
+    heldDy.value = 0;
+    heldScale.value = 1;
+    hold.current = {
+      id: elementId, base: { x: el.x, y: el.y, scale: el.scale || 1 },
+      dx: 0, dy: 0, scale: el.scale || 1, pan: false, pinch: false, anchor: null, engagedAt: null,
+    };
+    setHeldId(elementId);
+    return hold.current;
+  };
+  // The touch point (pan: the fingers' centroid; pinch: its focal point)
+  const followTouch = (h: Hold, key: string, x: number, y: number) => {
+    if (h.anchor?.key !== key) h.anchor = { key, x, y, dx: h.dx, dy: h.dy };
+    h.dx = h.anchor.dx + x - h.anchor.x;
+    h.dy = h.anchor.dy + y - h.anchor.y;
+    heldDx.value = h.dx;
+    heldDy.value = h.dy;
+  };
+  const releaseHold = (elementId: string, part: 'pan' | 'pinch') => {
+    const h = hold.current;
+    if (!h || h.id !== elementId) return;
+    h[part] = false;
+    h.anchor = null;
+    if (part === 'pinch') h.engagedAt = null;
+    if (h.pan || h.pinch) return;
+    hold.current = null;
+    if (h.dx || h.dy || h.scale !== h.base.scale) {
+      updateTextElement(elementId, { x: h.base.x + h.dx, y: h.base.y + h.dy, scale: h.scale });
+    }
+    setHeldId(null);
+  };
+  const dropHold = () => {
+    hold.current = null;
+    setHeldId(null);
+  };
+
   const handlePanStateChange = (event: any, elementId: string) => {
     const { state } = event.nativeEvent;
     if (state === State.BEGAN) {
       justDeletedRef.current = false;
-      const el = textElements.find(e => e.id === elementId);
-      if (el) dragStart.current[elementId] = { x: el.x, y: el.y };
+      const h = beginHold(elementId);
+      if (h) { h.pan = true; h.anchor = null; }
       // Trash can appears only after real movement (see handlePanGesture)
     }
     if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
-      console.log('📝 Text drag END, hiding trash can');
-      delete dragStart.current[elementId];
+      releaseHold(elementId, 'pan');
       setIsDraggingElement(false);
     }
   };
 
   const handlePanGesture = (event: any, elementId: string) => {
     if (event.nativeEvent.state !== State.ACTIVE || isEditingText || justDeletedRef.current) return;
-    const start = dragStart.current[elementId];
-    if (!start) return;
-
-    const { translationX, translationY, absoluteX, absoluteY } = event.nativeEvent;
+    const h = hold.current;
+    if (!h || h.id !== elementId) return;
+    const { absoluteX, absoluteY, numberOfPointers } = event.nativeEvent;
+    followTouch(h, `pan:${numberOfPointers}`, absoluteX, absoluteY);
 
     // Show the trash can only once this is unambiguously a drag
-    if (!isDraggingElement && Math.hypot(translationX, translationY) > 12) {
+    if (!isDraggingElement && Math.hypot(h.dx, h.dy) > 12) {
       setIsDraggingElement(true);
     }
-
-    // Check for deletion using shared logic
     if (checkAndHandleDeletion(absoluteX, absoluteY, elementId, 'text')) {
-      return; // Element was deleted, stop processing
+      dropHold();
     }
-
-    // Normal drag behavior
-    const newX = start.x + translationX;
-    const newY = start.y + translationY;
-    
-    updateTextElement(elementId, {
-      x: newX, // Full responsiveness - no dampening
-      y: newY,
-    });
   };
 
-  // Pinch scale is computed from the scale at gesture start (base), not from
-  // the last frame's value - compounding per-frame caused jitter and stuck
-  // clamping at the extremes
+  // Pinch scale is computed from the scale at the hold's start (base), not
+  // from the last frame's value - compounding per-frame caused jitter and
+  // stuck clamping at the extremes
   //
   // Like the drag's minimum distance, a pinch has to mean it: nothing changes
   // until the spread has changed by GESTURES.pinch.deadZone, and from there
   // scaling runs from that point, so the size never jumps by the dead zone.
-  //
-  // Mid-pinch the text is scaled on the UI thread (PinchScaled), not through
-  // state: a state change re-renders the whole composer and lays the text out
-  // again, a frame or more behind the fingers. The scale is committed, and
-  // the text wrapped for it, when the fingers lift.
-  const textPinch = useRef<Record<string, { base: number; engagedAt: number | null; scale: number | null }>>({});
-  const [pinchingId, setPinchingId] = useState<string | null>(null);
-  const pinchLive = useSharedValue(1);
+  // Its focal point moves the text too, unless the text's own pan (on the
+  // same fingers) is already moving it.
   const handlePinchGesture = (event: any, elementId: string) => {
-    const { state, scale } = event.nativeEvent;
+    const { state, scale, focalX, focalY } = event.nativeEvent;
     // (a pinch ends however it ends, editing or not)
     if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
-      const pinched = textPinch.current[elementId]?.scale;
-      delete textPinch.current[elementId];
-      if (pinched != null) updateTextElement(elementId, { scale: pinched });
-      setPinchingId(null);
+      releaseHold(elementId, 'pinch');
       return;
     }
-    if (isEditingText) return;
-    const element = textElements.find(el => el.id === elementId);
+    if (isEditingText || justDeletedRef.current) return;
     // BEGAN, or the first ACTIVE of a pinch whose BEGAN went elsewhere
-    let pinch = textPinch.current[elementId];
-    if (!pinch) {
-      pinch = textPinch.current[elementId] = { base: element?.scale ?? 1, engagedAt: null, scale: null };
-      pinchLive.value = 1;
-      setPinchingId(elementId);
-    }
+    const h = beginHold(elementId);
+    if (!h) return;
+    if (!h.pinch) { h.pinch = true; h.anchor = h.pan ? h.anchor : null; }
     if (state !== State.ACTIVE || !scale) return;
-    if (pinch.engagedAt === null) {
+    if (!h.pan) followTouch(h, 'pinch', focalX, focalY);
+    if (h.engagedAt === null) {
       if (Math.abs(Math.log(scale)) < Math.log(1 + GESTURES.pinch.deadZone)) return;
-      pinch.engagedAt = scale;
+      // a pinch that lets go and takes hold again in one hold resumes
+      // from the size it reached
+      h.engagedAt = scale / Math.pow(h.scale / h.base.scale, 1 / GESTURES.pinch.gain);
     }
-    pinch.scale = Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale,
-      pinch.base * Math.pow(scale / pinch.engagedAt!, GESTURES.pinch.gain)));
-    pinchLive.value = pinch.scale / pinch.base;
+    h.scale = Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale,
+      h.base.scale * Math.pow(scale / h.engagedAt, GESTURES.pinch.gain)));
+    heldScale.value = h.scale / h.base.scale;
   };
 
 
@@ -2049,7 +2094,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       if ((!isEditingText && !selectedStickerId) || (ending && pinchTargetRef.current)) {
         const { focalX, focalY } = event.nativeEvent;
         if (pinchTargetRef.current === undefined && state === State.ACTIVE) {
-          const target = pickPinchTarget(pinchCandidates(), { x: focalX, y: focalY },
+          // a text already held by a finger is the one the pinch sizes
+          const target = hold.current?.id ?? pickPinchTarget(pinchCandidates(), { x: focalX, y: focalY },
                                          selectedTextId || null, GESTURES.pinch);
           pinchTargetRef.current = target;
           if (target && target !== selectedTextId) setSelectedTextId(target);
@@ -2174,6 +2220,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
             }}
           >
             <PanGestureHandler
+              ref={textPanRef(element.id)}
+              simultaneousHandlers={canvasPinchRef}
               onGestureEvent={(event) => handlePanGesture(event, element.id)}
               onHandlerStateChange={(event) => handlePanStateChange(event, element.id)}
               enabled={!isEditingText}
@@ -2182,9 +2230,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               {/* Pinch scales the drawn text (a transform), but the server lays
                   it out again at fontSize x scale and wraps at the canvas's
                   wrap width: so the unscaled layout wraps at that width / scale */}
-              <PinchScaled
-                active={pinchingId === element.id}
-                live={pinchLive}
+              <HeldTransform
+                active={heldId === element.id}
+                dx={heldDx}
+                dy={heldDy}
+                scale={heldScale}
                 style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}
               >
                 {isEditingText && selectedTextId === element.id ? (
@@ -2219,7 +2269,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                     </OutlinedText>
                   </TouchableOpacity>
                 )}
-              </PinchScaled>
+              </HeldTransform>
             </PanGestureHandler>
           </AnimatedReanimated.View>
       );
@@ -2640,8 +2690,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
 
     const canvasChildren = (
       <PinchGestureHandler
+        ref={canvasPinchRef}
         onGestureEvent={(event) => handleUnifiedGesture(event, 'pinch')}
         onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pinch')}
+        // a text's drag and the pinch run together: one hold moves and sizes
+        simultaneousHandlers={textElements.map(el => textPanRef(el.id))}
       >
         <AnimatedReanimated.View style={styles.fullScreenCanvas}>
           <PanGestureHandler
