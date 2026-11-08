@@ -3,6 +3,46 @@
 Product and design decisions, newest first. One line of context each so we
 remember why, not just what.
 
+## 2026-11-08 - One hold moves and sizes a text; Gesture API; new icon
+
+- **Gestures are react-native-gesture-handler's Gesture API**, in the
+  composer and on the post page. The old components put a text's drag on
+  the text and the pinch on the canvas, and on a phone the two never ran
+  together. Now the canvas holds both: its text drag takes a touch that
+  comes down on a text (decided on the UI thread, the only place a gesture
+  can be failed or started by hand) and runs with its pinch, so a second
+  finger can land anywhere. Off a text, the canvas pan keeps its 28pt
+  threshold so a tap still places text; a text drag starts at 4pt.
+- Gestures are made once and call the latest render's handlers through a
+  ref: a gesture made again each render is attached again, mid-touch.
+- **A text's place and scale have one source, PlacedText's shared values.**
+  React state and an animated transform applied together raced for a frame,
+  which was the magnified "phantom" text seen while pinching. State is
+  committed when the hold ends.
+- **Pixel Cursive (Cavalhatriz) left the font menus**; its config stays so
+  older posts still edit and render.
+- **Profile colour is yours to pick**: tap your square on the profile; the
+  server takes only #RRGGBB.
+- **The App Store icon is the promo's title card**: "Typee" in white Arial
+  Black on #0000EE (1.0.3). Drawn, not cut from the video, so it is sharp.
+- **The composer draws its own caret** on the drawn text's lines. The hidden
+  field lays the text out by its own rules, so its caret drifted off them.
+- **Double tap or hold anywhere on a post's page quotes it**, the post's
+  colour around the box included.
+
+## 2026-10-25 - Typee; runtime pinned; launch
+
+- **The app is Typee** (1.0.1), the store name too; subtitle unchanged.
+  Supersedes Type / "Type Magazine". "magazine" stays a keyword for old
+  searches.
+- **runtimeVersion is pinned to "1.0.0"**, so one OTA reaches every store
+  version. Bump it only when native code changes.
+- 1.0 went live 2026-10-20 but wasn't listed until country availability was
+  saved: "Ready for Sale" is not the same as listed. EU countries wait on
+  the DSA trader declaration.
+- **No emoji in posts** (2026-10-16): the composer drops them as typed or
+  pasted, and the server drops them again.
+
 ## 2026-09-25 - Canvas state is data; chrome never covers content
 
 - **CanvasState (v1, src/types/canvas.ts) is the canonical typed canvas**:
