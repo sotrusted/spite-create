@@ -25,13 +25,14 @@ import {
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { PanGestureHandler, PinchGestureHandler, State } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureStateManager, GestureTouchEvent, PanGesture, PinchGesture } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as LegacyFS from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import AnimatedReanimated, {
   makeMutable,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -258,6 +259,19 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
   );
 };
 
+// A gesture's handler takes where the gesture is: just down, moving, or
+// over (lifted, cancelled or failed). They run on the JS thread: they read
+// and set the composer's state.
+type Phase = 'begin' | 'active' | 'end';
+const phased = <G extends PanGesture | PinchGesture>(gesture: G, handle: (phase: Phase, e: any) => void): G => {
+  const g = gesture as PanGesture; // (the two share these)
+  g.runOnJS(true)
+    .onBegin(e => handle('begin', e))
+    .onUpdate(e => handle('active', e))
+    .onFinalize(e => handle('end', e));
+  return gesture;
+};
+
 export default function PostComposer({ onPost, onClose, onPosted, repostData, restoreState, draftTarget, onOpenDraft }: Props) {
   // A restore replaces every default below; rescaled if this screen differs
   // from the one it was composed on. Read once - it seeds initial state only.
@@ -346,11 +360,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   
   // Track if we just deleted an element (prevents gesture handler from continuing)
   const justDeletedRef = useRef(false);
-  // Real handler refs: string ids in simultaneousHandlers type-error AND
-  // no-op at runtime; refs make pinch+pan on the background actually
-  // recognize together
-  const bgPinchRef = useRef(null);
-  const bgPanRef = useRef(null);
   
   // Animation values for deletion
   const deletionScale = useSharedValue(1);
@@ -522,12 +531,12 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       ? Math.min(0, Math.max(screen - size, value))
       : Math.max(0, Math.min(screen - size, value));
 
-  const handleStripPan = (event: any) => {
+  const handleStripPan = (phase: Phase, e: any) => {
     if (!stripRect) return;
-    const { state, translationX, translationY } = event.nativeEvent;
-    if (state === State.BEGAN) {
+    const { translationX, translationY } = e;
+    if (phase === 'begin') {
       stripDragStart.current = { x: stripRect.left, y: stripRect.top };
-    } else if (state === State.ACTIVE) {
+    } else if (phase === 'active') {
       setStripPosition({
         x: clampStripAxis(stripDragStart.current.x + translationX, stripRect.width, screenWidth),
         y: clampStripAxis(stripDragStart.current.y + translationY, stripRect.height, screenHeight),
@@ -535,12 +544,12 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     }
   };
 
-  const handleStripPinch = (event: any) => {
+  const handleStripPinch = (phase: Phase, e: any) => {
     if (!stripRect || !defaultStripRect) return;
-    const { state, scale } = event.nativeEvent;
-    if (state === State.BEGAN) {
+    const { scale } = e;
+    if (phase === 'begin') {
       stripPinchBase.current = stripScale;
-    } else if (state === State.ACTIVE) {
+    } else if (phase === 'active') {
       // up to 3x the canvas: the quote can be blown up past the edges
       const maxScale = (screenWidth * 3) / defaultStripRect.width;
       const next = Math.max(0.2, Math.min(maxScale, stripPinchBase.current * scale));
@@ -573,17 +582,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
 
     const scale = stripRect.width / (original.image_width || 1);
     return (
-      <PinchGestureHandler
-        onGestureEvent={handleStripPinch}
-        onHandlerStateChange={handleStripPinch}
-        enabled={!isEditingText}
-      >
+      <GestureDetector gesture={stripGestures.pinch}>
         <AnimatedReanimated.View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          <PanGestureHandler
-            onGestureEvent={handleStripPan}
-            onHandlerStateChange={handleStripPan}
-            enabled={!isEditingText}
-          >
+          <GestureDetector gesture={stripGestures.pan}>
             <AnimatedReanimated.View
               style={[
                 styles.repostStrip,
@@ -600,9 +601,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 resizeMode="cover"
               />
             </AnimatedReanimated.View>
-          </PanGestureHandler>
+          </GestureDetector>
         </AnimatedReanimated.View>
-      </PinchGestureHandler>
+      </GestureDetector>
     );
   };
 
@@ -763,11 +764,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     setCropBottom(CROP_INITIAL_BOTTOM);
   };
 
-  const handleCropBarPan = (event: any, bar: 'top' | 'bottom') => {
-    const { state, translationY } = event.nativeEvent;
-    if (state === State.BEGAN) {
+  const handleCropBarPan = (bar: 'top' | 'bottom', phase: Phase, e: any) => {
+    const { translationY } = e;
+    if (phase === 'begin') {
       cropDragStart.current = { top: cropTop, bottom: cropBottom };
-    } else if (state === State.ACTIVE) {
+    } else if (phase === 'active') {
       if (bar === 'top') {
         const next = cropDragStart.current.top + translationY;
         setCropTop(Math.max(0, Math.min(next, cropBottom - CROP_MIN_BAND)));
@@ -1842,10 +1843,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const placement = (el: TextElement) => (placements.current[el.id] ??= {
     x: makeMutable(el.x), y: makeMutable(el.y), scale: makeMutable(el.scale || 1),
   });
-  // The canvas's pinch and each text's pan, so they can run together
-  const canvasPinchRef = useRef(null);
-  const textPanRefs = useRef<Record<string, React.RefObject<any>>>({});
-  const textPanRef = (id: string) => (textPanRefs.current[id] ??= React.createRef());
   const beginHold = (elementId: string): Hold | null => {
     if (hold.current?.id === elementId) return hold.current;
     const el = textElements.find(e => e.id === elementId);
@@ -1883,32 +1880,86 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     hold.current = null;
   };
 
-  const handlePanStateChange = (event: any, elementId: string) => {
-    const { state } = event.nativeEvent;
-    if (state === State.BEGAN) {
-      justDeletedRef.current = false;
-      const h = beginHold(elementId);
-      if (h) { h.pan = true; h.anchor = null; }
-      // Trash can appears only after real movement (see handlePanGesture)
+  // A text's drag is the canvas's own: one view takes every finger of a
+  // hold, wherever the second lands, so its pan and pinch run together
+  // (see gestures). It takes a touch that comes down on a text - topmost
+  // first, each as big as its touch area - and moves once the touch has
+  // moved GESTURES.drag.elementMinDistance, sooner than the canvas's pan.
+  const textDrag = useRef<{ id: string } | null>(null);
+  // From the UI thread to this render's handler of that name (`live`)
+  const callLive = (name: string, ...args: any[]) => (live.current as any)[name](...args);
+  // Which text a touch comes down on is decided on the UI thread, where the
+  // gesture can be failed or started by hand: from these boxes, drawn size
+  const textBoxes = useSharedValue<{ id: string; x: number; y: number; halfWidth: number; halfHeight: number }[]>([]);
+  const textDraggable = useSharedValue(true);
+  const textTouch = useSharedValue<{ x: number; y: number; moving: boolean } | null>(null);
+  useEffect(() => {
+    textBoxes.value = textElements.map(el => {
+      const size = elementSizes[el.id] ?? { width: GESTURES.touch.minElementTarget, height: GESTURES.touch.minElementTarget };
+      const scale = el.scale || 1;
+      return { id: el.id, x: el.x, y: el.y, halfWidth: size.width * scale / 2, halfHeight: size.height * scale / 2 };
+    });
+  }, [textElements, elementSizes]);
+  useEffect(() => { textDraggable.value = !isEditingText; }, [isEditingText]);
+  const textPanDown = (e: GestureTouchEvent, manager: GestureStateManager) => {
+    'worklet';
+    if (textTouch.value) return; // a later finger of the same hold
+    const touch = e.allTouches[0];
+    let id: string | null = null;
+    if (touch && textDraggable.value) {
+      const boxes = textBoxes.value;
+      for (let i = boxes.length - 1; i >= 0 && !id; i--) {
+        const box = boxes[i];
+        if (Math.abs(touch.x - box.x) <= box.halfWidth && Math.abs(touch.y - box.y) <= box.halfHeight) id = box.id;
+      }
     }
-    if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
-      releaseHold(elementId, 'pan');
-      setIsDraggingElement(false);
+    if (!id) {
+      manager.fail();
+      return;
+    }
+    textTouch.value = { x: touch.absoluteX, y: touch.absoluteY, moving: false };
+    runOnJS(callLive)('holdText', id);
+  };
+  const textPanMove = (e: GestureTouchEvent, manager: GestureStateManager) => {
+    'worklet';
+    const start = textTouch.value;
+    const touch = e.allTouches[0];
+    if (!start || start.moving || !touch) return;
+    if (Math.hypot(touch.absoluteX - start.x, touch.absoluteY - start.y) >= GESTURES.drag.elementMinDistance) {
+      textTouch.value = { ...start, moving: true };
+      manager.activate();
     }
   };
-
-  const handlePanGesture = (event: any, elementId: string) => {
-    if (event.nativeEvent.state !== State.ACTIVE || isEditingText || justDeletedRef.current) return;
+  // (on the JS thread, from textPanDown)
+  const holdText = (id: string) => {
+    const h = beginHold(id);
+    if (!h) return;
+    justDeletedRef.current = false;
+    h.pan = true;
+    h.anchor = null;
+    textDrag.current = { id };
+    // Trash can appears only after real movement (see handleTextPan)
+  };
+  const handleTextPan = (phase: Phase, e: any) => {
+    const drag = textDrag.current;
+    if (!drag) return;
+    if (phase === 'end') {
+      textDrag.current = null;
+      releaseHold(drag.id, 'pan');
+      setIsDraggingElement(false);
+      return;
+    }
+    if (phase !== 'active' || isEditingText || justDeletedRef.current) return;
     const h = hold.current;
-    if (!h || h.id !== elementId) return;
-    const { absoluteX, absoluteY, numberOfPointers } = event.nativeEvent;
+    if (!h || h.id !== drag.id) return;
+    const { absoluteX, absoluteY, numberOfPointers } = e;
     followTouch(h, `pan:${numberOfPointers}`, absoluteX, absoluteY);
 
     // Show the trash can only once this is unambiguously a drag
     if (!isDraggingElement && Math.hypot(h.dx, h.dy) > 12) {
       setIsDraggingElement(true);
     }
-    if (checkAndHandleDeletion(absoluteX, absoluteY, elementId, 'text')) {
+    if (checkAndHandleDeletion(absoluteX, absoluteY, drag.id, 'text')) {
       dropHold();
     }
   };
@@ -1922,10 +1973,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // scaling runs from that point, so the size never jumps by the dead zone.
   // Its focal point moves the text too, unless the text's own pan (on the
   // same fingers) is already moving it.
-  const handlePinchGesture = (event: any, elementId: string) => {
-    const { state, scale, focalX, focalY } = event.nativeEvent;
+  const handlePinchGesture = (phase: Phase, e: any, elementId: string) => {
+    const { scale, focalX, focalY } = e;
     // (a pinch ends however it ends, editing or not)
-    if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
+    if (phase === 'end') {
       releaseHold(elementId, 'pinch');
       return;
     }
@@ -1934,7 +1985,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const h = beginHold(elementId);
     if (!h) return;
     if (!h.pinch) { h.pinch = true; h.anchor = h.pan ? h.anchor : null; }
-    if (state !== State.ACTIVE || !scale) return;
+    if (phase !== 'active' || !scale) return;
     if (!h.pan) followTouch(h, 'pinch', focalX, focalY);
     if (h.engagedAt === null) {
       if (Math.abs(Math.log(scale)) < Math.log(1 + GESTURES.pinch.deadZone)) return;
@@ -1961,18 +2012,17 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const pinchTargetRef = useRef<string | null | undefined>(undefined);
 
   // Unified gesture handler that detects target and action
-  const handleUnifiedGesture = (event: any, gestureType: 'pan' | 'pinch') => {
-    const { state } = event.nativeEvent;
-    
+  const handleUnifiedGesture = (gestureType: 'pan' | 'pinch', phase: Phase, e: any) => {
+
     if (gestureType === 'pan') {
-      const { translationY, velocityY, translationX, absoluteX, absoluteY } = event.nativeEvent;
+      const { translationY, velocityY, translationX, absoluteX, absoluteY } = e;
       // Removed excessive logging for better performance
       
       // Handle element dragging states
-      if (state === State.BEGAN) {
+      if (phase === 'begin') {
         // Reset deletion flag at start of new gesture
         justDeletedRef.current = false;
-      } else if (state === State.ACTIVE) {
+      } else if (phase === 'active') {
         // Trash can appears only once a selected element is actually dragged
         if (
           !isDraggingElement &&
@@ -1991,8 +2041,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
             return; // Element was deleted, stop processing
           }
         }
-      } else if (state === State.END || state === State.CANCELLED || state === State.FAILED) {
-        console.log('🛑 Gesture ended:', { state, isDraggingElement });
+      } else if (phase === 'end') {
+        console.log('🛑 Gesture ended:', { isDraggingElement });
         // Always clean up state on any type of drag end
         setIsDraggingElement(false);
       }
@@ -2003,14 +2053,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       }
       
       // Check for swipe up (image picker) - prioritize this over element dragging
-      if (FEATURES.imageUploads && state === State.ACTIVE && translationY < -50 && velocityY < -500 && !isPickerOpen) {
+      if (FEATURES.imageUploads && phase === 'active' && translationY < -50 && velocityY < -500 && !isPickerOpen) {
         console.log('✅ Swipe up detected, launching image picker');
         pickImageBackground();
         return;
       }
       
       // Handle sticker drag start
-      if (selectedStickerId && state === State.BEGAN) {
+      if (selectedStickerId && phase === 'begin') {
         const sticker = stickerElements.find(s => s.id === selectedStickerId);
         if (sticker) {
           stickerDragStart.current[selectedStickerId] = { x: sticker.x, y: sticker.y };
@@ -2018,7 +2068,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       }
       
       // Check if we're dragging a selected sticker
-      if (selectedStickerId && state === State.ACTIVE) {
+      if (selectedStickerId && phase === 'active') {
         const start = stickerDragStart.current[selectedStickerId];
         if (start) {
           const newX = start.x + translationX;
@@ -2029,7 +2079,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       }
       
       // Check if we're dragging the image background
-      if (backgroundImage && state === State.ACTIVE && !selectedStickerId) {
+      if (backgroundImage && phase === 'active' && !selectedStickerId) {
         // Auto-deselect text when dragging background
         if (selectedTextId && !isEditingText) {
           setTimeout(() => setSelectedTextId(''), 0);
@@ -2042,7 +2092,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       }
       
       // Handle pan end for image background
-      if (backgroundImage && state === State.END && !selectedStickerId && !selectedTextId) {
+      if (backgroundImage && phase === 'end' && !selectedStickerId && !selectedTextId) {
         imageBaseTranslateX.value = imageTranslateX.value;
         imageBaseTranslateY.value = imageTranslateY.value;
         // Update state after gesture ends
@@ -2057,10 +2107,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     }
     
     if (gestureType === 'pinch') {
-      const { scale } = event.nativeEvent;
+      const { scale } = e;
       
       // Handle sticker pinch start
-      if (selectedStickerId && state === State.BEGAN) {
+      if (selectedStickerId && phase === 'begin') {
         const sticker = stickerElements.find(s => s.id === selectedStickerId);
         if (sticker) {
           stickerBaseScale.current[selectedStickerId] = sticker.scale;
@@ -2068,7 +2118,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       }
       
       // Check if we're pinching a selected sticker
-      if (selectedStickerId && state === State.ACTIVE) {
+      if (selectedStickerId && phase === 'active') {
         const baseScale = stickerBaseScale.current[selectedStickerId] || 1;
         // Continuous, unbounded scaling
         const newScale = baseScale * scale;
@@ -2078,7 +2128,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       }
       
       // Handle sticker pinch end
-      if (selectedStickerId && state === State.END) {
+      if (selectedStickerId && phase === 'end') {
         const sticker = stickerElements.find(s => s.id === selectedStickerId);
         if (sticker) {
           stickerBaseScale.current[selectedStickerId] = sticker.scale;
@@ -2089,10 +2139,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       // least GESTURES.pinch.minTarget big (see pickPinchTarget), else the
       // selected one. Resolved once per gesture, at its first movement, when
       // the focal point between the two fingers is known.
-      const ending = state === State.END || state === State.CANCELLED || state === State.FAILED;
+      const ending = phase === 'end';
       if ((!isEditingText && !selectedStickerId) || (ending && pinchTargetRef.current)) {
-        const { focalX, focalY } = event.nativeEvent;
-        if (pinchTargetRef.current === undefined && state === State.ACTIVE) {
+        const { focalX, focalY } = e;
+        if (pinchTargetRef.current === undefined && phase === 'active') {
           // a text already held by a finger is the one the pinch sizes
           const target = hold.current?.id ?? pickPinchTarget(pinchCandidates(), { x: focalX, y: focalY },
                                          selectedTextId || null, GESTURES.pinch);
@@ -2102,13 +2152,13 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         const target = pinchTargetRef.current;
         if (ending) pinchTargetRef.current = undefined;
         if (target) {
-          handlePinchGesture(event, target);
+          handlePinchGesture(phase, e, target);
           return;
         }
       }
 
       // Check if we're pinching the image background
-      if (backgroundImage && state === State.ACTIVE && !selectedStickerId) {
+      if (backgroundImage && phase === 'active' && !selectedStickerId) {
         // Auto-deselect text when pinching background
         if (selectedTextId && !isEditingText) {
           setTimeout(() => setSelectedTextId(''), 0);
@@ -2121,7 +2171,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       }
       
       // Handle pinch end for image background
-      if (backgroundImage && state === State.END && !selectedStickerId && !selectedTextId) {
+      if (backgroundImage && phase === 'end' && !selectedStickerId && !selectedTextId) {
         imageBaseScale.value = imageScale.value;
         // Update state after gesture ends
         setTimeout(() => {
@@ -2216,53 +2266,45 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               });
             }}
           >
-            <PanGestureHandler
-              ref={textPanRef(element.id)}
-              simultaneousHandlers={canvasPinchRef}
-              onGestureEvent={(event) => handlePanGesture(event, element.id)}
-              onHandlerStateChange={(event) => handlePanStateChange(event, element.id)}
-              enabled={!isEditingText}
-              minDist={GESTURES.drag.elementMinDistance}
-            >
-              {/* Pinch scales the drawn text (a transform), but the server lays
-                  it out again at fontSize x scale and wraps at the canvas's
-                  wrap width: so the unscaled layout wraps at that width / scale */}
-              <AnimatedReanimated.View style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}>
-                {isEditingText && selectedTextId === element.id ? (
-                  // The editing input is rendered at canvas level (see
-                  // renderEditingInput) so it centers on the element anchor
-                  // without depending on this nested box's geometry
-                  null
-                ) : (
-                  <TouchableOpacity
-                    onPress={() => startEditingText(element.id)}
-                    onLongPress={() => deleteTextElement(element.id)}
+            {/* (it is moved and sized by the canvas's gestures: see textUnder) */}
+            {/* Pinch scales the drawn text (a transform), but the server lays
+                it out again at fontSize x scale and wraps at the canvas's
+                wrap width: so the unscaled layout wraps at that width / scale */}
+            <AnimatedReanimated.View style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}>
+              {isEditingText && selectedTextId === element.id ? (
+                // The editing input is rendered at canvas level (see
+                // renderEditingInput) so it centers on the element anchor
+                // without depending on this nested box's geometry
+                null
+              ) : (
+                <TouchableOpacity
+                  onPress={() => startEditingText(element.id)}
+                  onLongPress={() => deleteTextElement(element.id)}
+                >
+                  <OutlinedText
+                    // (scaled by its placement, not by its own style)
+                    style={[getTextStyle(element), { transform: [] }]}
+                    outlineColor={outlineColorFor(element)}
+                    outlineWidth={element.fontSize * OUTLINE.widthEm}
+                    plain={displayPlain(element)}
+                    onLayout={(event) => {
+                      // True text block size (unlike the 120px-min touch
+                      // area), used by the adaptive crop guides
+                      const { width, height } = event.nativeEvent.layout;
+                      setTextInkSizes(prev => {
+                        const current = prev[element.id];
+                        if (current && Math.abs(current.width - width) < 1 && Math.abs(current.height - height) < 1) {
+                          return prev;
+                        }
+                        return { ...prev, [element.id]: { width, height } };
+                      });
+                    }}
                   >
-                    <OutlinedText
-                      // (scaled by its placement, not by its own style)
-                      style={[getTextStyle(element), { transform: [] }]}
-                      outlineColor={outlineColorFor(element)}
-                      outlineWidth={element.fontSize * OUTLINE.widthEm}
-                      plain={displayPlain(element)}
-                      onLayout={(event) => {
-                        // True text block size (unlike the 120px-min touch
-                        // area), used by the adaptive crop guides
-                        const { width, height } = event.nativeEvent.layout;
-                        setTextInkSizes(prev => {
-                          const current = prev[element.id];
-                          if (current && Math.abs(current.width - width) < 1 && Math.abs(current.height - height) < 1) {
-                            return prev;
-                          }
-                          return { ...prev, [element.id]: { width, height } };
-                        });
-                      }}
-                    >
-                      {renderDisplayContent(element)}
-                    </OutlinedText>
-                  </TouchableOpacity>
-                )}
-              </AnimatedReanimated.View>
-            </PanGestureHandler>
+                    {renderDisplayContent(element)}
+                  </OutlinedText>
+                </TouchableOpacity>
+              )}
+            </AnimatedReanimated.View>
           </PlacedText>
       );
     });
@@ -2503,25 +2545,19 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           />
         )}
 
-        <PanGestureHandler
-          onGestureEvent={(event) => handleCropBarPan(event, 'top')}
-          onHandlerStateChange={(event) => handleCropBarPan(event, 'top')}
-        >
+        <GestureDetector gesture={gestures.cropTop}>
           <AnimatedReanimated.View style={[styles.cropBarHitArea, { top: cropTop - 22 }]}>
             <View style={styles.cropBarLine} />
             <View style={styles.cropBarGrip} />
           </AnimatedReanimated.View>
-        </PanGestureHandler>
+        </GestureDetector>
 
-        <PanGestureHandler
-          onGestureEvent={(event) => handleCropBarPan(event, 'bottom')}
-          onHandlerStateChange={(event) => handleCropBarPan(event, 'bottom')}
-        >
+        <GestureDetector gesture={gestures.cropBottom}>
           <AnimatedReanimated.View style={[styles.cropBarHitArea, { top: cropBottom - 22 }]}>
             <View style={styles.cropBarLine} />
             <View style={styles.cropBarGrip} />
           </AnimatedReanimated.View>
-        </PanGestureHandler>
+        </GestureDetector>
       </>
     );
   };
@@ -2681,44 +2717,26 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const renderCanvas = () => {
 
     const canvasChildren = (
-      <PinchGestureHandler
-        ref={canvasPinchRef}
-        onGestureEvent={(event) => handleUnifiedGesture(event, 'pinch')}
-        onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pinch')}
-        // a text's drag and the pinch run together: one hold moves and sizes
-        simultaneousHandlers={textElements.map(el => textPanRef(el.id))}
-      >
+      <GestureDetector gesture={gestures.canvas}>
         <AnimatedReanimated.View style={styles.fullScreenCanvas}>
-          <PanGestureHandler
-            onGestureEvent={(event) => handleUnifiedGesture(event, 'pan')}
-            onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pan')}
-            shouldCancelWhenOutside={false}
-            minPointers={1}
-            maxPointers={1}
-            // A finger almost never stays still. Without a movement threshold
-            // this pan activated on the first pixel of drift and swallowed the
-            // tap, so placing text demanded an unnaturally precise press.
-            minDist={GESTURES.drag.canvasMinDistance}
-          >
-            <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
-              {/* Repost image layer */}
-          
-              {/* Interaction/text layer sits on top */}
-              <TouchableOpacity
-                style={[StyleSheet.absoluteFill, { zIndex: 20 }]}
-                onPress={handleCanvasTap}
-                activeOpacity={1}
-                pressRetentionOffset={{ top: 40, left: 40, right: 40, bottom: 40 }}
-                hitSlop={{ top: 10, left: 10, right: 10, bottom: 10 }}
-              >
-                {renderRepostLayer()}
-                {renderEditableText()}
-                {renderStickers()}
-              </TouchableOpacity>
-            </AnimatedReanimated.View>
-          </PanGestureHandler>
+          <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
+            {/* Repost image layer */}
+        
+            {/* Interaction/text layer sits on top */}
+            <TouchableOpacity
+              style={[StyleSheet.absoluteFill, { zIndex: 20 }]}
+              onPress={handleCanvasTap}
+              activeOpacity={1}
+              pressRetentionOffset={{ top: 40, left: 40, right: 40, bottom: 40 }}
+              hitSlop={{ top: 10, left: 10, right: 10, bottom: 10 }}
+            >
+              {renderRepostLayer()}
+              {renderEditableText()}
+              {renderStickers()}
+            </TouchableOpacity>
+          </AnimatedReanimated.View>
         </AnimatedReanimated.View>
-      </PinchGestureHandler>
+      </GestureDetector>
     );
 
     if (backgroundGradient.length > 0) {
@@ -3485,6 +3503,17 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
 
   const SLIDER_HEIGHT = 200;
   const sliderBaseFont = useRef(24);
+  // Relative to the size at gesture start - no jumping, no jitter, and the
+  // handle always moves off the extremes
+  const handleSliderPan = (phase: Phase, e: any) => {
+    if (phase === 'begin') {
+      sliderBaseFont.current = currentFontSize;
+    } else if (phase === 'active') {
+      const delta = (-e.translationY / SLIDER_HEIGHT) * (SLIDER_MAX_FONT - SLIDER_MIN_FONT);
+      const next = sliderBaseFont.current + delta;
+      setCurrentFontSize(Math.max(SLIDER_MIN_FONT, Math.min(SLIDER_MAX_FONT, next)));
+    }
+  };
 
   const renderScaleSlider = () => {
     if (!isEditingText) return null;
@@ -3496,20 +3525,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         {/* Smooth wedge, wide at the top (big text up) */}
         <View style={styles.scaleSliderWedge} pointerEvents="none" />
 
-        <PanGestureHandler
-          onGestureEvent={(event) => {
-            // Relative to the size at gesture start - no jumping, no jitter,
-            // and the handle always moves off the extremes
-            const delta = (-event.nativeEvent.translationY / SLIDER_HEIGHT) * (SLIDER_MAX_FONT - SLIDER_MIN_FONT);
-            const next = sliderBaseFont.current + delta;
-            setCurrentFontSize(Math.max(SLIDER_MIN_FONT, Math.min(SLIDER_MAX_FONT, next)));
-          }}
-          onHandlerStateChange={(event) => {
-            if (event.nativeEvent.state === State.BEGAN) {
-              sliderBaseFont.current = currentFontSize;
-            }
-          }}
-        >
+        <GestureDetector gesture={gestures.slider}>
           <View style={styles.scaleSliderTouchArea}>
             <View
               style={[
@@ -3518,11 +3534,50 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               ]}
             />
           </View>
-        </PanGestureHandler>
+        </GestureDetector>
       </View>
     );
   };
 
+
+  // The composer's gestures. Each is made once - a gesture made again is
+  // attached again, mid-touch - and calls this render's handlers (`live`).
+  // The canvas's text drag (or, off the text, its own pan) runs together
+  // with its pinch: one hold moves and sizes a text, with one finger or two.
+  const live = useRef({ handleTextPan, holdText, handleUnifiedGesture, handleCropBarPan, handleSliderPan, handleStripPan, handleStripPinch });
+  live.current = { handleTextPan, holdText, handleUnifiedGesture, handleCropBarPan, handleSliderPan, handleStripPan, handleStripPinch };
+  const gestures = useMemo(() => {
+    // (its touches are watched on the UI thread: see textPanDown)
+    const textPan = Gesture.Pan().manualActivation(true)
+      .onTouchesDown(textPanDown)
+      .onTouchesMove(textPanMove)
+      .onUpdate(e => { runOnJS(callLive)('handleTextPan', 'active', e); })
+      .onFinalize(e => {
+        textTouch.value = null;
+        runOnJS(callLive)('handleTextPan', 'end', e);
+      });
+    // A finger almost never stays still. Without a movement threshold this
+    // pan activated on the first pixel of drift and swallowed the tap, so
+    // placing text demanded an unnaturally precise press.
+    const canvasPan = phased(Gesture.Pan().maxPointers(1).shouldCancelWhenOutside(false)
+      .minDistance(GESTURES.drag.canvasMinDistance),
+      (phase, e) => live.current.handleUnifiedGesture('pan', phase, e));
+    const canvasPinch = phased(Gesture.Pinch(), (phase, e) => live.current.handleUnifiedGesture('pinch', phase, e));
+    const backgroundPan = phased(Gesture.Pan().maxPointers(1).shouldCancelWhenOutside(false),
+      (phase, e) => live.current.handleUnifiedGesture('pan', phase, e));
+    const backgroundPinch = phased(Gesture.Pinch(), (phase, e) => live.current.handleUnifiedGesture('pinch', phase, e));
+    return {
+      canvas: Gesture.Simultaneous(Gesture.Race(textPan, canvasPan), canvasPinch),
+      background: Gesture.Simultaneous(backgroundPan, backgroundPinch),
+      cropTop: phased(Gesture.Pan(), (phase, e) => live.current.handleCropBarPan('top', phase, e)),
+      cropBottom: phased(Gesture.Pan(), (phase, e) => live.current.handleCropBarPan('bottom', phase, e)),
+      slider: phased(Gesture.Pan(), (phase, e) => live.current.handleSliderPan(phase, e)),
+    };
+  }, []);
+  const stripGestures = useMemo(() => ({
+    pinch: phased(Gesture.Pinch().enabled(!isEditingText), (phase, e) => live.current.handleStripPinch(phase, e)),
+    pan: phased(Gesture.Pan().enabled(!isEditingText), (phase, e) => live.current.handleStripPan(phase, e)),
+  }), [isEditingText]);
 
   return (
     <View style={styles.container}>
@@ -3533,38 +3588,21 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       
       {/* Background image layer - outside KeyboardAvoidingView so keyboard doesn't shift it */}
       {backgroundImage && (
-        <PinchGestureHandler
-          ref={bgPinchRef}
-          onGestureEvent={(event) => handleUnifiedGesture(event, 'pinch')}
-          onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pinch')}
-          simultaneousHandlers={bgPanRef}
-        >
-          <AnimatedReanimated.View style={StyleSheet.absoluteFill}>
-            <PanGestureHandler
-              ref={bgPanRef}
-              onGestureEvent={(event) => handleUnifiedGesture(event, 'pan')}
-              onHandlerStateChange={(event) => handleUnifiedGesture(event, 'pan')}
-              simultaneousHandlers={bgPinchRef}
-              shouldCancelWhenOutside={false}
-              minPointers={1}
-              maxPointers={1}
-            >
-              <AnimatedReanimated.View 
-                style={[
-                  StyleSheet.absoluteFill, 
-                  { zIndex: 0 },
-                  imageBackgroundAnimatedStyle
-                ]}
-              >
-                <ExpoImage
-                  source={{ uri: backgroundImage }}
-                  style={StyleSheet.absoluteFill}
-                  contentFit="cover"
-                />
-              </AnimatedReanimated.View>
-            </PanGestureHandler>
+        <GestureDetector gesture={gestures.background}>
+          <AnimatedReanimated.View 
+            style={[
+              StyleSheet.absoluteFill, 
+              { zIndex: 0 },
+              imageBackgroundAnimatedStyle
+            ]}
+          >
+            <ExpoImage
+              source={{ uri: backgroundImage }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+            />
           </AnimatedReanimated.View>
-        </PinchGestureHandler>
+        </GestureDetector>
       )}
       
       <KeyboardAvoidingView 

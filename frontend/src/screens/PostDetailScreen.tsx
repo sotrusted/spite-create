@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -22,7 +22,7 @@ import { Colors } from '../constants/colors';
 import { CHROME } from '../constants/layout';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
-import { TapGestureHandler, LongPressGestureHandler, State as GestureState } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import PlanText from '../components/PlanText';
 import { isTextPlan } from '../types/textPlan';
 import { textResolutionFor } from '../utils/zoom';
@@ -109,7 +109,6 @@ export default function PostDetailScreen() {
       // the tap simply does nothing if the quoted post cannot be fetched
     }
   };
-  const doubleTapRef = useRef(null);
 
   // The whole post, full width, never cropped (fullPostLayout); tall posts
   // scroll. Its taps are the page's (renderGestures).
@@ -219,33 +218,24 @@ export default function PostDetailScreen() {
   };
   // Taps end before the hold would
   const tapMaxMs = GESTURES.longPress.cardMs - 1;
+  // A hold quotes, like a double tap; a tap waits out the double tap's
+  // window. Made once, calling this render's handlers (`live`).
+  const live = useRef({ onTap, onDoubleTap });
+  live.current = { onTap, onDoubleTap };
+  const gestures = useMemo(() => {
+    const hold = Gesture.LongPress().minDuration(GESTURES.longPress.cardMs).runOnJS(true)
+      .onStart(e => live.current.onDoubleTap(e.x, e.y));
+    const doubleTap = Gesture.Tap().numberOfTaps(2).maxDuration(tapMaxMs)
+      .maxDelay(GESTURES.tap.doubleTapWindowMs).runOnJS(true)
+      .onEnd((e, success) => success && live.current.onDoubleTap(e.x, e.y));
+    const tap = Gesture.Tap().maxDuration(tapMaxMs).runOnJS(true)
+      .onEnd((e, success) => success && live.current.onTap(e.x, e.y));
+    return Gesture.Race(hold, Gesture.Exclusive(doubleTap, tap));
+  }, []);
   const renderGestures = (children: React.ReactNode) => (
-    <LongPressGestureHandler
-      minDurationMs={GESTURES.longPress.cardMs}
-      onHandlerStateChange={e => {
-        if (e.nativeEvent.state === GestureState.ACTIVE) onDoubleTap(e.nativeEvent.x, e.nativeEvent.y);
-      }}
-    >
-      <TapGestureHandler
-        waitFor={doubleTapRef}
-        maxDurationMs={tapMaxMs}
-        onHandlerStateChange={e => {
-          if (e.nativeEvent.state === GestureState.ACTIVE) onTap(e.nativeEvent.x, e.nativeEvent.y);
-        }}
-      >
-        <TapGestureHandler
-          ref={doubleTapRef}
-          numberOfTaps={2}
-          maxDurationMs={tapMaxMs}
-          maxDelayMs={GESTURES.tap.doubleTapWindowMs}
-          onHandlerStateChange={e => {
-            if (e.nativeEvent.state === GestureState.ACTIVE) onDoubleTap(e.nativeEvent.x, e.nativeEvent.y);
-          }}
-        >
-          <View style={{ minHeight: contentHeight }}>{children}</View>
-        </TapGestureHandler>
-      </TapGestureHandler>
-    </LongPressGestureHandler>
+    <GestureDetector gesture={gestures}>
+      <View style={{ minHeight: contentHeight }}>{children}</View>
+    </GestureDetector>
   );
 
   // The [...] menu. Someone else's post: report it, or mute or block its
