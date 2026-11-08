@@ -325,13 +325,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // 5 across: the 20 post colours in four rows
+  // 7 across: the 21 post colours in three rows
   avatarPalette: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: SPACE.sm,
-    width: 5 * 40 + 4 * SPACE.sm,
+    width: 7 * 40 + 6 * SPACE.sm,
     marginBottom: SPACE.lg,
   },
   avatarSwatch: {

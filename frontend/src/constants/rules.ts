@@ -16,6 +16,7 @@ export const RULE_ON: Record<string, string> = {
   '#3D3D42': '#B7BEC7', // Graphite       / Cool Gray
   '#000000': '#B7BEC7', // Black          / Cool Gray
   '#690016': '#FAEBD7', // Oxblood        / Antique White
+  '#8B4513': '#FAEBD7', // Saddle Brown   / Antique White
   '#FF1A1A': '#690016', // Bright Red     / Oxblood
   '#FF940A': '#690016', // Bright Orange  / Oxblood
   '#F0FF00': '#0000EE', // Bright Yellow  / Link Blue

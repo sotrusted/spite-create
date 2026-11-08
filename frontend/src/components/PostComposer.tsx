@@ -3343,6 +3343,15 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       updateTextElement(el.id, { listStyle: next });
     };
 
+    // The colour swatch shows what the button would change: the selected
+    // letters' colour while some are selected (the colour at the
+    // selection's start), else the text's own
+    const range = selectedRange();
+    const run = range && el.colorRuns?.find(r => r.start <= range.start && r.end > range.start);
+    const swatchDuo = run ? duoOf(run.color) : el.alternateColors?.length === 2 ? el.alternateColors : null;
+    const swatchRainbow = run ? run.color === RAINBOW_RUN : el.rainbow;
+    const swatchColor = run ? run.color : el.color;
+
     return (
       <View
         ref={configBarRef}
@@ -3428,24 +3437,24 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           </TouchableOpacity>
           {/* Color: swatch shows current, tap cycles palette then rainbow */}
           <TouchableOpacity
-            style={[styles.controlOption, selectedRange() && styles.controlOptionActive]}
+            style={[styles.controlOption, range && styles.controlOptionActive]}
             onPress={() => { if (!openRangeColors()) cycleColor(); }}
             onLongPress={() => { if (!openRangeColors()) setColorGridMode('text'); }}
             delayLongPress={GESTURES.longPress.controlMs}
           >
-            {el.alternateColors?.length === 2 ? (
+            {swatchDuo ? (
               <View style={styles.controlColorSwatch}>
-                <View style={[styles.duoHalf, { backgroundColor: el.alternateColors[0] }]} />
-                <View style={[styles.duoHalf, { backgroundColor: el.alternateColors[1] }]} />
+                <View style={[styles.duoHalf, { backgroundColor: swatchDuo[0] }]} />
+                <View style={[styles.duoHalf, { backgroundColor: swatchDuo[1] }]} />
               </View>
-            ) : el.rainbow ? (
+            ) : swatchRainbow ? (
               <LinearGradient
                 {...DIAGONAL}
                 colors={Colors.rainbowPalette as [string, string, ...string[]]}
                 style={styles.controlColorSwatch}
               />
             ) : (
-              <View style={[styles.controlColorSwatch, { backgroundColor: el.color }]} />
+              <View style={[styles.controlColorSwatch, { backgroundColor: swatchColor }]} />
             )}
           </TouchableOpacity>
           {/* Text chip background cycle: off / white / inverted */}

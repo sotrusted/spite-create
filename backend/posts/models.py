@@ -159,7 +159,7 @@ class Post(models.Model):
     # Color presets (old school internet + modern)
     COLOR_PRESETS = [
         '#F8F8FF', '#FAEBD7', '#B7BEC7', '#3D3D42', '#000000', '#690016',
-        '#FF1A1A', '#FF940A', '#F0FF00', '#F9FF4F', '#32CD32', '#CCFF00', '#00CED1',
+        '#8B4513', '#FF1A1A', '#FF940A', '#F0FF00', '#F9FF4F', '#32CD32', '#CCFF00', '#00CED1',
         '#0000EE', '#2749F5', '#AB00FF', '#9932CC', '#FF1493', '#FF90C2', '#F7B1D1'
     ]
 
