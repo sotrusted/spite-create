@@ -3,6 +3,30 @@
 Product and design decisions, newest first. One line of context each so we
 remember why, not just what.
 
+## 2026-11-11 - The text field is the text while typing
+
+- **While typing, the field is what you see** (utils/editField). A styled
+  copy over an invisible field put two layouts of one text on screen: taps
+  and selections went by the field's, which drifted off the letters drawn
+  (caps wrapped at lower-case widths, Times spaced its lines differently),
+  so a selection landed on a "non-existent part of the text box" and a
+  delete took letters you could not see. One layout cannot drift. Checked
+  against keeping both copies with a test contract: identical inputs to two
+  iOS engines still wrap differently at the edges, so tests could only make
+  drift rare, not impossible. The drawn caret (DrawnCaret) is gone too.
+- The field holds the text as drawn; each edit is read back onto the text
+  as typed. **Caps** shows capitals while the typed text keeps its case, so
+  turning caps off gives it back; letters typed with caps on come back
+  lower case. **List markers** are characters in the field while typing (a
+  backspace into one joins its line to the one before, as in Notes).
+- **The border is the field again**, uneditable, round a ring of offsets:
+  same engine, same layout, so it rings the letters exactly. The
+  highlighter's bands still come from a Text copy and can sit a hair off
+  (Times); the field's own line positions need native code, planned for
+  the next App Store build.
+- The text is laid out at its real size while typing, not magnified;
+  long text scrolls inside the field, which keeps the caret in view.
+
 ## 2026-11-08 - One hold moves and sizes a text; Gesture API; new icon
 
 - **Gestures are react-native-gesture-handler's Gesture API**, in the
@@ -25,7 +49,7 @@ remember why, not just what.
   server takes only #RRGGBB.
 - **The App Store icon is the promo's title card**: "Typee" in white Arial
   Black on #0000EE (1.0.3). Drawn, not cut from the video, so it is sharp.
-- **The composer draws its own caret** on the drawn text's lines. The hidden
+- **The composer draws its own caret** (replaced 2026-11-11) on the drawn text's lines. The hidden
   field lays the text out by its own rules, so its caret drifted off them.
 - **Double tap or hold anywhere on a post's page quotes it**, the post's
   colour around the box included.

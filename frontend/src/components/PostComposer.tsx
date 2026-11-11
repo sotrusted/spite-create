@@ -55,11 +55,9 @@ import { applyColorToRange, adjustRuns, colorSpans, duoOf, duoRun, RAINBOW_RUN }
 import { GESTURES } from '../constants/gestures';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
-import OutlinedText from './OutlinedText';
+import OutlinedText, { OUTLINE_STEPS } from './OutlinedText';
 import PlacedText, { Placement } from './PlacedText';
-import DrawnCaret, { CaretRect } from './DrawnCaret';
-import { displayIndex } from '../utils/caret';
-import type { LineBox } from '../utils/lineChips';
+import { capsOf, fieldText, FieldOptions, readEdit, toField, toTyped } from '../utils/editField';
 import { stripEmoji } from '../utils/emoji';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
@@ -1704,10 +1702,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       backgroundGradient.length > 0 || backgroundImage ? null : backgroundColor,
     );
 
-  const renderDisplayContent = (element: TextElement) => {
+  // (caps: in capitals letter for letter, as the editing field holds them)
+  const renderDisplayContent = (element: TextElement, caps = false) => {
     const showPlaceholder = !getDisplayText(element) && element.id === '1' && !isEditingText && !anyElementHasInk();
     if (showPlaceholder) return placeholderNode(element);
-    const raw = drawnText(element);
+    const raw = caps && element.capsLock ? capsOf(drawnText(element)) : drawnText(element);
     // Same rule as the server: one palette advanced per non-space character,
     // with an explicit pair taking precedence over rainbow, and colour
     // ranges (colour for selected text) on top of both
@@ -2311,24 +2310,30 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   };
 
   // Staged editing: centered in the negative space between the top of the
-  // screen and the config row. A styled MIRROR shows exactly what will render
-  // (chip wrapping the text block, rainbow, glow) while an invisible-text
-  // TextInput overlays it to handle typing and the caret. The element's real
-  // canvas (x, y) is untouched; display text returns there on commit.
+  // screen and the config row. The text field IS the text while typing
+  // (utils/editField): iOS lays it out once, so a tap, the caret and a
+  // selection land on the letters you see. It holds the text as drawn -
+  // capitals, list markers, colours - and its edits are read back onto the
+  // typed text. Borders and the highlighter, which a field cannot draw, are
+  // drawn behind it. The element's real canvas (x, y) is untouched; the
+  // text returns there on commit.
   const EDITING_STAGE_BOTTOM = 395; // top edge of the config row area
-  // Typing past the height of the space above the config bar: the editing
-  // stage scrolls, keeping the caret's line in view - at the end while you
-  // type on, around where you are when you move back into the text.
-  const editScrollRef = useRef<ScrollView>(null);
-  const editViewHeight = useRef(0);
-  const editContentHeight = useRef(0);
-  const editSelection = useRef({ start: 0, end: 0 });
-  // The drawn text's lines and box (the caret is drawn on them), and where
-  // the drawn text sits in the stage's scrolling content
-  const [editLines, setEditLines] = useState<LineBox[]>([]);
-  const [editBox, setEditBox] = useState<{ width: number; height: number } | null>(null);
-  const editTextTop = useRef(0);
-  const editScrollY = useRef(0);
+  const fieldRef = useRef<TextInput>(null);
+  // what the field was last given to draw, and where its caret goes when
+  // what it holds had to be redrawn (a marker, caps, a dropped emoji)
+  const fieldDrawn = useRef('');
+  const fieldCaret = useRef<number | null>(null);
+  useEffect(() => {
+    if (fieldCaret.current === null) return;
+    const at = fieldCaret.current;
+    fieldCaret.current = null;
+    fieldRef.current?.setSelection(at, at);
+  });
+  // Typing past the height of the stage, the field scrolls itself (keeping
+  // the caret in view); what is drawn behind it scrolls with it
+  const [stageHeight, setStageHeight] = useState(0);
+  const [fieldBoxHeight, setFieldBoxHeight] = useState(0);
+  const [fieldScrollY, setFieldScrollY] = useState(0);
   const [configBarTop, setConfigBarTop] = useState<number | null>(null);
   // The config row rides on the keyboard: its height (suggestion row and
   // all) varies by phone and keyboard, so it is measured, never assumed
@@ -2350,20 +2355,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (w.touched || !w.view || !w.content) return;
     configScrollRef.current?.scrollTo({ x: Math.max(0, (w.content - w.view) / 2), animated: false });
   };
-  // Scroll the stage just enough to show the caret's line, with a little
-  // room around it
-  const keepCaretInView = (caret: CaretRect) => {
-    const view = editViewHeight.current;
-    const content = editContentHeight.current;
-    if (!view || content <= view) return;
-    const margin = currentFontSize * 0.5;
-    const top = editTextTop.current + caret.y - margin;
-    const bottom = editTextTop.current + caret.y + caret.height + margin;
-    const y = editScrollY.current;
-    const to = top < y ? top : bottom > y + view ? bottom - view : null;
-    if (to === null) return;
-    editScrollRef.current?.scrollTo({ y: Math.max(0, Math.min(content - view, to)), animated: false });
-  };
+  const fieldOptions = (element: TextElement): FieldOptions =>
+    ({ caps: !!element.capsLock, marker: listMarker(element) });
 
   const renderEditingInput = () => {
     if (!isEditingText || !selectedTextId) return null;
@@ -2371,23 +2364,37 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (!element) return null;
 
     const inputWidth = screenWidth * TEXT_WRAP_FRACTION;
-    // the text is drawn at its pinch scale (a transform), so it lays out at
-    // the wrap width / scale and lands on the server's wrap width
-    const layoutWidth = inputWidth / (element.scale || 1);
     const content = getDisplayText(element);
-    const textStyle = [
-      getTextStyle(element),
-      { fontSize: currentFontSize, maxWidth: layoutWidth },
-    ];
-    const flatStyle = StyleSheet.flatten(textStyle) as TextStyle;
-    // A selection of letters shows as the field's own highlight; the caret
-    // only when nothing is selected
-    const selection = textSelection ?? { start: content.length, end: content.length };
-    const caretIndex = selection.start === selection.end ? selection.end : null;
-    const wrapperAlign =
-      element.align === 'left' ? 'flex-start' as const
-      : element.align === 'right' ? 'flex-end' as const
-      : 'center' as const;
+    const opts = fieldOptions(element);
+    // (from the typed text as of the last keystroke, which a render can lag)
+    fieldDrawn.current = fieldText(typedTextRef.current[element.id] ?? content, opts);
+    // The text at its pinch scale, laid out at the wrap width - not a
+    // smaller text magnified, which iOS's selection does not follow
+    const scale = element.scale || 1;
+    const { transform, backgroundColor, textTransform, marginRight, ...base } =
+      StyleSheet.flatten(getTextStyle(element)) as TextStyle;
+    const scaled = (v: unknown) => Number(v ?? 0) * scale;
+    const fieldStyle: TextStyle = {
+      ...base,
+      fontSize: currentFontSize * scale,
+      letterSpacing: scaled(base.letterSpacing),
+      paddingHorizontal: scaled(base.paddingHorizontal),
+      paddingVertical: scaled(base.paddingVertical),
+      ...(base.textShadowRadius ? { textShadowRadius: scaled(base.textShadowRadius) } : {}),
+      width: inputWidth,
+    };
+    const chip = backgroundColor && backgroundColor !== 'transparent' ? String(backgroundColor) : null;
+    const outlineColor = content ? outlineColorFor(element) : null;
+    const decorated = !!content && (!!chip || !!outlineColor);
+    // The copies reach down to the bottom of what the field shows, with
+    // room to spare (a text cut short drops its last line; their own
+    // measure falls a line short), and are clipped to the field's box -
+    // with a margin for the border, which rings the letters from outside
+    const ring = currentFontSize * scale * OUTLINE.widthEm;
+    const margin = 2 * ring + 1;
+    // scrolled, lines run on past the box's top and bottom: cut them there
+    const marginY = fieldScrollY > 0 ? 0 : margin;
+    const decoHeight = fieldScrollY + fieldBoxHeight + 2 * currentFontSize * scale;
 
     return (
       <View
@@ -2399,101 +2406,90 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           ...(configBarTop ? { bottom: undefined, height: configBarTop - EDITING_STAGE_TOP - SPACE.sm } : {}),
         }]}
         pointerEvents="box-none"
+        onLayout={e => setStageHeight(e.nativeEvent.layout.height)}
       >
-        <ScrollView
-          ref={editScrollRef}
-          contentContainerStyle={styles.editingScrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="always"
-          onLayout={e => { editViewHeight.current = e.nativeEvent.layout.height; }}
-          onContentSizeChange={(_w, h) => { editContentHeight.current = h; }}
-          onScroll={e => { editScrollY.current = e.nativeEvent.contentOffset.y; }}
-          scrollEventThrottle={16}
-        >
         {/* The stage covers the canvas while typing, so it passes a tap off
             the text on as a canvas tap: that is what finishes editing */}
         <Pressable style={styles.editingScrollContent} onPress={handleCanvasTap}>
-        <View
-          style={{ alignItems: wrapperAlign }}
-          pointerEvents="box-none"
-          onLayout={e => { editTextTop.current = e.nativeEvent.layout.y; }}
-        >
-          {/* Styled mirror - the source of visual truth while editing. iOS
-              does not measure text again when only its transform changes,
-              so turning caps on would clip it at the lower-case width */}
-          <View
-            pointerEvents="none"
-            key={element.capsLock ? 'caps' : 'typed'}
-            onLayout={e => setEditBox({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
-          >
-            <OutlinedText
-              style={[
-                textStyle,
-                !content && { color: 'rgba(255,255,255,0.5)' },
-              ]}
-              outlineColor={content ? outlineColorFor(element) : null}
-              outlineWidth={currentFontSize * OUTLINE.widthEm}
-              plain={displayPlain(element)}
-              onLines={setEditLines}
-            >
-              {content ? renderDisplayContent(element) : (isEditingText || anyElementHasInk()) ? '' : placeholderNode(element)}
-            </OutlinedText>
-            {editBox && caretIndex !== null && (
-              <DrawnCaret
-                lines={editLines}
-                text={displayPlain(element)}
-                index={displayIndex(content, caretIndex, listMarker(element))}
-                box={editBox}
-                pad={{ x: Number(flatStyle.paddingHorizontal ?? 0), y: Number(flatStyle.paddingVertical ?? 0) }}
-                scale={element.scale || 1}
-                align={(flatStyle.textAlign as 'left' | 'center' | 'right') ?? 'center'}
-                // the letters' own colour (white on the filled highlighter)
-                color={element.rainbow ? Colors.accent : String(flatStyle.color ?? element.color)}
-                measureStyle={textStyle}
-                onPlace={keepCaretInView}
-              />
+          {/* Typing past the stage's height, the field scrolls itself, keeping
+              the caret in view; what is drawn behind it scrolls along */}
+          <View style={{ maxHeight: stageHeight || undefined }}>
+            {/* Border and highlighter, behind the field's letters. The border
+                is the field again, uneditable, in the border colour round a
+                ring of offsets (as OutlinedText draws it): the same layout
+                as the letters, so it rings them exactly */}
+            {decorated && (
+              <View pointerEvents="none" style={[styles.outlineCopy, styles.clip, { left: -margin, right: -margin, top: -marginY, height: fieldBoxHeight + 2 * marginY }]}>
+              <View style={[styles.outlineCopy, { left: margin, right: margin, top: marginY - fieldScrollY, height: decoHeight }]}>
+                {chip && (
+                  <OutlinedText
+                    style={[fieldStyle, { color: 'transparent', textShadowColor: 'transparent', backgroundColor: chip }]}
+                    outlineColor={null}
+                    outlineWidth={0}
+                    plain={fieldDrawn.current}
+                  >
+                    {fieldDrawn.current}
+                  </OutlinedText>
+                )}
+                {outlineColor && Array.from({ length: OUTLINE_STEPS }, (_, i) => {
+                  const a = (i / OUTLINE_STEPS) * 2 * Math.PI;
+                  return (
+                    <TextInput
+                      key={i}
+                      editable={false}
+                      multiline
+                      scrollEnabled={false}
+                      value={fieldDrawn.current}
+                      style={[fieldStyle, styles.outlineCopy, {
+                        left: Math.cos(a) * ring,
+                        top: Math.sin(a) * ring,
+                        height: decoHeight,
+                        color: outlineColor,
+                        textShadowColor: 'transparent',
+                        textDecorationColor: outlineColor,
+                      }]}
+                    />
+                  );
+                })}
+              </View>
+              </View>
             )}
+            <TextInput
+              key={`editing-${element.id}`}
+              ref={fieldRef}
+              style={[fieldStyle, { maxHeight: stageHeight || undefined, backgroundColor: 'transparent' }]}
+              selectionColor={element.rainbow ? Colors.accent : element.color}
+              // with caps on the keyboard types capitals, so what it holds is
+              // what is drawn; they are kept lower case (utils/editField)
+              autoCapitalize={element.capsLock ? 'characters' : 'sentences'}
+              placeholder={anyElementHasInk() ? undefined : 'Type...'}
+              placeholderTextColor={`${element.color || '#1B1B1B'}80`}
+              onChangeText={after => {
+                const typed = typedTextRef.current[element.id] ?? content;
+                const edit = readEdit(typed, fieldDrawn.current, after, opts);
+                // No emoji in a post (utils/emoji): one typed or pasted is dropped
+                const kept = stripEmoji(edit.typed);
+                const caret = edit.caret - (edit.typed.length - kept.length);
+                const drawn = fieldText(kept, opts);
+                if (drawn !== after) fieldCaret.current = toField(kept, Math.max(0, caret), opts);
+                fieldDrawn.current = drawn;
+                handleTextInputChange(element.id, kept);
+              }}
+              onSelectionChange={e => {
+                const typed = typedTextRef.current[element.id] ?? content;
+                const { start, end } = e.nativeEvent.selection;
+                setTextSelection({ start: toTyped(typed, start, opts), end: toTyped(typed, end, opts) });
+              }}
+              onScroll={e => setFieldScrollY(e.nativeEvent.contentOffset.y)}
+              onLayout={e => setFieldBoxHeight(e.nativeEvent.layout.height)}
+              autoFocus
+              multiline
+              textAlign={base.textAlign as 'left' | 'center' | 'right'}
+            >
+              {content ? renderDisplayContent(element, true) : null}
+            </TextInput>
           </View>
-          {/* Invisible-text input on top: caret and typing only */}
-          <TextInput
-            key={`editing-${element.id}`}
-            style={[
-              textStyle,
-              StyleSheet.absoluteFillObject,
-              {
-                // centred on the stage, so its scale transform (about its
-                // centre) lands it exactly over the drawn text
-                left: (inputWidth - layoutWidth) / 2,
-                width: layoutWidth,
-                color: 'transparent',
-                backgroundColor: 'transparent',
-                textShadowColor: 'transparent',
-                // on iOS a transform here rewrites the typed value itself, a
-                // keystroke late. The field always holds exactly what was
-                // typed (anything else and fast typing drops keys); with
-                // caps on, the keyboard types the capitals itself.
-                textTransform: 'none',
-              },
-            ]}
-            selectionColor={element.rainbow ? Colors.accent : element.color}
-            autoCapitalize={element.capsLock ? 'characters' : 'sentences'}
-            value={content}
-            onChangeText={(text) => handleTextInputChange(element.id, text)}
-            onSelectionChange={e => {
-              editSelection.current = e.nativeEvent.selection;
-              setTextSelection(e.nativeEvent.selection);
-            }}
-            // the caret is drawn on the drawn text (DrawnCaret): the field's
-            // own lays the text out by other rules and wanders off it
-            caretHidden
-            autoFocus
-            multiline={true}
-            scrollEnabled={false}
-            textAlign={element.align}
-          />
-        </View>
         </Pressable>
-        </ScrollView>
       </View>
     );
   };
@@ -4121,6 +4117,8 @@ const styles = StyleSheet.create({
     zIndex: 30,
   },
   // Short text sits centred in the stage; long text scrolls within it
+  outlineCopy: { position: 'absolute' },
+  clip: { overflow: 'hidden' },
   editingScrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
