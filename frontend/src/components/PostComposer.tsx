@@ -2399,9 +2399,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     // (at its slider size, across the wrap width, before the pinch scales
     // them to its size on the canvas), all of them in view - a text taller
     // than the stage is shown smaller, size and width alike, so its lines
-    // stay the same. (A hair to spare: the field spaces lines a little
-    // differently from the copy measured.)
-    const fit = stageHeight && laidHeight > stageHeight * 0.97 ? (stageHeight * 0.97) / laidHeight : 1;
+    // stay the same. (With room to spare - a quarter line, and more for
+    // each line: the field spaces lines a little wider than the copy
+    // measured, Times by 4%.)
+    const spare = currentFontSize * 0.25 + laidHeight * 0.06;
+    const fit = stageHeight ? Math.min(1, (stageHeight * 0.96) / (laidHeight + spare)) : 1;
     const inputWidth = screenWidth * TEXT_WRAP_FRACTION * fit;
     const { transform, backgroundColor, textTransform, marginRight, ...base } =
       StyleSheet.flatten(getTextStyle(element)) as TextStyle;
@@ -2429,6 +2431,23 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const decoHeight = fieldScrollY + fieldBoxHeight + 2 * currentFontSize * fit;
 
     return (
+      <>
+      {/* Unseen: the text as it will be placed, so its lines (what the post
+          is drawn with) and its height (what the stage fits) are current
+          while it is typed. Outside the stage and its own width: inside, the
+          stage narrowing to fit the text squeezed it, so it measured taller,
+          so the stage fitted it smaller, round and round */}
+      <View style={styles.unseen} pointerEvents="none" onLayout={e => setLaidHeight(e.nativeEvent.layout.height)}>
+        <OutlinedText
+          style={[getTextStyle(element), { transform: [], fontSize: currentFontSize }]}
+          outlineColor={null}
+          outlineWidth={0}
+          plain={displayPlain(element)}
+          onLines={recordLines(element)}
+        >
+          {renderDisplayContent(element)}
+        </OutlinedText>
+      </View>
       <View
         style={[styles.editingStage, {
           left: (screenWidth - inputWidth) / 2,
@@ -2440,19 +2459,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         pointerEvents="box-none"
         onLayout={e => setStageHeight(e.nativeEvent.layout.height)}
       >
-        {/* Unseen: the text as it will be placed, so its lines (what the
-            post is drawn with) are current while it is typed */}
-        <View style={styles.unseen} pointerEvents="none" onLayout={e => setLaidHeight(e.nativeEvent.layout.height)}>
-          <OutlinedText
-            style={[getTextStyle(element), { transform: [], fontSize: currentFontSize }]}
-            outlineColor={null}
-            outlineWidth={0}
-            plain={displayPlain(element)}
-            onLines={recordLines(element)}
-          >
-            {renderDisplayContent(element)}
-          </OutlinedText>
-        </View>
         {/* The stage covers the canvas while typing, so it passes a tap off
             the text on as a canvas tap: that is what finishes editing */}
         <Pressable style={styles.editingScrollContent} onPress={handleCanvasTap}>
@@ -2506,7 +2512,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 // as tall as the text measures (a field sizing itself kept
                 // its old height when the font or its size changed, and
                 // scrolled its first lines out of view), with a line spare
-                ...(laidHeight ? { height: laidHeight * fit + currentFontSize * fit * 0.25 } : {}),
+                ...(laidHeight ? { height: (laidHeight + spare) * fit } : {}),
                 maxHeight: stageHeight || undefined, backgroundColor: 'transparent',
               }]}
               selectionColor={element.rainbow ? Colors.accent : element.color}
@@ -2542,6 +2548,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           </View>
         </Pressable>
       </View>
+      </>
     );
   };
 
@@ -4190,7 +4197,11 @@ const styles = StyleSheet.create({
   outlineCopy: { position: 'absolute' },
   clip: { overflow: 'hidden' },
   // the text being edited, laid out as it will be placed, to read its lines
-  unseen: { position: 'absolute', left: 0, top: 0, opacity: 0, maxWidth: screenWidth * TEXT_WRAP_FRACTION },
+  // (the placed text's box: up to the wrap width, as wide as its lines)
+  unseen: {
+    position: 'absolute', left: 0, top: 0, opacity: 0,
+    width: screenWidth * TEXT_WRAP_FRACTION, alignItems: 'center',
+  },
   editingScrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
