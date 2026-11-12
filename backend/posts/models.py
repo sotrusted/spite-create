@@ -138,17 +138,17 @@ class Post(models.Model):
     
     # Font choices for text rendering
     FONT_CHOICES = [
-        ('arial-black', 'Arial Black'),
+        ('arial-black', 'Arial'),
         ('crimson-text', 'Crimson Text'),
         ('papyrus', 'Papyrus'),
         ('impact', 'Impact'),
         ('courier-prime', 'Courier Prime'),
         ('cabin-sketch', 'Cabin Sketch'),
-        ('freeride', 'Freeride'),
+        ('freeride', 'Arcadia'),
         ('fredericka', 'Fredericka the Great'),
-        ('grutch-shaded', 'Grutch Shaded'),
+        ('grutch-shaded', 'Panda'),
         ('petit-formal', 'Petit Formal Script'),
-        ('lexend-exa', 'Lexend Exa'),
+        ('lexend-exa', 'Taipei'),
         ('caveat', 'Caveat'),
         ('monocraft', 'Monocraft'),
         ('cavalhatriz', 'Cavalhatriz'),

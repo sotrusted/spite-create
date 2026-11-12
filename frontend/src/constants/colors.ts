@@ -76,7 +76,7 @@ export const resolveFontFace = (
 
 export const FontChoices = {
   'arial-black': {
-    name: 'Arial Black',
+    name: 'Arial',
     fontFamily: 'ArialBlack',
     fontWeight: 'normal' as const,
   },
@@ -114,7 +114,7 @@ export const FontChoices = {
     variants: { bold: 'CabinSketchBold' },
   },
   'freeride': {
-    name: 'Freeride',
+    name: 'Arcadia',
     fontFamily: 'Freeride',
     fontWeight: 'normal' as const,
   },
@@ -125,7 +125,7 @@ export const FontChoices = {
     fontWeight: 'normal' as const,
   },
   'grutch-shaded': {
-    name: 'Grutch',
+    name: 'Panda',
     fontFamily: 'GrutchShaded',
     fontWeight: 'normal' as const,
   },
@@ -137,7 +137,7 @@ export const FontChoices = {
   },
   'lexend-exa': {
     // Wide and light; static instances cut from the variable font (OFL)
-    name: 'Exa',
+    name: 'Taipei',
     fontFamily: 'LexendExaLight',
     fontWeight: 'normal' as const,
     variants: { bold: 'LexendExaSemiBold' },
