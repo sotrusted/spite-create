@@ -1864,7 +1864,12 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       place.x.value = h.base.x + h.dx;
       place.y.value = h.base.y + h.dy;
     }
+    followHold(h);
   };
+  // The crop guides, as the hold moves and sizes its text
+  const cropFollow = useRef<((live: LivePlace | null) => void) | null>(null);
+  const followHold = (h: Hold | null) =>
+    cropFollow.current?.(h && { id: h.id, x: h.base.x + h.dx, y: h.base.y + h.dy, scale: h.scale });
   const releaseHold = (elementId: string, part: 'pan' | 'pinch') => {
     const h = hold.current;
     if (!h || h.id !== elementId) return;
@@ -1873,12 +1878,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (part === 'pinch') h.engagedAt = null;
     if (h.pan || h.pinch) return;
     hold.current = null;
+    followHold(null);
     if (h.dx || h.dy || h.scale !== h.base.scale) {
       updateTextElement(elementId, { x: h.base.x + h.dx, y: h.base.y + h.dy, scale: h.scale });
     }
   };
   const dropHold = () => {
     hold.current = null;
+    followHold(null);
   };
 
   // A text's drag is the canvas's own: one view takes every finger of a
@@ -1975,7 +1982,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // Its focal point moves the text too, unless the text's own pan (on the
   // same fingers) is already moving it.
   const handlePinchGesture = (phase: Phase, e: any, elementId: string) => {
-    const { scale, focalX, focalY } = e;
+    const { scale, focalX, focalY, numberOfPointers } = e;
     // (a pinch ends however it ends, editing or not)
     if (phase === 'end') {
       releaseHold(elementId, 'pinch');
@@ -1987,7 +1994,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (!h) return;
     if (!h.pinch) { h.pinch = true; h.anchor = h.pan ? h.anchor : null; }
     if (phase !== 'active' || !scale) return;
-    if (!h.pan) followTouch(h, 'pinch', focalX, focalY);
+    // (keyed by the finger count, like the pan's centroid: as the first of
+    // two fingers lifts, the focal point jumps to the other one - half the
+    // spread - and the text was thrown along with it)
+    if (!h.pan) followTouch(h, `pinch:${numberOfPointers}`, focalX, focalY);
     if (h.engagedAt === null) {
       if (Math.abs(Math.log(scale)) < Math.log(1 + GESTURES.pinch.deadZone)) return;
       // a pinch that lets go and takes hold again in one hold resumes
@@ -1998,6 +2008,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       h.base.scale * Math.pow(scale / h.engagedAt, GESTURES.pinch.gain)));
     const place = placements.current[h.id];
     if (place) place.scale.value = h.scale;
+    followHold(h);
   };
 
 
@@ -2349,6 +2360,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const [stageHeight, setStageHeight] = useState(0);
   const [fieldBoxHeight, setFieldBoxHeight] = useState(0);
   const [fieldScrollY, setFieldScrollY] = useState(0);
+  // the text's height laid out at its slider size (the unseen copy)
+  const [laidHeight, setLaidHeight] = useState(0);
   const [configBarTop, setConfigBarTop] = useState<number | null>(null);
   // The config row rides on the keyboard: its height (suggestion row and
   // all) varies by phone and keyboard, so it is measured, never assumed
@@ -2382,13 +2395,26 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const opts = fieldOptions(element);
     // (from the typed text as of the last keystroke, which a render can lag)
     fieldDrawn.current = fieldText(typedTextRef.current[element.id] ?? content, opts);
-    // Typing, the text is shown to fit the screen: at its slider size,
-    // across the wrap width - its lines as placed, before the pinch scales
-    // them to its size on the canvas
-    const inputWidth = screenWidth * TEXT_WRAP_FRACTION;
+    // Typing, the text is shown to fit the screen: its lines as placed
+    // (at its slider size, across the wrap width, before the pinch scales
+    // them to its size on the canvas), all of them in view - a text taller
+    // than the stage is shown smaller, size and width alike, so its lines
+    // stay the same. (A hair to spare: the field spaces lines a little
+    // differently from the copy measured.)
+    const fit = stageHeight && laidHeight > stageHeight * 0.97 ? (stageHeight * 0.97) / laidHeight : 1;
+    const inputWidth = screenWidth * TEXT_WRAP_FRACTION * fit;
     const { transform, backgroundColor, textTransform, marginRight, ...base } =
       StyleSheet.flatten(getTextStyle(element)) as TextStyle;
-    const fieldStyle: TextStyle = { ...base, fontSize: currentFontSize, width: inputWidth };
+    const fitted = (v: unknown) => Number(v ?? 0) * fit;
+    const fieldStyle: TextStyle = {
+      ...base,
+      fontSize: currentFontSize * fit,
+      letterSpacing: fitted(base.letterSpacing),
+      paddingHorizontal: fitted(base.paddingHorizontal),
+      paddingVertical: fitted(base.paddingVertical),
+      ...(base.textShadowRadius ? { textShadowRadius: fitted(base.textShadowRadius) } : {}),
+      width: inputWidth,
+    };
     const chip = backgroundColor && backgroundColor !== 'transparent' ? String(backgroundColor) : null;
     const outlineColor = content ? outlineColorFor(element) : null;
     const decorated = !!content && (!!chip || !!outlineColor);
@@ -2396,11 +2422,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     // room to spare (a text cut short drops its last line; their own
     // measure falls a line short), and are clipped to the field's box -
     // with a margin for the border, which rings the letters from outside
-    const ring = currentFontSize * OUTLINE.widthEm;
+    const ring = currentFontSize * fit * OUTLINE.widthEm;
     const margin = 2 * ring + 1;
     // scrolled, lines run on past the box's top and bottom: cut them there
     const marginY = fieldScrollY > 0 ? 0 : margin;
-    const decoHeight = fieldScrollY + fieldBoxHeight + 2 * currentFontSize;
+    const decoHeight = fieldScrollY + fieldBoxHeight + 2 * currentFontSize * fit;
 
     return (
       <View
@@ -2416,7 +2442,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       >
         {/* Unseen: the text as it will be placed, so its lines (what the
             post is drawn with) are current while it is typed */}
-        <View style={styles.unseen} pointerEvents="none">
+        <View style={styles.unseen} pointerEvents="none" onLayout={e => setLaidHeight(e.nativeEvent.layout.height)}>
           <OutlinedText
             style={[getTextStyle(element), { transform: [], fontSize: currentFontSize }]}
             outlineColor={null}
@@ -2476,7 +2502,13 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
             <TextInput
               key={`editing-${element.id}`}
               ref={fieldRef}
-              style={[fieldStyle, { maxHeight: stageHeight || undefined, backgroundColor: 'transparent' }]}
+              style={[fieldStyle, {
+                // as tall as the text measures (a field sizing itself kept
+                // its old height when the font or its size changed, and
+                // scrolled its first lines out of view), with a line spare
+                ...(laidHeight ? { height: laidHeight * fit + currentFontSize * fit * 0.25 } : {}),
+                maxHeight: stageHeight || undefined, backgroundColor: 'transparent',
+              }]}
               selectionColor={element.rainbow ? Colors.accent : element.color}
               // with caps on the keyboard types capitals, so what it holds is
               // what is drawn; they are kept lower case (utils/editField)
@@ -2580,10 +2612,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // Projected feed crop for the current canvas, mirroring the backend's
   // bounds math: content extent + margin, capped at the max post aspect
   // (5:4 portrait) centered on the content
-  const getProjectedCropBounds = () => {
+  const getProjectedCropBounds = (live: LivePlace | null = null) => {
     const measured = textElements.filter(
       el => el.content.trim() && textInkSizes[el.id]
-    );
+    ).map(el => (live?.id === el.id ? { ...el, ...live } : el));
     if (measured.length === 0 && !stripRect) return null;
 
     let top = Infinity;
@@ -2675,12 +2707,13 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // The card the feed will actually show: the projected content crop run
   // through the same displayCropBounds the feed uses (chrome floor + [Aa]
   // clearance), fed with this canvas's content boxes. Screen points in and out.
-  const getProjectedDisplayCrop = () => {
-    const bounds = getProjectedCropBounds();
+  const getProjectedDisplayCrop = (live: LivePlace | null = null) => {
+    const bounds = getProjectedCropBounds(live);
     if (!bounds) return null;
     const k = CANVAS_WIDTH / screenWidth;
     const boxes: number[][] = textElements
       .filter(el => el.content.trim() && textInkSizes[el.id])
+      .map(el => (live?.id === el.id ? { ...el, ...live } : el))
       .map(el => {
         const w = textInkSizes[el.id].width * el.scale;
         const h = textInkSizes[el.id].height * el.scale;
@@ -2695,25 +2728,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     return { top: crop.topY / k, bottom: crop.bottomY / k };
   };
 
-  // Adaptive crop guides: hairlines showing where the feed will crop
+  // Adaptive crop guides: hairlines showing where the feed will crop.
+  // They follow a text as it is dragged or pinched (CropGuides).
   const renderCropGuides = () => {
     // With a quote in the canvas the crop is anchored by the strip, so the
     // guides just drew white hairlines around the OP - noise, not
     // information. The bounds themselves still include the strip.
     if (isEditingText || backgroundImage || stripRect) return null;
-    const bounds = getProjectedDisplayCrop();
-    if (!bounds) return null;
-    if (bounds.top <= 0 && bounds.bottom >= screenHeight) return null;
-
-    return (
-      <>
-        {/* Dim what the feed will crop away */}
-        <View pointerEvents="none" style={[styles.cropOutsideDim, { top: 0, height: bounds.top }]} />
-        <View pointerEvents="none" style={[styles.cropOutsideDim, { top: bounds.bottom, bottom: 0 }]} />
-        <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.top }]} />
-        <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.bottom }]} />
-      </>
-    );
+    return <CropGuides crop={getProjectedDisplayCrop} screenHeight={screenHeight} follow={cropFollow} />;
   };
 
   // Trash can component that appears during drag
@@ -3729,6 +3751,35 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       {renderDraftsDrawer()}
       {renderParityGhost()}
     </View>
+  );
+}
+
+// A held text's place and size before the hold commits them
+type LivePlace = { id: string; x: number; y: number; scale: number };
+
+// The crop guides, drawn on their own so a drag or pinch redraws only them:
+// the hold reports its text's live place (follow), and the guides show the
+// crop with it there
+function CropGuides({ crop, screenHeight, follow }: {
+  crop: (live: LivePlace | null) => { top: number; bottom: number } | null;
+  screenHeight: number;
+  follow: React.MutableRefObject<((live: LivePlace | null) => void) | null>;
+}) {
+  const [live, setLive] = useState<LivePlace | null>(null);
+  useEffect(() => {
+    follow.current = setLive;
+    return () => { follow.current = null; };
+  }, [follow]);
+  const bounds = crop(live);
+  if (!bounds || (bounds.top <= 0 && bounds.bottom >= screenHeight)) return null;
+  return (
+    <>
+      {/* Dim what the feed will crop away */}
+      <View pointerEvents="none" style={[styles.cropOutsideDim, { top: 0, height: bounds.top }]} />
+      <View pointerEvents="none" style={[styles.cropOutsideDim, { top: bounds.bottom, bottom: 0 }]} />
+      <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.top }]} />
+      <View pointerEvents="none" style={[styles.cropGuideLine, { top: bounds.bottom }]} />
+    </>
   );
 }
 

@@ -19,6 +19,18 @@ remember why, not just what.
   the lines change. While typing, the text is shown at that layout, filling
   the screen's width whatever its size on the canvas.
 - No limit on a post's length (the 500 characters are gone).
+- **Typing, the whole text is in view.** A text taller than the space
+  above the keyboard is shown smaller - size and width by the same factor,
+  so its lines stay the same - and the field is given the height the text
+  measures (sizing itself, it kept its old height when the font or size
+  changed and scrolled its first lines away).
+- **A pinch is not thrown by a lifting finger.** Its focal point is
+  measured afresh when the finger count changes, as the drag's is: the
+  first finger up moved the focal point by half the spread, and the text
+  with it. Fixed at the cause rather than damped by speed, so nothing
+  slows the pinch down.
+- The crop guides follow a text while it is dragged or pinched; only they
+  redraw.
 
 ## 2026-11-11 - The text field is the text while typing
 
