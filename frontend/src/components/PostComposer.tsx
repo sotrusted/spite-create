@@ -58,6 +58,8 @@ import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextCo
 import OutlinedText, { OUTLINE_STEPS } from './OutlinedText';
 import PlacedText, { Placement } from './PlacedText';
 import { capsOf, fieldText, FieldOptions, readEdit, toField, toTyped } from '../utils/editField';
+import { softBreaks } from '../utils/lineBreaks';
+import type { LineBox } from '../utils/lineChips';
 import { stripEmoji } from '../utils/emoji';
 import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
@@ -1138,10 +1140,13 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     return {
       screenWidth,
       screenHeight,
-      textElements: textElements.map(el => ({
-        ...el,
-        content: localTextContent[el.id] !== undefined ? localTextContent[el.id] : el.content,
-      })),
+      textElements: textElements.map(el => {
+        const content = localTextContent[el.id] !== undefined ? localTextContent[el.id] : el.content;
+        // the lines as laid out, if they were laid out from this text
+        const laid = lineBreaks.current[el.id];
+        const breaks = laid && laid.typed === content.replace(/\s+$/, '') ? laid.breaks : undefined;
+        return { ...el, content, breaks };
+      }),
       stickerElements,
       backgroundColor,
       backgroundGradient,
@@ -1486,10 +1491,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     console.log('📝 Local text content before commit:', localTextContent);
     console.trace('📍 stopEditingText call stack');
     
-    // Commit any local text changes and font size to actual state before stopping edit mode
+    // Commit any local text changes and font size to actual state before
+    // stopping edit mode. The slider sets how the text wraps, not its size
+    // on the canvas: the scale takes up the change, so the letters stay as
+    // big as they were and only the lines change.
     Object.entries(localTextContent).forEach(([id, content]) => {
-      console.log(`💾 Committing text for element ${id}:`, content);
-      updateTextElement(id, { content, fontSize: currentFontSize });
+      const el = textElements.find(e => e.id === id);
+      const scale = el ? (el.scale || 1) * el.fontSize / currentFontSize : undefined;
+      updateTextElement(id, { content, fontSize: currentFontSize, ...(scale ? { scale } : {}) });
     });
     
     setIsEditingText(false);
@@ -2259,10 +2268,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
             }}
           >
             {/* (it is moved and sized by the canvas's gestures: see textUnder) */}
-            {/* Pinch scales the drawn text (a transform), but the server lays
-                it out again at fontSize x scale and wraps at the canvas's
-                wrap width: so the unscaled layout wraps at that width / scale */}
-            <AnimatedReanimated.View style={[styles.textElement, { maxWidth: screenWidth * TEXT_WRAP_FRACTION / (element.scale || 1) }]}>
+            {/* The text wraps at the wrap width at its slider size; a pinch
+                scales the laid-out block (a transform), lines and all */}
+            <AnimatedReanimated.View style={[styles.textElement]}>
               {isEditingText && selectedTextId === element.id ? (
                 // The editing input is rendered at canvas level (see
                 // renderEditingInput) so it centers on the element anchor
@@ -2279,6 +2287,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                     outlineColor={outlineColorFor(element)}
                     outlineWidth={element.fontSize * OUTLINE.widthEm}
                     plain={displayPlain(element)}
+                    onLines={recordLines(element)}
                     onLayout={(event) => {
                       // True text block size (unlike the 120px-min touch
                       // area), used by the adaptive crop guides
@@ -2312,6 +2321,19 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // text returns there on commit.
   const EDITING_STAGE_BOTTOM = 395; // top edge of the config row area
   const fieldRef = useRef<TextInput>(null);
+  // Where each text's lines break, as iOS laid out its placed text (offsets
+  // into the typed text it was laid out from): the post is drawn with these
+  // lines (utils/lineBreaks)
+  const lineBreaks = useRef<Record<string, { typed: string; breaks: number[] }>>({});
+  const recordLines = (element: TextElement) => (lines: LineBox[]) => {
+    const typed = drawnText(element);
+    const breaks = softBreaks(lines, displayPlain(element));
+    if (breaks) {
+      lineBreaks.current[element.id] = { typed, breaks: breaks.map(b => toTyped(typed, b, fieldOptions(element))) };
+    } else {
+      delete lineBreaks.current[element.id];
+    }
+  };
   // what the field was last given to draw, and where its caret goes when
   // what it holds had to be redrawn (a marker, caps, a dropped emoji)
   const fieldDrawn = useRef('');
@@ -2356,26 +2378,17 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const element = textElements.find(el => el.id === selectedTextId);
     if (!element) return null;
 
-    const inputWidth = screenWidth * TEXT_WRAP_FRACTION;
     const content = getDisplayText(element);
     const opts = fieldOptions(element);
     // (from the typed text as of the last keystroke, which a render can lag)
     fieldDrawn.current = fieldText(typedTextRef.current[element.id] ?? content, opts);
-    // The text at its pinch scale, laid out at the wrap width - not a
-    // smaller text magnified, which iOS's selection does not follow
-    const scale = element.scale || 1;
+    // Typing, the text is shown to fit the screen: at its slider size,
+    // across the wrap width - its lines as placed, before the pinch scales
+    // them to its size on the canvas
+    const inputWidth = screenWidth * TEXT_WRAP_FRACTION;
     const { transform, backgroundColor, textTransform, marginRight, ...base } =
       StyleSheet.flatten(getTextStyle(element)) as TextStyle;
-    const scaled = (v: unknown) => Number(v ?? 0) * scale;
-    const fieldStyle: TextStyle = {
-      ...base,
-      fontSize: currentFontSize * scale,
-      letterSpacing: scaled(base.letterSpacing),
-      paddingHorizontal: scaled(base.paddingHorizontal),
-      paddingVertical: scaled(base.paddingVertical),
-      ...(base.textShadowRadius ? { textShadowRadius: scaled(base.textShadowRadius) } : {}),
-      width: inputWidth,
-    };
+    const fieldStyle: TextStyle = { ...base, fontSize: currentFontSize, width: inputWidth };
     const chip = backgroundColor && backgroundColor !== 'transparent' ? String(backgroundColor) : null;
     const outlineColor = content ? outlineColorFor(element) : null;
     const decorated = !!content && (!!chip || !!outlineColor);
@@ -2383,11 +2396,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     // room to spare (a text cut short drops its last line; their own
     // measure falls a line short), and are clipped to the field's box -
     // with a margin for the border, which rings the letters from outside
-    const ring = currentFontSize * scale * OUTLINE.widthEm;
+    const ring = currentFontSize * OUTLINE.widthEm;
     const margin = 2 * ring + 1;
     // scrolled, lines run on past the box's top and bottom: cut them there
     const marginY = fieldScrollY > 0 ? 0 : margin;
-    const decoHeight = fieldScrollY + fieldBoxHeight + 2 * currentFontSize * scale;
+    const decoHeight = fieldScrollY + fieldBoxHeight + 2 * currentFontSize;
 
     return (
       <View
@@ -2401,6 +2414,19 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         pointerEvents="box-none"
         onLayout={e => setStageHeight(e.nativeEvent.layout.height)}
       >
+        {/* Unseen: the text as it will be placed, so its lines (what the
+            post is drawn with) are current while it is typed */}
+        <View style={styles.unseen} pointerEvents="none">
+          <OutlinedText
+            style={[getTextStyle(element), { transform: [], fontSize: currentFontSize }]}
+            outlineColor={null}
+            outlineWidth={0}
+            plain={displayPlain(element)}
+            onLines={recordLines(element)}
+          >
+            {renderDisplayContent(element)}
+          </OutlinedText>
+        </View>
         {/* The stage covers the canvas while typing, so it passes a tap off
             the text on as a canvas tap: that is what finishes editing */}
         <Pressable style={styles.editingScrollContent} onPress={handleCanvasTap}>
@@ -4112,6 +4138,8 @@ const styles = StyleSheet.create({
   // Short text sits centred in the stage; long text scrolls within it
   outlineCopy: { position: 'absolute' },
   clip: { overflow: 'hidden' },
+  // the text being edited, laid out as it will be placed, to read its lines
+  unseen: { position: 'absolute', left: 0, top: 0, opacity: 0, maxWidth: screenWidth * TEXT_WRAP_FRACTION },
   editingScrollContent: {
     flexGrow: 1,
     justifyContent: 'center',

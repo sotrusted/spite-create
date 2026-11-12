@@ -458,6 +458,13 @@ class Post(models.Model):
                 for start, end, color in runs:
                     per_char[start:end] = [color] * (end - start)
                 char_colors = [per_char[i] for i in kept]
+            # The composer's line breaks (offsets into the content), when it
+            # sent them: the lines are drawn exactly as it laid them out
+            breaks = None
+            if isinstance(element.get('breaks'), list):
+                from bisect import bisect_left
+                breaks = sorted({bisect_left(kept, b) for b in element['breaks']
+                                 if isinstance(b, int) and 0 < b < len(raw)})
 
             normalized_element = {
                 'content': content,
@@ -494,8 +501,11 @@ class Post(models.Model):
                 markers = {'bullet': '\u2022 ', 'dash': '- ', 'star': '* '}
                 prefixed_colors = [] if char_colors is not None else None
                 offset = 0
+                shift = 0  # marker characters added before this line
+                moved_breaks = []
                 for line in lines:
                     line_colors = char_colors[offset:offset + len(line)] if char_colors is not None else None
+                    line_start = offset
                     offset += len(line) + 1  # the newline
                     if not line.strip():
                         prefixed.append(line)
@@ -507,16 +517,21 @@ class Post(models.Model):
                     else:
                         marker = markers[normalized_element['listStyle']]
                         prefixed.append(marker + line)
+                    shift += len(marker)
+                    if breaks:
+                        moved_breaks += [b + shift for b in breaks if line_start < b < offset]
                     if prefixed_colors is not None:
                         if prefixed_colors:
                             prefixed_colors.append(None)  # the newline
                         prefixed_colors.extend([None] * len(marker) + line_colors)
+                if breaks is not None:
+                    breaks = moved_breaks
                 content = '\n'.join(prefixed)
                 char_colors = prefixed_colors
                 normalized_element['content'] = content
                 normalized_element['align'] = 'left'
 
-            # Wrapping below only turns spaces into line breaks, so colours are
+            # Wrapping below only adds line breaks and drops spaces, so colours are
             # kept per visible (non-space) character: the drawing loop counts
             # those the same way, whatever the wrapping did
             if char_colors is not None:
@@ -536,14 +551,18 @@ class Post(models.Model):
                         k += 1
                 normalized_element['charColors'] = visible if any(visible) else None
 
-            # The composer displays text in an input that is 90 percent of the
-            # canvas width and wraps it. PIL only breaks on explicit newlines,
-            # so wrap here to keep the rendered layout close to the preview.
-            font = self._get_font_for_element(normalized_element)
-            normalized_element['content'] = self._wrap_text_to_width(
-                content, font, width * 0.9,
-                letter_spacing=normalized_element['letterSpacing'],
-            )
+            # The lines break where the composer's broke: iOS laid them out,
+            # and a second wrapper here would break some differently. A post
+            # without them (an older app) is wrapped here to the composer's
+            # wrap width, 90 percent of the canvas.
+            if breaks is not None:
+                normalized_element['content'] = self._break_at(content, breaks)
+            else:
+                font = self._get_font_for_element(normalized_element)
+                normalized_element['content'] = self._wrap_text_to_width(
+                    content, font, width * 0.9,
+                    letter_spacing=normalized_element['letterSpacing'],
+                )
 
             normalized.append(normalized_element)
 
@@ -557,6 +576,18 @@ class Post(models.Model):
         if len(text) > 1:
             width += letter_spacing * (len(text) - 1)
         return width
+
+    @staticmethod
+    def _break_at(content, breaks):
+        """The content with a line break at each offset. The spaces a line
+        ends on at a break go (iOS hangs them past the line's end)."""
+        lines, start = [], 0
+        for b in breaks:
+            if start < b < len(content) and content[b - 1] != '\n' and content[b] != '\n':
+                lines.append(content[start:b].rstrip(' '))
+                start = b
+        lines.append(content[start:])
+        return '\n'.join(lines)
 
     def _wrap_text_to_width(self, content, font, max_width, letter_spacing=0):
         """Word-wrap text so no line exceeds max_width at the given font."""

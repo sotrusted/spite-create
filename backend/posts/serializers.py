@@ -284,6 +284,14 @@ class PostSerializer(serializers.ModelSerializer):
                                                   f'{limits.MAX_COLOR_RUNS} ranges')
             if runs and len(kept) < len(raw):
                 element['colorRuns'] = _follow_kept(runs, kept)
+            # Where the composer's lines break (offsets into the typed text):
+            # moved onto the sanitised text like the colours. Anything
+            # malformed goes, and the server wraps the text itself.
+            breaks = element.pop('breaks', None)
+            if (isinstance(breaks, list) and len(breaks) <= len(raw)
+                    and all(isinstance(b, int) and not isinstance(b, bool) and 0 < b <= len(raw) for b in breaks)):
+                from bisect import bisect_left
+                element['breaks'] = sorted({bisect_left(kept, b) for b in breaks})
             cleaned.append(element)
         return cleaned
 

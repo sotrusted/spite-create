@@ -3,6 +3,7 @@ import { ColorRun, runsToCodePoints } from './colorRuns';
 import { LIMITS } from '../constants/limits';
 import type { OutlineSetting } from '../constants/textStyle';
 import { resolveOutlineColor } from './outline';
+import { breaksToCodePoints } from './lineBreaks';
 
 // Inside the range the API accepts (it would clamp anyway; this keeps the
 // payload honest about what will be drawn)
@@ -14,8 +15,10 @@ const clampFontSize = (px: number) => Math.min(Math.max(px, LIMITS.fontSizeMin),
 // device aspect ratio to keep the composer full-bleed.
 export const CANVAS_WIDTH = 1080;
 
-// The composer's text input is 90 percent of the screen width; the backend
-// wraps rendered text to the same fraction of the canvas.
+// The composer's text wraps at 90 percent of the screen width (at its
+// slider size; a pinch scales the wrapped block). The lines it makes are
+// sent (breaks), and the server draws those; it wraps at the same fraction
+// of the canvas only a post sent without them.
 export const TEXT_WRAP_FRACTION = 0.9;
 
 export interface ComposerTextElement {
@@ -42,6 +45,9 @@ export interface ComposerTextElement {
   underline?: boolean;
   opacity?: number;
   listStyle?: 'none' | 'bullet' | 'dash' | 'star' | 'number';
+  // where its laid-out lines start, other than after a typed line break
+  // (UTF-16 offsets into content; utils/lineBreaks)
+  breaks?: number[];
   backgroundMode?: 'off' | 'white' | 'inverted';
 }
 
@@ -150,6 +156,9 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       underline: !!el.underline,
       opacity: el.opacity ?? 1,
       listStyle: el.listStyle || 'none',
+      ...(el.breaks
+        ? { breaks: breaksToCodePoints(el.content, el.breaks, el.capsLock ? ch => ch.toUpperCase() : undefined) }
+        : {}),
       };
     }) as PostCreate['text_elements'],
     sticker_elements: s.stickerElements.map(sticker => ({

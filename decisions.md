@@ -3,6 +3,23 @@
 Product and design decisions, newest first. One line of context each so we
 remember why, not just what.
 
+## 2026-11-12 - The phone owns the line breaks; slider wraps, pinch sizes
+
+- **The post has the lines the composer showed** (utils/lineBreaks). The
+  server used to wrap the text again with its own word-wrap (spaces only,
+  its own font measure), so lines broke differently in the feed: after a
+  hyphen, inside a long word, or a hair from the edge. Now the composer
+  reads the lines iOS laid out on the placed text and sends where they
+  break (`breaks`, code points); the server breaks there and nowhere else.
+  It wraps by itself only for a post sent without them (an older app).
+- **The slider sets the wrap, the pinch sets the size.** A text is laid
+  out once, at its slider size across the wrap width (90% of the screen),
+  and the pinch scales that block, lines and all. Moving the slider changes
+  the scale to match, so the letters keep their size on the canvas and only
+  the lines change. While typing, the text is shown at that layout, filling
+  the screen's width whatever its size on the canvas.
+- No limit on a post's length (the 500 characters are gone).
+
 ## 2026-11-11 - The text field is the text while typing
 
 - **While typing, the field is what you see** (utils/editField). A styled

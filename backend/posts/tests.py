@@ -1351,6 +1351,33 @@ class WrapSpacingTests(RenderTestCase):
         self.assertEqual(wrapped.replace('\n', ' '), 'aaaa bbbb cccc')
 
 
+class LineBreakTests(RenderTestCase):
+    """The composer sends where iOS broke its lines; the render breaks there
+    and nowhere else, so the post has the lines the composer showed."""
+
+    def lines(self, content, breaks, **element):
+        post = Post(author=self.user, image_width=CANVAS_WIDTH, image_height=CANVAS_HEIGHT)
+        post._text_elements_data = [dict(text_element(content), breaks=breaks, **element)]
+        return post._collect_text_elements()[0]['content'].split('\n')
+
+    def test_breaks_where_the_composer_did(self):
+        # a line the server's own wrap would keep whole is broken where iOS broke it
+        self.assertEqual(self.lines('one two three', [4]), ['one', 'two three'])
+
+    def test_no_breaks_means_one_line_however_long(self):
+        self.assertEqual(self.lines('word ' * 40, []), [('word ' * 40).strip()])
+
+    def test_a_long_word_breaks_inside_it(self):
+        self.assertEqual(self.lines('abcdefgh', [4]), ['abcd', 'efgh'])
+
+    def test_typed_line_breaks_stay(self):
+        self.assertEqual(self.lines('ab cd\nef', [3]), ['ab', 'cd', 'ef'])
+
+    def test_breaks_follow_list_markers(self):
+        self.assertEqual(self.lines('one two\nthree', [4], listStyle='bullet'),
+                         ['\u2022 one', 'two', '\u2022 three'])
+
+
 class QuoteCropTests(RenderTestCase):
     """A quote shows the band of the original it was made from, frozen in
     repost_geometry, so recomputing the original's bounds never moves it."""
@@ -1472,6 +1499,21 @@ class PayloadValidationTests(TestCase):
     def test_text_has_no_length_limit(self):
         long = {'content': 'x' * 2000, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}
         self.assertEqual(self.post(self.payload(text_elements=[long, dict(long, y=1400)])).status_code, 201)
+
+    def test_breaks_follow_dropped_characters(self):
+        # the emoji goes, so the break after "ab " moves back onto "cd"
+        long = {'content': '\U0001F600ab cd', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+                'breaks': [4]}  # code points, as the client sends them
+        response = self.post(self.payload(text_elements=[long]))
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Post.objects.get(id=response.json()['id']).text_elements[0]['breaks'], [3])
+
+    def test_malformed_breaks_are_dropped(self):
+        element = {'content': 'ab cd', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+                   'breaks': ['3', 99]}
+        response = self.post(self.payload(text_elements=[element]))
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn('breaks', Post.objects.get(id=response.json()['id']).text_elements[0])
 
     def test_canvas_size_is_bounded(self):
         self.assertEqual(self.post(self.payload(canvas_height=100_000)).status_code, 400)
