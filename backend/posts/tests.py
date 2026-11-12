@@ -1412,7 +1412,7 @@ class LimitsTests(TestCase):
             'canvasWidth': limits.CANVAS_WIDTH, 'canvasHeightMin': limits.CANVAS_HEIGHT_MIN,
             'canvasHeightMax': limits.CANVAS_HEIGHT_MAX, 'fontSizeMin': limits.FONT_SIZE_MIN,
             'fontSizeMax': limits.FONT_SIZE_MAX, 'maxTextElements': limits.MAX_TEXT_ELEMENTS,
-            'maxPostLength': limits.MAX_POST_LENGTH, 'gradientStopsMin': limits.GRADIENT_STOPS_MIN,
+            'gradientStopsMin': limits.GRADIENT_STOPS_MIN,
             'gradientStopsMax': limits.GRADIENT_STOPS_MAX, 'maxColorRuns': limits.MAX_COLOR_RUNS,
             'quoteChainDepth': limits.QUOTE_CHAIN_DEPTH,
         }
@@ -1469,9 +1469,9 @@ class PayloadValidationTests(TestCase):
             {'content': 'buy spam now', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}])
         self.assertEqual(self.post(body).status_code, 400)
 
-    def test_length_counts_every_element(self):
-        long = {'content': 'x' * 300, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}
-        self.assertEqual(self.post(self.payload(text_elements=[long, dict(long, y=1400)])).status_code, 400)
+    def test_text_has_no_length_limit(self):
+        long = {'content': 'x' * 2000, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}
+        self.assertEqual(self.post(self.payload(text_elements=[long, dict(long, y=1400)])).status_code, 201)
 
     def test_canvas_size_is_bounded(self):
         self.assertEqual(self.post(self.payload(canvas_height=100_000)).status_code, 400)

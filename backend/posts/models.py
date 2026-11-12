@@ -192,7 +192,7 @@ class Post(models.Model):
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='posts')
     
     # Text content
-    text_content = models.TextField(max_length=500)
+    text_content = models.TextField()
     
     # NEW: Multiple text elements support
     text_elements = models.JSONField(null=True, blank=True, help_text="Array of text elements with positioning and styling")

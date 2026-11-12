@@ -6,7 +6,6 @@
   "fontSizeMin": 4,
   "fontSizeMax": 2000,
   "maxTextElements": 30,
-  "maxPostLength": 500,
   "gradientStopsMin": 2,
   "gradientStopsMax": 8,
   "maxColorRuns": 200,

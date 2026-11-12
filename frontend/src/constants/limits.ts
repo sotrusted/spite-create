@@ -8,7 +8,6 @@ export const LIMITS = {
   fontSizeMin: 4, // canvas px
   fontSizeMax: 2000,
   maxTextElements: 30,
-  maxPostLength: 500, // all elements' text together
   gradientStopsMin: 2,
   gradientStopsMax: 8,
   maxColorRuns: 200,

@@ -429,14 +429,10 @@ class PostSerializer(serializers.ModelSerializer):
         return post
     
     def validate_text_content(self, value):
-        """Validate text content length and content"""
+        """Validate text content"""
         from django.conf import settings
         from .models import _sanitize_glyphs
         value = _sanitize_glyphs(value)
-        
-        max_length = limits.MAX_POST_LENGTH
-        if len(value) > max_length:
-            raise serializers.ValidationError(f"Text content cannot exceed {max_length} characters")
         
         # Allow empty text content (will be validated in validate() method)
         if value.strip():

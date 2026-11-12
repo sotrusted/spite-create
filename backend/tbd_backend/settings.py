@@ -266,7 +266,6 @@ POST_IMAGE_QUALITY = 85
 
 # Moderation settings
 BANNED_WORDS_FILE = BASE_DIR / 'banned_words.txt'
-MAX_POST_LENGTH = 500
 
 # Behind the cloudflared tunnel (dev.sh --tunnel), absolute URLs (rendered
 # image links) must come back https or iOS refuses to load them

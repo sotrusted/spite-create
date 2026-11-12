@@ -618,8 +618,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const postButtonScale = useSharedValue(1);
   const postButtonOpacity = useSharedValue(1);
 
-  const maxLength = 500;
-
   // Image background functions
   const requestPermissions = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -1262,11 +1260,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     // Allow posting with just image background (no text required)
     if (!allText.trim() && !backgroundImage) {
       Alert.alert('Error', 'Please add some text or an image background before posting');
-      return;
-    }
-
-    if (allText.length > maxLength) {
-      Alert.alert('Error', `Text must be under ${maxLength} characters`);
       return;
     }
 
