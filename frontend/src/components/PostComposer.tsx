@@ -133,7 +133,8 @@ const readableDefaultInk = (canvas: string) => {
 };
 const DEFAULT_SIGNATURE_STYLE = 'default';
 // How near the screen's centre line (points) a dragged text snaps onto it
-const CENTRE_SNAP = 6;
+// (a light lock: it holds there until the finger has gone this far past)
+const CENTRE_SNAP = 10;
 
 // User can pick their own images as stickers - no presets needed
 
@@ -1871,7 +1872,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const x = h.base.x + h.dx;
     return Math.abs(x - screenWidth / 2) <= CENTRE_SNAP ? screenWidth / 2 : x;
   };
-  const centreGuideStyle = useAnimatedStyle(() => ({ opacity: centreGuide.value }));
+  const centreGuideStyle = useAnimatedStyle(() => ({ opacity: centreGuide.value * 0.7 }));
   // The crop guides, as the hold moves and sizes its text
   const cropFollow = useRef<((live: LivePlace | null) => void) | null>(null);
   const followHold = (h: Hold | null) =>
@@ -3755,7 +3756,16 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
 
       {/* The screen's centre line, while a dragged text sits on it. Outside
           the captured canvas, like the crop guides */}
-      <AnimatedReanimated.View pointerEvents="none" style={[styles.centreGuide, centreGuideStyle]} />
+      <AnimatedReanimated.View
+        pointerEvents="none"
+        style={[styles.centreGuide, centreGuideStyle, {
+          // drawn to stand out from the canvas it crosses: dark on a light
+          // one, light on a dark one (over a gradient or an image, white
+          // with a dark edge either side)
+          backgroundColor: backgroundGradient.length > 0 || backgroundImage
+            ? '#FFFFFF' : scrimColorFor(null, backgroundColor, 1) === '#000000' ? '#000000' : '#FFFFFF',
+        }]}
+      />
 
       {/* Where a saved picture is cut down to the post's crop (cropTo):
           behind the canvas, never seen */}
@@ -4290,12 +4300,11 @@ const styles = StyleSheet.create({
   clip: { overflow: 'hidden' },
   // the text being edited, laid out as it will be placed, to read its lines
   // (the placed text's box: up to the wrap width, as wide as its lines)
+  // The whole height of the screen, over the crop guides and their dim
   centreGuide: {
-    position: 'absolute', top: 0, bottom: 0, left: screenWidth / 2 - 1, width: 2, zIndex: 25,
-    backgroundColor: 'rgba(255, 255, 255, 0.55)',
-    // a hairline of shade either side, so it shows on a white canvas too
+    position: 'absolute', top: 0, bottom: 0, left: screenWidth / 2 - 1.5, width: 3, zIndex: 28,
     borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(0, 0, 0, 0.35)',
+    borderColor: 'rgba(127, 127, 127, 0.9)',
   },
   cropStage: { position: 'absolute', left: 0, top: 0, zIndex: -1 },
   unseen: {
