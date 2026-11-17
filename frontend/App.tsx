@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import React, { useState, useEffect } from 'react';
 import * as Updates from 'expo-updates';
 import { AppState } from 'react-native';
-import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -38,8 +38,22 @@ import PostComposerScreen from './src/screens/PostComposerScreen';
 import PostDetailScreen from './src/screens/PostDetailScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import { registerForPush, onNotificationOpened } from './src/services/push';
 
 const Stack = createStackNavigator<RootStackParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+// A tapped notification opens the post it is about. One that launched the
+// app arrives before the navigator exists, so it waits for onReady.
+let postToOpen: string | null = null;
+const openPost = (postId: string) => {
+  if (navigationRef.isReady()) navigationRef.navigate('PostDetail', { postId });
+  else postToOpen = postId;
+};
+const openWaitingPost = () => {
+  if (postToOpen) openPost(postToOpen);
+  postToOpen = null;
+};
 
 // Updates must never restart the app while someone is looking at it: that
 // showed the feed, then the loading screen, then a feed with a different
@@ -89,6 +103,11 @@ const DEV_LINKING = __DEV__ && devHost
 
 export default function App() {
   useAutoUpdates();
+  useEffect(() => {
+    // the token can change between launches; never prompts from here
+    registerForPush();
+    return onNotificationOpened(openPost);
+  }, []);
   // The exact same font files the backend renders with (see the model's
   // FONT_PATH_CANDIDATES), so the composer preview matches the server render
   const [fontsLoaded] = useFonts({
@@ -134,7 +153,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer linking={DEV_LINKING} theme={{
+      <NavigationContainer ref={navigationRef} onReady={openWaitingPost} linking={DEV_LINKING} theme={{
         dark: false,
         fonts: DefaultTheme.fonts,
         colors: {

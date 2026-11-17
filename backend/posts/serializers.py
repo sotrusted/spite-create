@@ -11,6 +11,7 @@ from users.models import User, UserReport, MutedUser
 
 
 from . import limits
+from . import push
 
 CANVAS_STATE_VERSIONS = {1}
 HEX_COLOR = re.compile(r'^#[0-9A-Fa-f]{6}$')
@@ -594,15 +595,14 @@ class PostSerializer(serializers.ModelSerializer):
             # Don't fail post creation if WebSocket broadcast fails
             print(f"Failed to broadcast new post: {e}")
 
-        # Repost notification for the quoted author: stored for the next
-        # app open, plus a live nudge to their personal WS group
         # Everyone the new post quotes hears of it: the author of the post it
         # answers, and of every post further up the chain it carries - once
         # each, with the snippet of their own nearest post, and never the
-        # quoter themself.
+        # quoter themself. Stored for the next app open, sent live to their
+        # WS group, and pushed to their phone.
+        told = {post.author_id}
         try:
             from .models import Notification
-            told = {post.author_id}
             ancestor = post.original_post if post.is_repost else None
             for _depth in range(limits.QUOTE_CHAIN_DEPTH):
                 if ancestor is None:
@@ -615,6 +615,7 @@ class PostSerializer(serializers.ModelSerializer):
                         post=post,
                         notif_type='repost',
                     )
+                    snippet = (ancestor.text_content or '').strip()[:40]
                     async_to_sync(channel_layer.group_send)(
                         f"user_{ancestor.author_id}",
                         {
@@ -624,13 +625,19 @@ class PostSerializer(serializers.ModelSerializer):
                             # handle goes out only with a signed quote
                             "actor_handle": post.author.handle if post.is_signed else None,
                             "post_id": str(post.id),
-                            "snippet": (ancestor.text_content or '').strip()[:40],
+                            "snippet": snippet,
                         }
                     )
+                    push.notify_quoted(ancestor.author, post, snippet)
                 ancestor = ancestor.original_post if ancestor.is_repost else None
         except Exception as e:
             print(f"Failed to create repost notification: {e}")
-    
+
+        try:
+            push.notify_new_post(post, exclude=told)
+        except Exception as e:
+            print(f"Failed to push new post: {e}")
+
     def validate_font_size(self, value):
         """Validate font size is within reasonable bounds.
         Sizes are in canvas pixels (1080-wide canvas), so scaled-up display
@@ -859,8 +866,18 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'date_joined', 'posts_count_today', 'total_posts',
             'default_signed_posts', 'preferred_signature_style',
             'signature_font', 'signature_color',
+            'push_token', 'notify_replies', 'notify_all_posts',
         ]
         read_only_fields = ['date_joined', 'posts_count_today', 'total_posts']
+        extra_kwargs = {'push_token': {'write_only': True}}
+
+    def validate_push_token(self, value):
+        import re
+        value = (value or '').strip()
+        if value and not re.fullmatch(r'Expo(nent)?PushToken\[[A-Za-z0-9_-]{1,150}\]', value):
+            raise serializers.ValidationError('Not a push token.')
+        return value
+
 
     def validate_handle(self, value):
         import re
@@ -906,4 +923,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
         style = validated_data.get('preferred_signature_style')
         if style:
             validated_data['preferred_signature_style'] = style.lower()
+        token = validated_data.get('push_token')
+        if token:
+            # one phone, one account: a reinstall makes a new account with
+            # the same token, and the old one must stop ringing this phone
+            User.objects.filter(push_token=token).exclude(pk=instance.pk).update(push_token='')
         return super().update(instance, validated_data)

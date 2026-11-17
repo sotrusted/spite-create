@@ -15,6 +15,7 @@ import { SPACE, CHROME } from '../constants/layout';
 import { Colors } from '../constants/colors';
 import { Post } from '../types';
 import { absoluteUrl, api, endpoints } from '../config/api';
+import { tap } from '../utils/haptics';
 import { feedCardLayout, canvasPointIn, gradientEndpoints, boxRectOf, CARD } from '../utils/cardLayout';
 import { quotedLevelAt } from '../utils/hitTest';
 import PressFlash, { PressFlashHandle, flashColorOn } from './PressFlash';
@@ -154,6 +155,7 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
 
   // Double tap or hold: quote the post under the finger
   const handleQuotePress = () => {
+    tap();
     flashTarget();
     const quoted = tappedLevel()?.post_id;
     if (quoted) quotePostById(quoted);
@@ -466,7 +468,7 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
       </TouchableOpacity>
       <TouchableOpacity
         style={[styles.railButton, { backgroundColor: Colors.surface }]}
-        onPress={handleRepost}
+        onPress={() => { tap(); handleRepost(); }}
       >
         <Text style={styles.railText}>Quote</Text>
       </TouchableOpacity>

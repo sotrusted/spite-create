@@ -38,6 +38,8 @@ import AnimatedReanimated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { tap, tick } from '../utils/haptics';
+import { registerForPush } from '../services/push';
 import Toast from 'react-native-toast-message';
 import { Colors, FontChoices, FONT_MENU, FONT_TOGGLE, resolveFontFace, rainbowFor } from '../constants/colors';
 import { FEATURES } from '../constants/features';
@@ -1330,6 +1332,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     setIsPosting(false);
     finishPost(null);
     if (optimistic) emitPostCreated(optimistic);
+    tap();
     // One key per post, sent again on Retry: the server answers a repeat with
     // the post it already made, so a retry never posts twice
     const postKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -1391,6 +1394,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         headers: { 'Idempotency-Key': postKey },
       });
       removeDraft(keptId);
+      // The first post is the moment replies start to matter: ask then
+      // (iOS shows the prompt once; later calls just refresh the token)
+      registerForPush(true);
       // The snapshot holds the slot until the server render is on the
       // device: swapped in before it downloads, the card showed nothing but
       // its background colour. Bounded, so a slow image still lands.
@@ -1862,9 +1868,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       place.x.value = heldX(h);
       place.y.value = h.base.y + h.dy;
     }
-    centreGuide.value = heldX(h) === screenWidth / 2 ? 1 : 0;
+    const centred = heldX(h) === screenWidth / 2;
+    // a tick as the text catches the line (not while it stays on it)
+    if (centred && !centreLocked.current) tick();
+    centreLocked.current = centred;
+    centreGuide.value = centred ? 1 : 0;
     followHold(h);
   };
+  const centreLocked = useRef(false);
   // A text dragged to within CENTRE_SNAP of the screen's centre line sits on
   // it, and the line shows (centreGuide) for as long as it does
   const centreGuide = useSharedValue(0);
@@ -1885,6 +1896,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (part === 'pinch') h.engagedAt = null;
     if (h.pan || h.pinch) return;
     hold.current = null;
+    centreLocked.current = false;
     centreGuide.value = 0;
     followHold(null);
     if (h.dx || h.dy || h.scale !== h.base.scale) {
@@ -1893,6 +1905,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   };
   const dropHold = () => {
     hold.current = null;
+    centreLocked.current = false;
     centreGuide.value = 0;
     followHold(null);
   };
@@ -2876,6 +2889,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         return;
       }
       await MediaLibrary.saveToLibraryAsync(uri);
+      tap();
       Toast.show({ type: 'success', text1: 'Saved to Photos', position: 'bottom' });
     } catch (error) {
       console.log('Direct save unavailable, using share sheet:', error);

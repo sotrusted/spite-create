@@ -51,6 +51,12 @@ class User(AbstractUser):
     signature_color = models.CharField(max_length=7, blank=True, default='',
                                        help_text="Empty means auto-contrast against the post background")
     
+    # Push notifications: the Expo push token of this user's phone (empty when
+    # they have not allowed notifications), and what they want to hear about
+    push_token = models.CharField(max_length=200, blank=True, default='', db_index=True)
+    notify_replies = models.BooleanField(default=True)
+    notify_all_posts = models.BooleanField(default=False)
+
     USERNAME_FIELD = 'handle'
     REQUIRED_FIELDS = []
     

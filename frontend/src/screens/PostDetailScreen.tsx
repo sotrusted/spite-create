@@ -29,6 +29,7 @@ import { textResolutionFor } from '../utils/zoom';
 import { REPORT_REASONS, MODERATION_COPY, HideKind, hideAuthor, reportPost } from '../utils/moderation';
 import { editAgain } from '../utils/editAgain';
 import Toast from 'react-native-toast-message';
+import { tap } from '../utils/haptics';
 import { FEATURES } from '../constants/features';
 import { Post } from '../types';
 import { fullPostLayout, gradientEndpoints, canvasPointIn, boxRectOf, CardLayout } from '../utils/cardLayout';
@@ -312,6 +313,7 @@ export default function PostDetailScreen() {
           return;
         }
         await MediaLibrary.saveToLibraryAsync(uri);
+        tap();
         Toast.show({ type: 'success', text1: 'Saved to Photos', position: 'bottom' });
       } catch {
         await Share.share({ url: uri });

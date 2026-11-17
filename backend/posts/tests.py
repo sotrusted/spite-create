@@ -15,6 +15,7 @@ Run: python manage.py test posts
 
 import io
 import json
+from unittest import mock
 import math
 import os
 import shutil
@@ -2064,3 +2065,117 @@ class ReviewFixTests(RenderTestCase):
         for uri in (f'file://{outside}', outside, '/media/../outside.png', '/media/backgrounds/../outside.png',
                     'http://169.254.169.254/latest/meta-data/', None, 7):
             self.assertIsNone(Post._open_media_image(uri), uri)
+
+
+class PushTests(RenderTestCase):
+    """Phones are told of quotes, and - when asked - of every post."""
+
+    TOKEN = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]'
+
+    def api(self, method, path, device, body=None):
+        return getattr(self.client, method)(
+            path, data=json.dumps(body or {}), content_type='application/json', HTTP_X_DEVICE_ID=device)
+
+    def make(self, device, text='hello there', **extra):
+        element = {'content': text, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+                   'fontFamily': 'arial-black'}
+        body = {'text_content': text, 'text_elements': [element], 'canvas_width': 1080,
+                'canvas_height': 2340, 'background_color': '#F8F8FF', **extra}
+        with mock.patch('posts.push.send') as send:
+            response = self.api('post', '/api/posts/', device, body)
+        self.assertEqual(response.status_code, 201, response.content)
+        return response.json(), [call.args for call in send.call_args_list]
+
+    def quote(self, device, post, text='a reply', **extra):
+        return self.make(device, text, repost_data={
+            'original_post_id': post['id'], 'repost_geometry': {'x': 100, 'y': 1200, 'width': 800}}, **extra)
+
+    def phone(self, device, n, **prefs):
+        token = f'ExponentPushToken[{n * 22}]'
+        response = self.api('patch', '/api/users/profile/', device, {'push_token': token, **prefs})
+        self.assertEqual(response.status_code, 200, response.content)
+        return token
+
+    def test_the_profile_keeps_the_token_to_itself_and_refuses_junk(self):
+        token = self.phone('push-a', 'a', notify_all_posts=True)
+        profile = self.client.get('/api/users/profile/', HTTP_X_DEVICE_ID='push-a').json()
+        self.assertNotIn('push_token', profile)
+        self.assertEqual((profile['notify_replies'], profile['notify_all_posts']), (True, True))
+        self.assertEqual(self.api('patch', '/api/users/profile/', 'push-a',
+                                  {'push_token': 'https://evil.example'}).status_code, 400)
+        # a reinstall: the same phone under a new account
+        self.phone('push-a2', 'a')
+        self.assertEqual(User.objects.get(device_id='push-a').push_token, '')
+        self.assertEqual(User.objects.get(device_id='push-a2').push_token, token)
+
+    def test_a_quote_reaches_the_quoted_author_without_naming_the_quoter(self):
+        original, _ = self.make('push-a', 'the first word')
+        token = self.phone('push-a', 'a')
+        _, sent = self.quote('push-b', original, 'and the second')
+        self.assertEqual(len(sent), 1)
+        tokens, title, body, data = sent[0]
+        self.assertEqual(tokens, [token])
+        self.assertEqual(title, 'Someone quoted you')
+        self.assertEqual(body, 'and the second')
+        self.assertEqual(data['kind'], 'quote')
+        handle = User.objects.get(device_id='push-b').handle
+        _, sent = self.quote('push-b', original, 'signed this time', is_signed=True)
+        self.assertEqual(sent[0][1], f'@{handle} quoted you')
+
+    def test_everyone_up_the_chain_hears_once_and_not_the_quoter(self):
+        first, _ = self.make('push-a', 'one')
+        a = self.phone('push-a', 'a')
+        second, _ = self.quote('push-b', first, 'two')
+        b = self.phone('push-b', 'b')
+        _, sent = self.quote('push-a', second, 'three')
+        self.assertEqual([args[0] for args in sent], [[b]])
+        _, sent = self.quote('push-c', second, 'four')
+        self.assertEqual(sorted(args[0][0] for args in sent), sorted([a, b]))
+
+    def test_replies_can_be_turned_off(self):
+        original, _ = self.make('push-a')
+        self.phone('push-a', 'a', notify_replies=False)
+        _, sent = self.quote('push-b', original)
+        self.assertEqual(sent, [])
+
+    def test_all_posts_goes_only_to_those_who_asked_and_never_twice(self):
+        original, _ = self.make('push-a')
+        a = self.phone('push-a', 'a', notify_all_posts=True)
+        self.phone('push-b', 'b')
+        c = self.phone('push-c', 'c', notify_all_posts=True)
+        _, sent = self.make('push-b', 'a plain post')
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sorted(sent[0][0]), sorted([a, c]))
+        self.assertEqual(sent[0][1], 'Someone posted')
+        # quoted and subscribed: told of the quote, not also of the post
+        _, sent = self.quote('push-b', original)
+        self.assertEqual(sorted((args[0], args[3]['kind']) for args in sent),
+                         sorted([([a], 'quote'), ([c], 'post')]))
+        # the author's own post does not ring their own phone
+        _, sent = self.make('push-c', 'mine')
+        self.assertEqual([args[0] for args in sent], [[a]])
+
+    def test_muted_blocked_and_banned_authors_ring_nobody(self):
+        original, _ = self.make('push-a')
+        self.phone('push-a', 'a', notify_all_posts=True)
+        self.make('push-b')
+        handle = User.objects.get(device_id='push-b').handle
+        self.api('post', f'/api/users/{handle}/mute/', 'push-a')
+        _, sent = self.quote('push-b', original)
+        self.assertEqual(sent, [])
+        # a block silences both ways: the blocker's posts do not ring the blocked
+        self.make('push-c')
+        self.phone('push-c', 'c', notify_all_posts=True)
+        self.api('post', f'/api/users/{handle}/block/', 'push-c')
+        _, sent = self.make('push-b', 'to nobody')
+        self.assertEqual(sent, [])
+
+    def test_a_dead_token_is_forgotten(self):
+        from posts import push
+        token = self.phone('push-a', 'a')
+        reply = mock.Mock()
+        reply.json.return_value = {'data': [{'status': 'error', 'details': {'error': 'DeviceNotRegistered'}}]}
+        with mock.patch('posts.push.requests.post', return_value=reply) as post:
+            push.deliver([{'to': token, 'title': 't', 'body': 'b', 'data': {}}])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(User.objects.get(device_id='push-a').push_token, '')

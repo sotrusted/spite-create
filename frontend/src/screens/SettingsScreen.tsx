@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   Linking,
   Alert,
+  Switch,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -17,9 +19,53 @@ import { GUIDELINES_TEXT, TERMS_TEXT, PRIVACY_TEXT } from '../constants/legal';
 import { SPACE, CHROME } from '../constants/space';
 import * as Updates from 'expo-updates';
 import { api, endpoints, resetIdentity } from '../config/api';
+import { registerForPush } from '../services/push';
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
+  // What this phone is told about. Both live on the account; null until the
+  // profile has loaded (the switches stay off and disabled till then).
+  const [notify, setNotify] = useState<{ replies: boolean; allPosts: boolean } | null>(null);
+  useEffect(() => {
+    api.get(endpoints.getUserProfile)
+      .then(({ data }) => setNotify({ replies: !!data.notify_replies, allPosts: !!data.notify_all_posts }))
+      .catch(() => {});
+  }, []);
+
+  const setNotifyPref = async (key: 'replies' | 'allPosts', on: boolean) => {
+    if (!notify) return;
+    // Turning one on needs the system's permission (asked once by iOS)
+    if (on && !(await registerForPush(true))) {
+      Alert.alert(
+        'Notifications are off',
+        'Allow notifications for Typee in the Settings app to turn this on.',
+        [{ text: 'Not now', style: 'cancel' }, { text: 'Open Settings', onPress: () => Linking.openSettings() }],
+      );
+      return;
+    }
+    const before = notify;
+    setNotify({ ...notify, [key]: on });
+    try {
+      await api.patch(endpoints.getUserProfile, key === 'replies' ? { notify_replies: on } : { notify_all_posts: on });
+    } catch {
+      setNotify(before);
+      Toast.show({ type: 'error', text1: 'Could not save', position: 'bottom' });
+    }
+  };
+
+  const renderSwitch = (title: string, key: 'replies' | 'allPosts') => (
+    <View style={styles.settingItem}>
+      <Text style={styles.settingText}>{title}</Text>
+      <Switch
+        value={!!notify?.[key]}
+        disabled={!notify}
+        onValueChange={on => setNotifyPref(key, on)}
+        trackColor={{ true: Colors.link, false: Colors.border }}
+        ios_backgroundColor={Colors.border}
+      />
+    </View>
+  );
+
   const handleExportData = () => {
     Toast.show({
       type: 'info',
@@ -94,7 +140,14 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
-      <View style={styles.content}>
+      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner}>
+        {/* Notifications */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>NOTIFICATIONS</Text>
+          {renderSwitch('When someone quotes you', 'replies')}
+          {renderSwitch('Every new post', 'allPosts')}
+        </View>
+
         {/* Privacy & Data */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>PRIVACY & DATA</Text>
@@ -129,7 +182,7 @@ export default function SettingsScreen() {
             <Text style={styles.aboutValue}>{Constants.expoConfig?.version ?? ''}</Text>
           </View>
         </View>
-      </View>
+      </ScrollView>
 
     </SafeAreaView>
   );
@@ -142,6 +195,8 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentInner: {
     padding: SPACE.xl,
     paddingTop: SPACE.md,
   },

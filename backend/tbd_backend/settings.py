@@ -277,6 +277,9 @@ BANNED_WORDS_FILE = BASE_DIR / 'banned_words.txt'
 # image links) must come back https or iOS refuses to load them
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# Push notifications go out through Expo; never from a test run
+PUSH_ENABLED = config('PUSH_ENABLED', default=True, cast=bool) and sys.argv[1:2] != ['test']
+
 # Error reporting: no-op unless SENTRY_DSN is set (set it on the VM)
 SENTRY_DSN = config('SENTRY_DSN', default='')
 from sentry_sdk.scrubber import EventScrubber, DEFAULT_DENYLIST
