@@ -1,6 +1,8 @@
 import json
 import math
+import os
 import re
+import uuid
 from rest_framework import serializers
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -40,11 +42,49 @@ def _follow_kept(runs, kept):
             moved.append({**run, 'start': start, 'end': end})
     return moved
 
-class AuthorSerializer(serializers.ModelSerializer):
-    """Serializer for post author information"""
-    class Meta:
-        model = User
-        fields = ['handle', 'avatar_color']
+ANONYMOUS_AVATAR_COLOR = '#4ECDC4'
+ALIAS_PREFIX = '~'
+
+
+def author_alias(post):
+    """What stands in for the handle of an unsigned post's author: a name
+    for "whoever wrote this post" that says nothing about who that is, and
+    is different on every post. The mute, block and report endpoints take
+    it in place of a handle (views.user_from_handle)."""
+    return f'{ALIAS_PREFIX}{post.id.hex}'
+
+
+def author_for(post):
+    """A post's author as the API shows them. Unsigned posts are anonymous:
+    the real handle (and the profile colour, which the author chooses) went
+    out on every post, so anyone reading the API could tell which unsigned
+    posts were one person's."""
+    if post.is_signed:
+        return {'handle': post.author.handle, 'avatar_color': post.author.avatar_color}
+    return {'handle': author_alias(post), 'avatar_color': ANONYMOUS_AVATAR_COLOR}
+
+
+def plan_for(post):
+    """The post's draw list, unless it is too long to send: text styled
+    letter by letter has an entry per letter, and with no limit on a post's
+    length one long post weighed megabytes in every feed page it was on.
+    Without it the post page shows the server's image (still exact, only
+    not redrawn sharp when zoomed)."""
+    plan = post.text_plan
+    if not isinstance(plan, dict):
+        return plan
+    marks = sum(
+        len(element.get(key) or [])
+        for element in plan.get('elements') or [] if isinstance(element, dict)
+        for key in ('runs', 'chips', 'lines')
+    )
+    return plan if marks <= limits.TEXT_PLAN_MAX_MARKS else None
+
+
+def is_withheld(post):
+    """A post moderation has taken down: hidden, or by a banned author. It
+    is not shown where it is quoted either."""
+    return post.is_hidden or post.author.is_shadowbanned
 
 
 def _absolute(image, context):
@@ -63,6 +103,27 @@ def textless_url_for(obj, context):
     innermost post: the post page draws text for chain levels alone, so a
     level past the end of the chain would show bare."""
     return _absolute(obj.textless_image, context) if _quote_chain(obj, context)[1] else None
+
+
+def _banned_words():
+    """Whole words and phrases from settings.BANNED_WORDS_FILE (one per line,
+    # for comments), read again when the file changes. No file, no filter."""
+    from django.conf import settings
+    path = str(settings.BANNED_WORDS_FILE)
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _banned_words.cache
+    if cached is None or cached[0] != (path, stamp):
+        with open(path, encoding='utf-8') as fh:
+            words = [line.strip().lower() for line in fh if line.strip() and not line.startswith('#')]
+        pattern = re.compile(r'(?<!\w)(?:' + '|'.join(re.escape(w) for w in words) + r')(?!\w)') if words else None
+        cached = _banned_words.cache = ((path, stamp), pattern)
+    return cached[1]
+
+
+_banned_words.cache = None
 
 
 def _quote_chain(obj, context):
@@ -105,6 +166,7 @@ def _build_quote_chain(obj, context):
         if not (isinstance(geometry, dict) and geometry.get('width')):
             return chain, False
         parent_width = parent.image_width or 1080
+        withheld = is_withheld(parent)
         crop_top, crop_bottom = Post.quoted_crop(parent, geometry)
         level_scale = geometry['width'] / parent_width
 
@@ -143,7 +205,7 @@ def _build_quote_chain(obj, context):
         # the top of the band of the parent this quote shows (parent canvas
         # px): rect's top edge is this row of the parent
         'crop_top': crop_top,
-            'snippet': (parent.text_content or '').strip()[:24],
+            'snippet': '' if withheld else (parent.text_content or '').strip()[:24],
             'background_color': parent.background_color,
             # the masthead samples its costume from every level of the
             # page, quoted ancestors included - not just top-level posts
@@ -151,10 +213,12 @@ def _build_quote_chain(obj, context):
         # the post page draws each level's text itself, over the text-free
         # render; rainbow text needs to know a gradient lies under it
         'background_gradient': parent.background_gradient,
-            'text_elements': parent.text_elements,
+            'text_elements': [] if withheld else parent.text_elements,
         # the parent's text as its render drew it (parent canvas px)
-        'text_plan': parent.text_plan,
-            'hidden': parent.author_id in blocked_ids,
+        'text_plan': None if withheld else plan_for(parent),
+            # covered for this viewer: its author is blocked (either way
+            # round), or moderation took the post down
+            'hidden': parent.author_id in blocked_ids or withheld,
         })
 
         # Descend: next level's coordinates live inside this strip,
@@ -168,7 +232,8 @@ def _build_quote_chain(obj, context):
 
 class PostSerializer(serializers.ModelSerializer):
     """Serializer for Post model with full create/read capabilities"""
-    author = AuthorSerializer(read_only=True)
+    author = serializers.SerializerMethodField()
+    text_plan = serializers.SerializerMethodField()
     rendered_image_url = serializers.SerializerMethodField()
     repost_data = serializers.JSONField(write_only=True, required=False)
     original_post = serializers.PrimaryKeyRelatedField(read_only=True)
@@ -213,6 +278,12 @@ class PostSerializer(serializers.ModelSerializer):
     
     def get_textless_image_url(self, obj):
         return textless_url_for(obj, self.context)
+
+    def get_author(self, obj):
+        return author_for(obj)
+
+    def get_text_plan(self, obj):
+        return plan_for(obj)
 
     def get_quote_chain(self, obj):
         return quote_chain_for(obj, self.context)
@@ -269,6 +340,13 @@ class PostSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError('Text element sizes and positions must be numbers')
             if not math.isfinite(size):
                 raise serializers.ValidationError('Text element sizes must be numbers')
+            # the renderer does arithmetic on these: one that is not a
+            # number failed the render, and the post was saved as an error card
+            for key in ('letterSpacing', 'opacity'):
+                if element.get(key) is not None:
+                    if isinstance(element[key], bool) or not isinstance(element[key], (int, float)) \
+                            or not math.isfinite(element[key]):
+                        raise serializers.ValidationError(f'Text element {key} must be a number')
             element['fontSize'] = min(max(size, limits.FONT_SIZE_MIN), limits.FONT_SIZE_MAX)
             if element.get('outlineColor') is not None and not (
                     isinstance(element['outlineColor'], str) and HEX_COLOR.match(element['outlineColor'])):
@@ -311,10 +389,21 @@ class PostSerializer(serializers.ModelSerializer):
     def validate_repost_data(self, value):
         """{original_post_id, repost_geometry?: {x, y, width}} - numbers, or
         the geometry is dropped (the server then places the quote itself)."""
-        if value is None:
-            return value
+        if not value:
+            return None
         if not isinstance(value, dict):
             raise serializers.ValidationError('repost_data must be an object')
+        # The quoted post has to be there: an id that was not one answered
+        # 500, a missing post made a "repost" of nothing, and a post taken
+        # down by moderation could still be quoted back into the feed
+        try:
+            original = Post.objects.select_related('author').get(
+                id=uuid.UUID(str(value.get('original_post_id'))))
+        except (ValueError, Post.DoesNotExist):
+            raise serializers.ValidationError('The quoted post no longer exists')
+        if is_withheld(original):
+            raise serializers.ValidationError('The quoted post no longer exists')
+        value['original_post'] = original
         geometry = value.get('repost_geometry')
         if geometry is not None:
             try:
@@ -371,12 +460,7 @@ class PostSerializer(serializers.ModelSerializer):
 
         if repost_data:
             validated_data['is_repost'] = True
-            original_post_id = repost_data.get('original_post_id')
-            if original_post_id:
-                try:
-                    validated_data['original_post'] = Post.objects.get(id=original_post_id)
-                except Post.DoesNotExist:
-                    pass
+            validated_data['original_post'] = repost_data['original_post']
             # WYSIWYG strip placement from the composer (canvas px)
             geometry = repost_data.get('repost_geometry')
             if isinstance(geometry, dict) and geometry.get('width'):
@@ -444,12 +528,9 @@ class PostSerializer(serializers.ModelSerializer):
         
         # Allow empty text content (will be validated in validate() method)
         if value.strip():
-            # Basic profanity filter (in production, use a more sophisticated system)
-            banned_words = self._get_banned_words()
-            text_lower = value.lower()
-            for word in banned_words:
-                if word in text_lower:
-                    raise serializers.ValidationError("Content contains inappropriate language")
+            banned = _banned_words()
+            if banned is not None and banned.search(value.lower()):
+                raise serializers.ValidationError("Content contains inappropriate language")
         
         return value
     
@@ -463,10 +544,10 @@ class PostSerializer(serializers.ModelSerializer):
                     'id': str(post.id),
                     'text_content': post.text_content,
                     'sticker_elements': post.sticker_elements,  # Include stickers
-                    'author': {
-                        'handle': post.author.handle,
-                        'avatar_color': post.author.avatar_color,
-                    },
+                    'author': author_for(post),
+                    # the key the author's app sent with the post: how it
+                    # knows this one, arriving over the socket, is its own
+                    'client_key': self.context.get('client_key') or None,
                     'background_color': post.background_color,
                     'rendered_image_url': self.get_rendered_image_url(post),
                     'created_at': post.created_at.isoformat(),
@@ -515,28 +596,38 @@ class PostSerializer(serializers.ModelSerializer):
 
         # Repost notification for the quoted author: stored for the next
         # app open, plus a live nudge to their personal WS group
+        # Everyone the new post quotes hears of it: the author of the post it
+        # answers, and of every post further up the chain it carries - once
+        # each, with the snippet of their own nearest post, and never the
+        # quoter themself.
         try:
-            original = post.original_post if post.is_repost else None
-            if original and original.author_id != post.author_id:
-                from .models import Notification
-                notification = Notification.objects.create(
-                    recipient=original.author,
-                    actor=post.author,
-                    post=post,
-                    notif_type='repost',
-                )
-                async_to_sync(channel_layer.group_send)(
-                    f"user_{original.author_id}",
-                    {
-                        "type": "repost_notification",
-                        "notification_id": notification.id,
-                        # posts are anonymous unless signed: the quoter's
-                        # handle goes out only with a signed quote
-                        "actor_handle": post.author.handle if post.is_signed else None,
-                        "post_id": str(post.id),
-                        "snippet": (original.text_content or '').strip()[:40],
-                    }
-                )
+            from .models import Notification
+            told = {post.author_id}
+            ancestor = post.original_post if post.is_repost else None
+            for _depth in range(limits.QUOTE_CHAIN_DEPTH):
+                if ancestor is None:
+                    break
+                if ancestor.author_id not in told:
+                    told.add(ancestor.author_id)
+                    notification = Notification.objects.create(
+                        recipient_id=ancestor.author_id,
+                        actor=post.author,
+                        post=post,
+                        notif_type='repost',
+                    )
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_{ancestor.author_id}",
+                        {
+                            "type": "repost_notification",
+                            "notification_id": notification.id,
+                            # posts are anonymous unless signed: the quoter's
+                            # handle goes out only with a signed quote
+                            "actor_handle": post.author.handle if post.is_signed else None,
+                            "post_id": str(post.id),
+                            "snippet": (ancestor.text_content or '').strip()[:40],
+                        }
+                    )
+                ancestor = ancestor.original_post if ancestor.is_repost else None
         except Exception as e:
             print(f"Failed to create repost notification: {e}")
     
@@ -548,12 +639,10 @@ class PostSerializer(serializers.ModelSerializer):
     
     def validate_text_color(self, value):
         """Validate color format"""
-        if not value.startswith('#') or len(value) != 7:
+        # (int(x, 16) also takes '+12345' and ' 12345', which then failed
+        # the render)
+        if not isinstance(value, str) or not HEX_COLOR.match(value):
             raise serializers.ValidationError("Color must be in #RRGGBB format")
-        try:
-            int(value[1:], 16)
-        except ValueError:
-            raise serializers.ValidationError("Invalid color format")
         return value
     
     def validate_background_color(self, value):
@@ -583,15 +672,11 @@ class PostSerializer(serializers.ModelSerializer):
 
         return data
     
-    def _get_banned_words(self):
-        """Get list of banned words (simplified version)"""
-        # In production, load from file or database
-        return ['spam', 'test_banned_word']  # Minimal list for demo
-
 
 class PostListSerializer(serializers.ModelSerializer):
     """Lighter serializer for feed/list views"""
-    author = AuthorSerializer(read_only=True)
+    author = serializers.SerializerMethodField()
+    text_plan = serializers.SerializerMethodField()
     rendered_image_url = serializers.SerializerMethodField()
     response_image_url = serializers.SerializerMethodField()
     quote = serializers.SerializerMethodField()
@@ -620,6 +705,12 @@ class PostListSerializer(serializers.ModelSerializer):
     def get_is_author(self, obj):
         return _is_author(obj, self.context)
 
+    def get_author(self, obj):
+        return author_for(obj)
+
+    def get_text_plan(self, obj):
+        return plan_for(obj)
+
     def get_quote_chain(self, obj):
         return quote_chain_for(obj, self.context)
 
@@ -642,7 +733,7 @@ class PostListSerializer(serializers.ModelSerializer):
             return None
         original = obj.original_post
         blocked_ids = self.context.get('blocked_author_ids') or set()
-        if original.author_id in blocked_ids:
+        if original.author_id in blocked_ids or is_withheld(original):
             return {'hidden': True}
         snippet = (original.text_content or '').strip()[:24]
         quote = {
@@ -690,13 +781,9 @@ class PostReportSerializer(serializers.ModelSerializer):
     
     def validate(self, data):
         """Ensure user hasn't already reported this post"""
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            if PostReport.objects.filter(
-                reporter=request.user,
-                post=data['post']
-            ).exists():
-                raise serializers.ValidationError("You have already reported this post")
+        reporter = self.context.get('reporter')
+        if reporter and PostReport.objects.filter(reporter=reporter, post=data['post']).exists():
+            raise serializers.ValidationError("You have already reported this post")
         return data
 
 
@@ -709,13 +796,12 @@ class UserReportSerializer(serializers.ModelSerializer):
     
     def validate(self, data):
         """Ensure user hasn't already reported this user"""
-        request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            if UserReport.objects.filter(
-                reporter=request.user,
-                reported_user=data['reported_user']
-            ).exists():
-                raise serializers.ValidationError("You have already reported this user")
+        reporter = self.context.get('reporter')
+        if reporter and reporter == data['reported_user']:
+            raise serializers.ValidationError("You cannot report yourself")
+        if reporter and UserReport.objects.filter(
+                reporter=reporter, reported_user=data['reported_user']).exists():
+            raise serializers.ValidationError("You have already reported this user")
         return data
 
 
@@ -741,6 +827,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['device_id']
+        # an account nothing identifies could never be used again: every
+        # call without a device id used to add one
+        extra_kwargs = {'device_id': {'required': True, 'allow_null': False, 'allow_blank': False}}
         
     def create(self, validated_data):
         """Create a new anonymous user with auto-generated handle"""

@@ -19,3 +19,8 @@ QUOTE_CHAIN_DEPTH = 64
 
 # Text border (shared/style.json): stroke width per 1 of font size
 OUTLINE_WIDTH_EM = 0.07
+
+# Marks (glyph runs, highlighter bands, underlines) a post's draw list may
+# have and still be sent to the app (serializers.plan_for). Not in
+# shared/limits.json: the app never needs to know it.
+TEXT_PLAN_MAX_MARKS = 500

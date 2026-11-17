@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import CursorPagination
 from .throttles import RealIPThrottle, DeviceThrottle, PostCreateThrottle, PostCreateIPThrottle
+from django.db import IntegrityError, transaction
 from django.db.models import Q, Prefetch, F
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -54,6 +55,7 @@ class PostCreateView(generics.CreateAPIView):
         key = request.headers.get('Idempotency-Key', '')
         if not 0 < len(key) <= 64:
             return super().create(request, *args, **kwargs)
+        self._client_key = key
         user = self.get_or_create_user()
         slot = f'post-idem:{user.pk}:{key}'
         deadline = time.monotonic() + self.IDEMPOTENCY_WAIT
@@ -101,6 +103,11 @@ class PostCreateView(generics.CreateAPIView):
 
     def get_or_create_user(self):
         return get_or_create_user_from_request(self.request)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['client_key'] = getattr(self, '_client_key', None)
+        return context
 
 
 class FeedListView(generics.ListAPIView):
@@ -164,7 +171,8 @@ class FeedListView(generics.ListAPIView):
             frontier -= ancestors.keys()
             if not frontier:
                 break
-            fetched = list(Post.objects.filter(id__in=frontier))
+            # (with their authors: the chain asks whether each is banned)
+            fetched = list(Post.objects.filter(id__in=frontier).select_related('author'))
             ancestors.update((a.id, a) for a in fetched)
             frontier = {a.original_post_id for a in fetched if a.is_repost and a.original_post_id}
         return ancestors
@@ -216,13 +224,18 @@ def report_post(request, post_id):
     # Get or create user
     user = get_or_create_user_from_request(request)
     
+    # (the post reported is the URL's: a "post" in the body used to win)
     serializer = PostReportSerializer(
-        data={'post': post.id, **request.data},
-        context={'request': request}
+        data={**_body(request), 'post': post.id},
+        context={'request': request, 'reporter': user}
     )
-    
+
     if serializer.is_valid():
-        report = serializer.save(reporter=user)
+        try:
+            with transaction.atomic():
+                serializer.save(reporter=user)
+        except IntegrityError:  # the same report, twice at once
+            return Response({'message': 'Report submitted successfully'})
         
         # Check if post should be auto-flagged
         report_count = PostReport.objects.filter(post=post).count()
@@ -239,22 +252,25 @@ def report_post(request, post_id):
 @permission_classes([permissions.AllowAny])
 def report_user(request, user_handle):
     """Report a user for moderation"""
-    try:
-        reported_user = User.objects.get(handle=user_handle)
-    except User.DoesNotExist:
+    reported_user = user_from_handle(user_handle)
+    if reported_user is None:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
-    
+
     # Get or create user
     user = get_or_create_user_from_request(request)
-    
+
     serializer = UserReportSerializer(
-        data={'reported_user': reported_user.id, **request.data},
-        context={'request': request}
+        data={**_body(request), 'reported_user': reported_user.id},
+        context={'request': request, 'reporter': user}
     )
-    
+
     if serializer.is_valid():
-        report = serializer.save(reporter=user)
-        
+        try:
+            with transaction.atomic():
+                serializer.save(reporter=user)
+        except IntegrityError:  # the same report, twice at once
+            return Response({'message': 'User reported successfully'})
+
         # Increment user's report count
         reported_user.increment_report_count()
         
@@ -267,14 +283,15 @@ def report_user(request, user_handle):
 @permission_classes([permissions.AllowAny])
 def mute_user(request, user_handle):
     """Mute a user to hide their posts"""
-    try:
-        muted_user = User.objects.get(handle=user_handle)
-    except User.DoesNotExist:
+    muted_user = user_from_handle(user_handle)
+    if muted_user is None:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
     
     # Get or create user
     user = get_or_create_user_from_request(request)
-    
+    if user == muted_user:
+        return Response({'error': 'You cannot mute yourself'}, status=status.HTTP_400_BAD_REQUEST)
+
     # Create mute relationship
     mute, created = MutedUser.objects.get_or_create(
         user=user,
@@ -291,9 +308,8 @@ def mute_user(request, user_handle):
 @permission_classes([permissions.AllowAny])
 def block_user(request, user_handle):
     """Block a user: hides posts in both directions and hides quoted strips"""
-    try:
-        blocked_user = User.objects.get(handle=user_handle)
-    except User.DoesNotExist:
+    blocked_user = user_from_handle(user_handle)
+    if blocked_user is None:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
     user = get_or_create_user_from_request(request)
@@ -310,9 +326,8 @@ def block_user(request, user_handle):
 @permission_classes([permissions.AllowAny])
 def unblock_user(request, user_handle):
     """Unblock a user"""
-    try:
-        blocked_user = User.objects.get(handle=user_handle)
-    except User.DoesNotExist:
+    blocked_user = user_from_handle(user_handle)
+    if blocked_user is None:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
     user = get_or_create_user_from_request(request)
@@ -326,9 +341,8 @@ def unblock_user(request, user_handle):
 @permission_classes([permissions.AllowAny])
 def unmute_user(request, user_handle):
     """Unmute a user"""
-    try:
-        muted_user = User.objects.get(handle=user_handle)
-    except User.DoesNotExist:
+    muted_user = user_from_handle(user_handle)
+    if muted_user is None:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
     
     # Get or create user
@@ -374,6 +388,28 @@ def user_profile(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+DEVICE_ID_MAX = User._meta.get_field('device_id').max_length
+
+
+def _body(request):
+    """The request's JSON body as a dict (anything else is no fields)."""
+    return dict(request.data.items()) if hasattr(request.data, 'items') else {}
+
+
+def user_from_handle(handle):
+    """The user a handle names, or None. An unsigned post shows an alias in
+    place of its author's handle (serializers.author_alias): that names the
+    post's author, without saying who they are."""
+    from .serializers import ALIAS_PREFIX
+    if handle.startswith(ALIAS_PREFIX):
+        try:
+            post = Post.objects.select_related('author').get(id=uuid.UUID(handle[len(ALIAS_PREFIX):]))
+        except (ValueError, Post.DoesNotExist):
+            return None
+        return post.author
+    return User.objects.filter(handle=handle).first()
+
+
 def get_or_create_user_from_request(request):
     """The user behind the request's X-Device-Id, created on first sight.
 
@@ -386,6 +422,9 @@ def get_or_create_user_from_request(request):
     device_id = request.META.get('HTTP_X_DEVICE_ID')
     if not device_id:
         raise exceptions.ValidationError({'detail': 'X-Device-Id header required'})
+    # (longer than the column, Postgres refuses the insert: a 500)
+    if len(device_id) > DEVICE_ID_MAX or '\x00' in device_id:
+        raise exceptions.ValidationError({'detail': 'X-Device-Id is not valid'})
     user, _ = User.objects.get_or_create(
         device_id=device_id,
         defaults={'is_anonymous_mode': True},
@@ -408,80 +447,52 @@ def delete_account(request):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+UPLOAD_FORMATS = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}
+
+
+def _store_upload(request, folder, formats, max_bytes):
+    """Check an uploaded image and store it. The file is what Pillow says it
+    is, never what the request claims: the name's extension and the content
+    type used to be trusted, so anything (an .html page, say) could be put
+    on the media domain. Stored as <folder>/<uuid>.<ext>, the only names the
+    renderer will open (Post._open_media_image)."""
+    from django.conf import settings
+    from PIL import Image
+    if not getattr(settings, 'ALLOW_IMAGE_POSTS', False):
+        return Response({'error': 'Image uploads are disabled'}, status=status.HTTP_403_FORBIDDEN)
+    image_file = request.FILES.get('image')
+    if image_file is None:
+        return Response({'error': 'No image file provided'}, status=status.HTTP_400_BAD_REQUEST)
+    if image_file.size > max_bytes:
+        return Response({'error': f'File too large (max {max_bytes // (1024 * 1024)}MB)'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    data = image_file.read()
+    try:
+        import io
+        with Image.open(io.BytesIO(data)) as probe:
+            image_format = probe.format
+            probe.verify()
+    except Exception:
+        image_format = None
+    if image_format not in formats:
+        return Response({'error': 'Invalid file type'}, status=status.HTTP_400_BAD_REQUEST)
+    filename = f"{folder}/{uuid.uuid4()}.{UPLOAD_FORMATS[image_format]}"
+    file_path = default_storage.save(filename, ContentFile(data))
+    return Response({'url': default_storage.url(file_path), 'filename': filename})
+
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 def upload_background(request):
     """Upload a background image and return the URL"""
-    from django.conf import settings
-    if not getattr(settings, 'ALLOW_IMAGE_POSTS', False):
-        return JsonResponse({'error': 'Image uploads are disabled'}, status=403)
-    try:
-        if 'image' not in request.FILES:
-            return JsonResponse({'error': 'No image file provided'}, status=400)
-        
-        image_file = request.FILES['image']
-        
-        # Validate file type
-        allowed_types = ['image/jpeg', 'image/png', 'image/webp']
-        if image_file.content_type not in allowed_types:
-            return JsonResponse({'error': 'Invalid file type'}, status=400)
-        
-        # Validate file size (max 10MB for backgrounds)
-        if image_file.size > 10 * 1024 * 1024:
-            return JsonResponse({'error': 'File too large (max 10MB)'}, status=400)
-        
-        # Generate unique filename
-        file_extension = os.path.splitext(image_file.name)[1]
-        filename = f"backgrounds/{uuid.uuid4()}{file_extension}"
-        
-        # Save the file
-        file_path = default_storage.save(filename, ContentFile(image_file.read()))
-        file_url = default_storage.url(file_path)
-        
-        return JsonResponse({
-            'url': file_url,
-            'filename': filename
-        })
-        
-    except Exception as e:
-        print(f"Error uploading background image: {e}")
-        return JsonResponse({'error': 'Failed to upload image'}, status=500)
+    return _store_upload(request, 'backgrounds', ('JPEG', 'PNG', 'WEBP'), 10 * 1024 * 1024)
 
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
 def upload_sticker(request):
     """Upload a sticker image and return the URL"""
-    from django.conf import settings
-    if not getattr(settings, 'ALLOW_IMAGE_POSTS', False):
-        return JsonResponse({'error': 'Image uploads are disabled'}, status=403)
-    try:
-        if 'image' not in request.FILES:
-            return JsonResponse({'error': 'No image file provided'}, status=400)
-        
-        image_file = request.FILES['image']
-        
-        # Validate file type
-        allowed_types = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
-        if image_file.content_type not in allowed_types:
-            return JsonResponse({'error': 'Invalid file type'}, status=400)
-        
-        # Validate file size (max 5MB)
-        if image_file.size > 5 * 1024 * 1024:
-            return JsonResponse({'error': 'File too large (max 5MB)'}, status=400)
-        
-        # Generate unique filename
-        file_extension = os.path.splitext(image_file.name)[1]
-        filename = f"stickers/{uuid.uuid4()}{file_extension}"
-        
-        # Save the file
-        file_path = default_storage.save(filename, ContentFile(image_file.read()))
-        file_url = default_storage.url(file_path)
-        
-        return JsonResponse({
-            'url': file_url,
-            'filename': filename
-        })
-        
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+    return _store_upload(request, 'stickers', ('JPEG', 'PNG', 'WEBP', 'GIF'), 5 * 1024 * 1024)
 
 
 @api_view(['GET'])

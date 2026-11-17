@@ -784,6 +784,27 @@ class Post(models.Model):
         band_top = max(0, band_bottom - need)
         return int(band_top), int(band_bottom)
 
+    # An image a post uses is one the upload endpoints stored, named by
+    # them: <folder>/<uuid>.<ext>
+    _MEDIA_IMAGE = re.compile(
+        r'(?:^|/)((?:backgrounds|stickers)/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\.(?:jpg|png|webp|gif))$')
+
+    @classmethod
+    def _open_media_image(cls, uri):
+        """The uploaded image a post's background or sticker names, read from
+        our own storage, or None. The address is the client's: it used to be
+        opened as given - a file path on this machine, a path climbing out of
+        the media folder, any URL at all for the server to fetch."""
+        from django.core.files.storage import default_storage
+        from urllib.parse import urlparse
+        match = cls._MEDIA_IMAGE.search(urlparse(uri if isinstance(uri, str) else '').path)
+        if not match or not default_storage.exists(match.group(1)):
+            return None
+        with default_storage.open(match.group(1), 'rb') as fh:
+            image = Image.open(io.BytesIO(fh.read()))
+            image.load()
+        return image
+
     def _create_background(self, height):
         width = int(self.image_width or settings.POST_IMAGE_WIDTH)
         height = int(height)
@@ -807,44 +828,11 @@ class Post(models.Model):
                 # Download and composite the image background
                 print(f"Processing image background: {self.background_image}")
                 
-                bg_img = None
-                
-                # For local file URIs (like from expo-image-picker)
-                if self.background_image.startswith('file://'):
-                    # Remove file:// prefix for local files
-                    local_path = self.background_image.replace('file://', '')
-                    if os.path.exists(local_path):
-                        bg_img = Image.open(local_path)
-                    else:
-                        print(f"Local image file not found: {local_path}")
-                        return background
-                        
-                # For /media/ paths (local media files)
-                elif '/media/' in self.background_image:
-                    # Extract the path after /media/
-                    media_path = self.background_image.split('/media/')[-1]
-                    file_path = os.path.join(settings.MEDIA_ROOT, media_path)
-                    print(f"Loading background from local media: {file_path}")
-                    if os.path.exists(file_path):
-                        bg_img = Image.open(file_path)
-                    else:
-                        print(f"Background file not found: {file_path}")
-                        return background
-                        
-                # For HTTP URLs, download the image
-                elif self.background_image.startswith(('http://', 'https://')):
-                    import urllib.request
-                    print(f"Downloading background from URL: {self.background_image}")
-                    with urllib.request.urlopen(self.background_image) as response:
-                        bg_img = Image.open(response)
-                else:
-                    print(f"Unsupported background image format: {self.background_image}")
-                    return background
-                
+                bg_img = self._open_media_image(self.background_image)
                 if bg_img is None:
-                    print(f"Failed to load background image")
+                    print(f"Background image is not one of ours: {self.background_image}")
                     return background
-                
+
                 # Fix EXIF orientation (phones often rotate images)
                 try:
                     from PIL import ImageOps
@@ -1581,48 +1569,11 @@ class Post(models.Model):
             final_width = int(width * scale)
             final_height = int(height * scale)
             
-            # Load the sticker image
-            sticker_img = None
-            
-            if sticker_uri.startswith(('http://', 'https://')):
-                # Download from URL
-                try:
-                    response = requests.get(sticker_uri, timeout=5)
-                    response.raise_for_status()
-                    sticker_img = PILImage.open(BytesIO(response.content))
-                except Exception as e:
-                    print(f"Failed to download sticker from URL: {e}")
-                    return
-                    
-            elif sticker_uri.startswith('/media/'):
-                # Local media file - construct full path
-                from django.conf import settings
-                file_path = os.path.join(settings.MEDIA_ROOT, sticker_uri.replace('/media/', ''))
-                if os.path.exists(file_path):
-                    sticker_img = PILImage.open(file_path)
-                else:
-                    print(f"Sticker file not found: {file_path}")
-                    return
-                    
-            elif sticker_uri.startswith('file://'):
-                # Local file URI
-                file_path = sticker_uri.replace('file://', '')
-                if os.path.exists(file_path):
-                    sticker_img = PILImage.open(file_path)
-                else:
-                    print(f"Sticker file not found: {file_path}")
-                    return
-                    
-            elif os.path.exists(sticker_uri):
-                # Direct file path
-                sticker_img = PILImage.open(sticker_uri)
-            else:
-                print(f"Invalid sticker URI: {sticker_uri}")
-                return
-            
+            sticker_img = self._open_media_image(sticker_uri)
             if sticker_img is None:
+                print(f"Sticker is not one of ours: {sticker_uri}")
                 return
-                
+
             # Convert to RGBA if needed
             if sticker_img.mode != 'RGBA':
                 sticker_img = sticker_img.convert('RGBA')

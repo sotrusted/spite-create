@@ -11,6 +11,11 @@ fi
 uv venv backend/venv --python 3.12 2>/dev/null || uv venv backend/venv
 uv pip install --python backend/venv/bin/python -r backend/requirements.txt
 
+if [ ! -f backend/.env ]; then
+  echo "[bootstrap] backend/.env for development (DEBUG is off unless set)"
+  echo "DEBUG=True" > backend/.env
+fi
+
 echo "[bootstrap] database"
 (cd backend && ./venv/bin/python manage.py migrate)
 

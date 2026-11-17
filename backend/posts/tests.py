@@ -13,6 +13,7 @@ against a blessed golden in posts/golden/. Workflow:
 Run: python manage.py test posts
 """
 
+import io
 import json
 import math
 import os
@@ -22,7 +23,7 @@ import tempfile
 from django.test import SimpleTestCase, TestCase, override_settings
 from PIL import Image, ImageChops, ImageDraw
 
-from posts.models import Post
+from posts.models import Post, PostReport
 from users.models import User
 
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), 'golden')
@@ -479,9 +480,12 @@ class TextSizeInvariantTests(RenderTestCase):
 
 class BackgroundImageTests(RenderTestCase):
     def make_background_file(self, color='#FF0000', size=(200, 100)):
-        path = os.path.join(TEST_MEDIA_ROOT, 'bg_source.png')
+        # as the upload endpoint stores one
+        name = 'backgrounds/11111111-2222-3333-4444-555555555555.png'
+        path = os.path.join(TEST_MEDIA_ROOT, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         Image.new('RGB', size, color).save(path)
-        return f'file://{path}', size
+        return f'/media/{name}', size
 
     def test_background_image_covers_canvas_and_is_never_cropped(self):
         uri, (img_w, img_h) = self.make_background_file()
@@ -539,9 +543,11 @@ class BackgroundImageTests(RenderTestCase):
 
 class StickerTests(RenderTestCase):
     def make_sticker_file(self, color='#00FF00', size=(120, 120)):
-        path = os.path.join(TEST_MEDIA_ROOT, 'sticker_source.png')
+        name = 'stickers/11111111-2222-3333-4444-555555555555.png'
+        path = os.path.join(TEST_MEDIA_ROOT, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         Image.new('RGBA', size, color).save(path)
-        return path, size
+        return f'https://media.example/{name}', size
 
     def test_sticker_renders_at_position_and_extends_bounds(self):
         path, (w, h) = self.make_sticker_file()
@@ -1492,9 +1498,18 @@ class PayloadValidationTests(TestCase):
                                 HTTP_X_DEVICE_ID='validation-test-device')
 
     def test_moderation_reads_the_drawn_text(self):
-        body = self.payload(text_content='harmless', text_elements=[
-            {'content': 'buy spam now', 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}])
-        self.assertEqual(self.post(body).status_code, 400)
+        words = os.path.join(TEST_MEDIA_ROOT, 'banned_words.txt')
+        with open(words, 'w') as fh:
+            fh.write('# one word or phrase per line\nbadword\n')
+        def body(drawn):
+            return self.payload(text_content='harmless', text_elements=[
+                {'content': drawn, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}])
+        with override_settings(BANNED_WORDS_FILE=words):
+            self.assertEqual(self.post(body('buy BADWORD now')).status_code, 400)
+            # whole words only: a word that merely contains one is fine
+            self.assertEqual(self.post(body('badwords of wisdom')).status_code, 201)
+        # no list, no filter ("spam" used to be refused as inappropriate)
+        self.assertEqual(self.post(body('my inbox is full of spam')).status_code, 201)
 
     def test_text_has_no_length_limit(self):
         long = {'content': 'x' * 2000, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000'}
@@ -1916,3 +1931,136 @@ class HighlighterBandTests(SimpleTestCase):
         self.assertEqual(snap_line_widths([400, 440, 480], 100), [480, 480, 480])
         self.assertEqual(snap_line_widths([500, 0, 520], 100), [500, 0, 520])
 
+
+
+class ReviewFixTests(RenderTestCase):
+    """Regressions from the November 2026 review: each of these was a bug."""
+
+    def api(self, method, path, device, body=None):
+        return getattr(self.client, method)(
+            path, data=json.dumps(body or {}), content_type='application/json', HTTP_X_DEVICE_ID=device)
+
+    def make(self, device='fix-a', text='hello there', **extra):
+        element = {'content': text, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+                   'fontFamily': 'arial-black', **extra.pop('element', {})}
+        body = {'text_content': text, 'text_elements': [element], 'canvas_width': 1080,
+                'canvas_height': 2340, 'background_color': '#F8F8FF', **extra}
+        return self.api('post', '/api/posts/', device, body)
+
+    def feed(self, device='fix-b'):
+        return self.client.get('/api/feed/', HTTP_X_DEVICE_ID=device).json()['results']
+
+    def test_a_long_styled_post_does_not_weigh_down_the_feed(self):
+        text = ' '.join(['lorem'] * 400)
+        created = self.make(text=text, element={'rainbow': True, 'fontSize': 40}).json()
+        self.assertIsNone(created['text_plan'])
+        quote = self.make('fix-b', 'look', repost_data={
+            'original_post_id': created['id'], 'repost_geometry': {'x': 100, 'y': 1200, 'width': 800}})
+        self.assertEqual(quote.status_code, 201)
+        entry = self.feed()[0]
+        self.assertIsNone(entry['quote_chain'][0]['text_plan'])
+        self.assertLess(len(json.dumps(entry)), 40_000)
+        # an ordinary post keeps its draw list
+        self.assertIsNotNone(self.make(text='short and plain').json()['text_plan'])
+
+    def test_an_unsigned_post_does_not_say_who_wrote_it(self):
+        first, second = self.make().json(), self.make(text='another').json()
+        handle = User.objects.get(device_id='fix-a').handle
+        for post in (first, second, *self.feed()):
+            self.assertNotEqual(post['author']['handle'], handle)
+        # ... nor that two posts are one person's
+        self.assertNotEqual(first['author']['handle'], second['author']['handle'])
+        signed = self.make(text='signed', is_signed=True).json()
+        self.assertEqual(signed['author']['handle'], handle)
+
+    def test_the_author_of_an_unsigned_post_can_be_muted_and_blocked(self):
+        alias = self.make().json()['author']['handle']
+        self.assertEqual(self.api('post', f'/api/users/{alias}/mute/', 'fix-b').status_code, 200)
+        self.assertEqual(self.feed(), [])
+        self.assertEqual(self.api('delete', f'/api/users/{alias}/unmute/', 'fix-b').status_code, 200)
+        self.assertEqual(len(self.feed()), 1)
+        self.assertEqual(self.api('post', f'/api/users/{alias}/block/', 'fix-b').status_code, 200)
+        self.assertEqual(self.feed(), [])
+        self.assertEqual(self.api('post', '/api/users/~not-a-post/mute/', 'fix-b').status_code, 404)
+
+    def test_reporting_twice_is_refused_not_an_error(self):
+        post = self.make().json()
+        for path in (f"/api/posts/{post['id']}/report/", f"/api/users/{post['author']['handle']}/report/"):
+            self.assertEqual(self.api('post', path, 'fix-b', {'reason': 'spam'}).status_code, 200)
+            self.assertEqual(self.api('post', path, 'fix-b', {'reason': 'spam'}).status_code, 400)
+        self.assertEqual(User.objects.get(device_id='fix-a').report_count, 1)
+
+    def test_a_report_is_of_the_post_in_the_url(self):
+        first, second = self.make().json(), self.make(text='another').json()
+        self.api('post', f"/api/posts/{first['id']}/report/", 'fix-b', {'reason': 'spam', 'post': second['id']})
+        self.assertEqual([str(r.post_id) for r in PostReport.objects.all()], [first['id']])
+
+    def test_you_cannot_report_yourself(self):
+        alias = self.make().json()['author']['handle']
+        self.assertEqual(self.api('post', f'/api/users/{alias}/report/', 'fix-a', {'reason': 'spam'}).status_code, 400)
+
+    def test_a_quote_needs_a_post_that_is_up(self):
+        for bad in ('not-a-uuid', '00000000-0000-0000-0000-000000000000', None):
+            self.assertEqual(self.make(repost_data={'original_post_id': bad}).status_code, 400, bad)
+        hidden = self.make(text='taken down').json()
+        Post.objects.filter(pk=hidden['id']).update(is_hidden=True)
+        self.assertEqual(self.make('fix-b', repost_data={'original_post_id': hidden['id']}).status_code, 400)
+
+    def test_a_post_taken_down_is_covered_where_it_is_quoted(self):
+        original = self.make(text='taken down later').json()
+        self.make('fix-b', 'look', repost_data={
+            'original_post_id': original['id'], 'repost_geometry': {'x': 100, 'y': 1200, 'width': 800}})
+        Post.objects.filter(pk=original['id']).update(is_hidden=True)
+        entry = self.feed('fix-c')[0]
+        level = entry['quote_chain'][0]
+        self.assertTrue(level['hidden'])
+        self.assertEqual((level['snippet'], level['text_elements'], level['text_plan']), ('', [], None))
+        self.assertEqual(entry['quote'], {'hidden': True})
+
+    def test_everyone_in_a_quoted_chain_is_told(self):
+        from posts.models import Notification
+        quote = {'repost_geometry': {'x': 100, 'y': 1200, 'width': 800}}
+        first = self.make('fix-a', 'first').json()
+        second = self.make('fix-b', 'second', repost_data={'original_post_id': first['id'], **quote}).json()
+        self.make('fix-a', 'third', repost_data={'original_post_id': second['id'], **quote})
+        fourth = self.make('fix-c', 'fourth', repost_data={'original_post_id': second['id'], **quote}).json()
+        told = Notification.objects.filter(post_id=fourth['id'])
+        # the author answered and the author further up, once each
+        self.assertEqual(sorted(n.recipient.device_id for n in told), ['fix-a', 'fix-b'])
+        # ... and nobody is told about their own post, however deep they are in it
+        self.assertFalse(Notification.objects.filter(recipient__device_id='fix-c').exists())
+        listed = self.client.get('/api/notifications/', HTTP_X_DEVICE_ID='fix-a').json()['results']
+        self.assertTrue(all(n['actor_handle'] is None for n in listed), 'unsigned quotes stay anonymous')
+
+    def test_values_the_renderer_cannot_draw_are_refused(self):
+        self.assertEqual(self.make(background_color='#+12345').status_code, 400)
+        self.assertEqual(self.make(element={'letterSpacing': 'wide'}).status_code, 400)
+        self.assertEqual(self.make(element={'opacity': 'half'}).status_code, 400)
+        self.assertEqual(self.make(element={'letterSpacing': 4, 'opacity': 0.5}).status_code, 201)
+
+    def test_a_device_id_has_to_fit(self):
+        self.assertEqual(self.client.get('/api/users/profile/', HTTP_X_DEVICE_ID='x' * 101).status_code, 400)
+        before = User.objects.count()
+        self.assertEqual(self.client.post('/api/users/create/', data='{}', content_type='application/json').status_code, 400)
+        self.assertEqual(User.objects.count(), before)
+
+    @override_settings(ALLOW_IMAGE_POSTS=True)
+    def test_an_upload_is_the_image_it_is(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        def upload(path, name, data, content_type='image/png'):
+            return self.client.post(path, {'image': SimpleUploadedFile(name, data, content_type=content_type)},
+                                    HTTP_X_DEVICE_ID='fix-a')
+        png = io.BytesIO()
+        Image.new('RGB', (4, 4), '#FF0000').save(png, format='PNG')
+        for path in ('/api/backgrounds/upload/', '/api/stickers/upload/'):
+            self.assertEqual(upload(path, 'x.html', b'<script>alert(1)</script>').status_code, 400)
+            stored = upload(path, 'page.html', png.getvalue(), 'text/html')
+            self.assertEqual(stored.status_code, 200)
+            self.assertTrue(stored.json()['filename'].endswith('.png'))
+
+    def test_a_post_only_draws_images_the_uploads_stored(self):
+        outside = os.path.join(TEST_MEDIA_ROOT, 'outside.png')
+        Image.new('RGB', (10, 10), '#FF0000').save(outside)
+        for uri in (f'file://{outside}', outside, '/media/../outside.png', '/media/backgrounds/../outside.png',
+                    'http://169.254.169.254/latest/meta-data/', None, 7):
+            self.assertIsNone(Post._open_media_image(uri), uri)

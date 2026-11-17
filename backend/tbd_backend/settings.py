@@ -23,10 +23,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-3n@^hg0@wmx1t$lw2xkr2m0dbh_5r3o5dc#&l8g4=q#eg^z1ph')
+_DEV_SECRET_KEY = 'django-insecure-3n@^hg0@wmx1t$lw2xkr2m0dbh_5r3o5dc#&l8g4=q#eg^z1ph'
+SECRET_KEY = config('SECRET_KEY', default=_DEV_SECRET_KEY)
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=True, cast=bool)
+# Off unless asked for: with the default on, a box that lost its .env came up
+# in debug mode, accepting any host, on the key above. Development turns it
+# on in backend/.env (bootstrap.sh writes one).
+DEBUG = config('DEBUG', default=False, cast=bool)
+if not DEBUG and SECRET_KEY == _DEV_SECRET_KEY and not (len(sys.argv) > 1 and sys.argv[1] == 'test'):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('Set SECRET_KEY (and DEBUG=True for development) in backend/.env')
 
 # In development accept any host so the dev machine's LAN IP can change
 # freely; production must set the ALLOWED_HOSTS env var explicitly.
