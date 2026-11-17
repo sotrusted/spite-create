@@ -307,13 +307,18 @@ export default function PostDetailScreen() {
       const { uri } = await LegacyFS.downloadAsync(absoluteUrl(remote)!, target);
       try {
         const { granted } = await MediaLibrary.requestPermissionsAsync(true);
-        if (!granted) return;
+        if (!granted) {
+          Toast.show({ type: 'info', text1: 'Photo access denied', position: 'bottom' });
+          return;
+        }
         await MediaLibrary.saveToLibraryAsync(uri);
+        Toast.show({ type: 'success', text1: 'Saved to Photos', position: 'bottom' });
       } catch {
         await Share.share({ url: uri });
       }
     } catch (error) {
       console.log('Post export failed:', error);
+      Toast.show({ type: 'error', text1: 'Could not save', position: 'bottom' });
     }
   };
 

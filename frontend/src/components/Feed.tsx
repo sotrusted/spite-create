@@ -15,7 +15,7 @@ import Toast from 'react-native-toast-message';
 import { bootFeed, saveBootFeed } from '../utils/bootFeed';
 import { separatorColor } from '../utils/feedSeparator';
 import { onAuthorHidden } from '../utils/moderation';
-import { subscribeToPostDiscarded } from '../utils/postEvents';
+import { subscribeToPostDiscarded, isOwnPostKey } from '../utils/postEvents';
 import { Colors } from '../constants/colors';
 import { Post, FeedResponse } from '../types';
 import { api, endpoints, isOfflineError } from '../config/api';
@@ -244,6 +244,7 @@ export default function Feed({
     const payload = message.post ?? message.post_data;
     if (payload) {
       const incoming = payload as Post;
+      if (isOwnPostKey((payload as any).client_key)) return;
       if (myHandle.current && incoming.author?.handle === myHandle.current) return;
       setPendingPosts(prev => {
         if (prev.find(p => p.id === incoming.id)) return prev;
@@ -253,17 +254,13 @@ export default function Feed({
   }, []);
 
   const releasePendingPosts = useCallback(() => {
-    setPendingPosts(pending => {
-      if (pending.length > 0) {
-        setPosts(prev => {
-          const existing = new Set(prev.map(p => p.id));
-          return [...pending.filter(p => !existing.has(p.id)), ...prev];
-        });
-        setTimeout(scrollToTop, 50);
-      }
-      return [];
-    });
-  }, [scrollToTop]);
+    // The posts themselves come from the feed request, not from what the
+    // socket carried: the socket sends every post to everyone, so pasting
+    // those in showed posts by people this reader had muted or blocked
+    setPendingPosts([]);
+    fetchFeed(true);
+    setTimeout(scrollToTop, 50);
+  }, [scrollToTop, fetchFeed]);
 
   const handleRepostNotification = useCallback((message: WebSocketMessage) => {
     Toast.show({

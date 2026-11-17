@@ -205,9 +205,12 @@ export default function MainScreen() {
       try {
         const info = await FileSystem.getInfoAsync(ONBOARD_FLAG);
         if (!info.exists) {
-          const profile = await api.get(endpoints.getUserProfile);
-          setOnboardHandle(profile.data.handle || '');
+          // The terms come up whether or not the profile can be fetched: a
+          // first launch on a bad connection used to skip them altogether.
+          // The handle is filled in when it arrives (left alone if typed in).
           setShowOnboarding(true);
+          const profile = await api.get(endpoints.getUserProfile);
+          setOnboardHandle(current => current || profile.data.handle || '');
         }
       } catch (error) {
         console.log('Onboarding check failed (non-critical):', error);

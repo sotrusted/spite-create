@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
+import Constants from 'expo-constants';
 import { Colors } from '../constants/colors';
 import { GUIDELINES_TEXT, TERMS_TEXT, PRIVACY_TEXT } from '../constants/legal';
 import { SPACE, CHROME } from '../constants/space';
@@ -55,7 +56,8 @@ export default function SettingsScreen() {
 
   const deleteAccount = async () => {
     try {
-      await api.delete(endpoints.deleteAccount);
+      // (every repost of this account's posts is redrawn before it answers)
+      await api.delete(endpoints.deleteAccount, { timeout: 60000 });
     } catch (error) {
       console.log('Account deletion failed:', error);
       Alert.alert('Could not delete your account', 'Nothing was deleted. Check your connection and try again.');
@@ -124,7 +126,7 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>ABOUT</Text>
           <View style={styles.aboutItem}>
             <Text style={styles.aboutLabel}>Version</Text>
-            <Text style={styles.aboutValue}>1.0.0</Text>
+            <Text style={styles.aboutValue}>{Constants.expoConfig?.version ?? ''}</Text>
           </View>
         </View>
       </View>

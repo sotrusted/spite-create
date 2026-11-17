@@ -53,3 +53,11 @@ export const subscribeToPostDiscarded = (listener: DiscardListener) => {
     discardListeners.delete(listener);
   };
 };
+
+// The keys of the posts this app has sent (each post's Idempotency-Key). The
+// server puts the key on the post it broadcasts, so the feed can tell its
+// own post arriving over the socket - an unsigned post no longer says who
+// wrote it, which is how that used to be told.
+const ownKeys = new Set<string>();
+export const noteOwnPostKey = (key: string) => { ownKeys.add(key); };
+export const isOwnPostKey = (key: unknown) => typeof key === 'string' && ownKeys.has(key);

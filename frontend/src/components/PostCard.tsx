@@ -86,6 +86,8 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
   const displayBottomY = post.bottom_y;
 
   const handleRepost = () => {
+    // the stand-in for a post still on its way has no id the server knows
+    if ((post as any).__optimistic) return;
     const imageUri = post.rendered_image_url;
     if (!imageUri) {
       Alert.alert('Error', 'This post cannot be reposted (no image available)');
@@ -210,6 +212,7 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
     // Hand the post over: the feed already has every field the detail screen
     // needs, and its image is already in cache, so the screen renders warm
     // instead of flashing the loading animation while it refetches.
+    if ((post as any).__optimistic) return; // still on its way: no page yet
     (navigation as any).navigate('PostDetail', { postId: post.id, post });
   };
 

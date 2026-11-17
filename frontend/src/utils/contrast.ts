@@ -42,3 +42,27 @@ export const pickReadableColor = (background: string, palette: string[], current
     contrastRatio(bg, hexToRgb(candidate)) > contrastRatio(bg, hexToRgb(best)) ? candidate : best,
   palette[0]);
 };
+
+// The dim laid over the canvas while a text is typed: black or white at
+// `opacity`. It has to show (white over a white canvas is no dim at all -
+// which is what dark ink used to get) and the ink has to read on it: of the
+// two, the one that visibly changes the canvas, and where both do, the one
+// the ink reads better on. background null (a gradient or an image, which
+// vary under the text): whichever the ink contrasts with.
+export const scrimColorFor = (background: string | null, ink: string, opacity: number): string => {
+  const inkRgb = hexToRgb(ink);
+  const valid = (hex: string | null): hex is string => !!hex && /^#[0-9a-f]{6}$/i.test(hex);
+  if (!valid(background)) {
+    return contrastRatio(inkRgb, [0, 0, 0]) >= contrastRatio(inkRgb, [255, 255, 255]) ? '#000000' : '#FFFFFF';
+  }
+  const bg = hexToRgb(background);
+  const over = (scrim: number) =>
+    bg.map(c => Math.round(c * (1 - opacity) + scrim * opacity)) as [number, number, number];
+  const options = [{ color: '#000000', mixed: over(0) }, { color: '#FFFFFF', mixed: over(255) }]
+    .map(o => ({ ...o, shows: contrastRatio(bg, o.mixed), reads: contrastRatio(inkRgb, o.mixed) }));
+  const visible = options.filter(o => o.shows >= SCRIM_MIN_SHOW);
+  const pool = visible.length ? visible : options;
+  return pool.reduce((best, o) => (o.reads > best.reads ? o : best)).color;
+};
+// How much the dim must change the canvas to count as showing
+const SCRIM_MIN_SHOW = 1.15;

@@ -1,5 +1,6 @@
 import { WS_BASE_URL, ensureDeviceId } from '../config/api';
 import { Post } from '../types';
+import { AppState } from 'react-native';
 
 export interface WebSocketMessage {
   type: 'new_post' | 'post_updated' | 'post_removed' | 'user_banned' | 'connection_established' | 'pong' | 'repost_notification';
@@ -24,8 +25,12 @@ class WebSocketService {
   private ws: WebSocket | null = null;
   private url: string;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private maxReconnectDelay = 30000;
+  // closed on purpose (disconnect): no reconnecting until connect() again
+  private wanted = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private appState: { remove: () => void } | null = null;
   private isConnected = false;
   private eventHandlers: { [key: string]: WebSocketEventHandler[] } = {};
 
@@ -34,11 +39,32 @@ class WebSocketService {
   }
 
   async connect() {
+    this.wanted = true;
+    // Back in the foreground: connect at once rather than wait out a backoff
+    // (iOS drops the socket while the app is in the background)
+    this.appState ??= AppState.addEventListener('change', state => {
+      if (state === 'active' && this.wanted && !this.ws) {
+        this.reconnectAttempts = 0;
+        this.open();
+      }
+    });
+    await this.open();
+  }
+
+  private async open() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) return;
     try {
       // The device id identifies this client for targeted notifications
       const deviceId = await ensureDeviceId();
-      this.ws = new WebSocket(`${this.url}?device=${encodeURIComponent(deviceId)}`);
-      
+      // (closed, or opened by another call, while the id was read)
+      if (!this.wanted || this.ws) return;
+      const ws = new WebSocket(`${this.url}?device=${encodeURIComponent(deviceId)}`);
+      this.ws = ws;
+
       this.ws.onopen = () => {
         console.log('✅ WebSocket connected - real-time updates enabled');
         this.isConnected = true;
@@ -56,7 +82,8 @@ class WebSocketService {
       };
 
       this.ws.onclose = () => {
-        console.log('📡 WebSocket disconnected - using polling fallback');
+        if (this.ws !== ws) return; // an old socket, already replaced or closed on purpose
+        this.ws = null;
         this.isConnected = false;
         this.emit('disconnected', { type: 'connection_established' });
         this.handleReconnect();
@@ -75,10 +102,16 @@ class WebSocketService {
   }
 
   disconnect() {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    this.wanted = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
+    this.appState?.remove();
+    this.appState = null;
+    const ws = this.ws;
+    this.ws = null; // first: its onclose must not reconnect
+    ws?.close();
     this.isConnected = false;
     this.reconnectAttempts = 0;
   }
@@ -151,19 +184,17 @@ class WebSocketService {
     }
   }
 
+  // Never gives up: it used to stop after five tries (about 15 seconds
+  // offline) and stay off until the app was restarted. Backs off to one try
+  // every 30 seconds.
   private handleReconnect() {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      console.log(`📡 Attempting WebSocket reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) - feed continues normally`);
-      
-      setTimeout(() => {
-        this.connect();
-      }, this.reconnectDelay * this.reconnectAttempts);
-    } else {
-      console.log('📡 WebSocket reconnection stopped - feed will use refresh for updates');
-      this.isConnected = false;
-      // Don't emit error - just silently fall back to polling
-    }
+    if (!this.wanted || this.reconnectTimer) return;
+    this.reconnectAttempts++;
+    const delay = Math.min(this.maxReconnectDelay, this.reconnectDelay * 2 ** Math.min(this.reconnectAttempts - 1, 5));
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.open();
+    }, delay);
   }
 
   getConnectionStatus() {

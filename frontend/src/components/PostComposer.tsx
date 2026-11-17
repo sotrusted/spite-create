@@ -46,7 +46,7 @@ import { inkBaselineFor, metricsFor } from '../constants/fontMetrics';
 import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../types';
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { captureRef } from 'react-native-view-shot';
-import { emitPostCreated, emitPostDiscarded } from '../utils/postEvents';
+import { emitPostCreated, emitPostDiscarded, noteOwnPostKey } from '../utils/postEvents';
 import { TEXT_WRAP_FRACTION, buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
@@ -68,8 +68,7 @@ import {
   saveScratch, clearScratch, newDraftId,
 } from '../utils/drafts';
 import { CanvasState, CanvasTextElement } from '../types/canvas';
-import { contrastRatio, hexToRgb, pickReadableColor } from '../utils/contrast';
-import { flashColorOn } from './PressFlash';
+import { contrastRatio, hexToRgb, pickReadableColor, scrimColorFor } from '../utils/contrast';
 
 
 // Every gradient runs top-left to bottom-right. iOS projects each point onto
@@ -133,6 +132,8 @@ const readableDefaultInk = (canvas: string) => {
   return pickReadableColor(canvas, Colors.postColors, base);
 };
 const DEFAULT_SIGNATURE_STYLE = 'default';
+// How near the screen's centre line (points) a dragged text snaps onto it
+const CENTRE_SNAP = 6;
 
 // User can pick their own images as stickers - no presets needed
 
@@ -1096,15 +1097,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     });
   };
 
-  const deleteTextElement = (id: string) => {
-    if (textElements.length > 1) {
-      setTextElements(prev => prev.filter(el => el.id !== id));
-      if (selectedTextId === id) {
-        setSelectedTextId(textElements.find(el => el.id !== id)?.id || '');
-      }
-    }
-  };
-
   useEffect(() => {
     let isMounted = true;
     const fetchProfile = async () => {
@@ -1386,6 +1378,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const submitInBackground = async (
     payload: PostCreate, optimisticId: string | undefined, keptId: string, postKey: string,
   ) => {
+    // Kept in Drafts from the moment it is sent until the server has it: the
+    // canvas was already cleared, so an app killed (or reloaded for an
+    // update) mid-request used to lose the post altogether
+    if (payload.canvas_state) saveDraft(keptId, payload.canvas_state as CanvasState, repostData);
+    noteOwnPostKey(postKey);
     try {
       // Rendering plus a slow uplink can outlast the client's default 10s
       const response = await api.post(endpoints.createPost, payload, {
@@ -1861,15 +1858,24 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     h.dy = h.anchor.dy + y - h.anchor.y;
     const place = placements.current[h.id];
     if (place) {
-      place.x.value = h.base.x + h.dx;
+      place.x.value = heldX(h);
       place.y.value = h.base.y + h.dy;
     }
+    centreGuide.value = heldX(h) === screenWidth / 2 ? 1 : 0;
     followHold(h);
   };
+  // A text dragged to within CENTRE_SNAP of the screen's centre line sits on
+  // it, and the line shows (centreGuide) for as long as it does
+  const centreGuide = useSharedValue(0);
+  const heldX = (h: Hold) => {
+    const x = h.base.x + h.dx;
+    return Math.abs(x - screenWidth / 2) <= CENTRE_SNAP ? screenWidth / 2 : x;
+  };
+  const centreGuideStyle = useAnimatedStyle(() => ({ opacity: centreGuide.value }));
   // The crop guides, as the hold moves and sizes its text
   const cropFollow = useRef<((live: LivePlace | null) => void) | null>(null);
   const followHold = (h: Hold | null) =>
-    cropFollow.current?.(h && { id: h.id, x: h.base.x + h.dx, y: h.base.y + h.dy, scale: h.scale });
+    cropFollow.current?.(h && { id: h.id, x: heldX(h), y: h.base.y + h.dy, scale: h.scale });
   const releaseHold = (elementId: string, part: 'pan' | 'pinch') => {
     const h = hold.current;
     if (!h || h.id !== elementId) return;
@@ -1878,13 +1884,15 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (part === 'pinch') h.engagedAt = null;
     if (h.pan || h.pinch) return;
     hold.current = null;
+    centreGuide.value = 0;
     followHold(null);
     if (h.dx || h.dy || h.scale !== h.base.scale) {
-      updateTextElement(elementId, { x: h.base.x + h.dx, y: h.base.y + h.dy, scale: h.scale });
+      updateTextElement(elementId, { x: heldX(h), y: h.base.y + h.dy, scale: h.scale });
     }
   };
   const dropHold = () => {
     hold.current = null;
+    centreGuide.value = 0;
     followHold(null);
   };
 
@@ -2290,7 +2298,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               ) : (
                 <TouchableOpacity
                   onPress={() => startEditingText(element.id)}
-                  onLongPress={() => deleteTextElement(element.id)}
                 >
                   <OutlinedText
                     // (scaled by its placement, not by its own style)
@@ -2530,6 +2537,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 const drawn = fieldText(kept, opts);
                 if (drawn !== after) fieldCaret.current = toField(kept, Math.max(0, caret), opts);
                 fieldDrawn.current = drawn;
+                // typing leaves a caret, never a selection
+                const at = Math.max(0, Math.min(kept.length, caret));
+                setTextSelection({ start: at, end: at });
                 handleTextInputChange(element.id, kept);
               }}
               onSelectionChange={e => {
@@ -2802,12 +2812,53 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     );
   };
 
+  // A capture of the whole canvas cut down to the band [top, top + height)
+  // (points): the capture is shown in a box that size, moved up by `top`, and
+  // the box is captured. Any trouble and the whole canvas is what is saved.
+  const cropStageRef = useRef<View>(null);
+  const [cropJob, setCropJob] = useState<{
+    uri: string; top: number; height: number; loaded: () => void; failed: () => void;
+  } | null>(null);
+  const withScheme = (path: string) => (/^[a-z][a-z0-9+.-]*:/i.test(path) ? path : `file://${path}`);
+  const cropTo = (uri: string, top: number, height: number) => new Promise<string>(resolve => {
+    let settled = false;
+    const finish = (result: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      setCropJob(null);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(uri), 4000);
+    setCropJob({
+      uri, top, height,
+      failed: () => finish(uri),
+      // (two frames: the picture has to be on screen before it is captured)
+      loaded: () => requestAnimationFrame(() => requestAnimationFrame(async () => {
+        try {
+          finish(withScheme(await captureRef(cropStageRef, { format: 'png', quality: 1 })));
+        } catch (error) {
+          console.log('Crop capture failed, saving the whole canvas:', error);
+          finish(uri);
+        }
+      })),
+    });
+  });
+
   // Instagram Create Mode UI Components
   const handleDownload = async () => {
     let uri: string;
     try {
       const captured = await captureRef(canvasCaptureRef, { format: 'png', quality: 1 });
-      uri = /^[a-z][a-z0-9+.-]*:/i.test(captured) ? captured : `file://${captured}`;
+      uri = withScheme(captured);
+      // What is saved is the post - the band between the guides - not the
+      // whole screen with the empty canvas round it
+      const crop = backgroundImage ? { top: cropTop, bottom: cropBottom } : getProjectedDisplayCrop();
+      if (crop) {
+        const top = Math.max(0, Math.round(crop.top));
+        const bottom = Math.min(screenHeight, Math.round(crop.bottom));
+        if (bottom - top >= 1 && (top > 0 || bottom < screenHeight)) uri = await cropTo(uri, top, bottom - top);
+      }
     } catch (error) {
       console.log('Canvas capture failed:', error);
       Toast.show({ type: 'error', text1: 'Could not export', position: 'bottom' });
@@ -2844,7 +2895,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // mutually exclusive instead of leaving a stale pair behind the swatch.
   const setSelectedElementColor = (color: string) => {
     const el = selectedElement();
-    if (el) updateTextElement(el.id, { color, rainbow: false, alternateColors: undefined });
+    if (el) updateTextElement(el.id, { color, rainbow: false, alternateColors: undefined, colorRuns: undefined });
   };
   // Shuffle: a random font and text colour for the selected text, on a random
   // background it reads on (an image background stays). Each differs from
@@ -2864,15 +2915,15 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const readable = Colors.postColors.filter(c =>
       c !== el.color && contrastRatio(hexToRgb(background), hexToRgb(c)) >= 3.0);
     const color = readable.length ? pick(readable) : pickReadableColor(background, Colors.postColors, el.color);
-    switchFont(el, font, { color, rainbow: false, alternateColors: undefined });
+    switchFont(el, font, { color, rainbow: false, alternateColors: undefined, colorRuns: undefined });
   };
   const setSelectedElementRainbow = () => {
     const el = selectedElement();
-    if (el) updateTextElement(el.id, { rainbow: true, alternateColors: undefined });
+    if (el) updateTextElement(el.id, { rainbow: true, alternateColors: undefined, colorRuns: undefined });
   };
   const setSelectedElementDuo = (colors: string[]) => {
     const el = selectedElement();
-    if (el) updateTextElement(el.id, { rainbow: false, alternateColors: colors });
+    if (el) updateTextElement(el.id, { rainbow: false, alternateColors: colors, colorRuns: undefined });
   };
 
   const closeColorGrid = () => {
@@ -2912,8 +2963,14 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (!isEditingText || !el || !textSelection) return null;
     const start = Math.min(textSelection.start, textSelection.end);
     const end = Math.max(textSelection.start, textSelection.end);
-    return end > start ? { id: el.id, start, end } : null;
+    // (a selection is only real while it fits the text it was made in)
+    const length = (typedTextRef.current[el.id] ?? el.content).length;
+    return end > start && end <= length ? { id: el.id, start, end } : null;
   };
+  // A selection belongs to one stretch of typing in one text: iOS does not
+  // always report it gone, and a stale one kept the colour button colouring
+  // letters no longer selected
+  useEffect(() => { setTextSelection(null); }, [isEditingText, selectedTextId]);
   const openRangeColors = () => {
     const range = selectedRange();
     if (!range) return false;
@@ -2927,6 +2984,12 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     setTextElements(prev => prev.map(el => (el.id === range.id
       ? { ...el, colorRuns: applyColorToRange(el.colorRuns, range.start, range.end, color) }
       : el)));
+    // Coloured, the selection is done with: the caret goes to its end, here
+    // and in the field, so the two cannot disagree about what is selected
+    rangeTarget.current = null;
+    setTextSelection({ start: range.end, end: range.end });
+    const el = textElementsRef.current.find(e => e.id === range.id);
+    if (el) fieldCaret.current = toField(typedTextRef.current[el.id] ?? el.content, range.end, fieldOptions(el));
   };
 
   const renderColorGrid = () => {
@@ -3338,19 +3401,23 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const cycleColor = () => {
       // Palette colors in order, then rainbow, then back to the start.
       // A duo is only reachable from the grid, so tapping through drops it.
+      // With nothing selected the button colours the whole text: colours
+      // given to selections earlier go, or they would sit on top of every
+      // colour chosen here and the button would seem to do nothing.
+      const whole = { colorRuns: undefined };
       if (el.alternateColors?.length === 2) {
-        updateTextElement(el.id, { alternateColors: undefined, color: Colors.postColors[1] });
+        updateTextElement(el.id, { ...whole, alternateColors: undefined, color: Colors.postColors[1] });
         return;
       }
       if (el.rainbow) {
-        updateTextElement(el.id, { rainbow: false, color: Colors.postColors[1] });
+        updateTextElement(el.id, { ...whole, rainbow: false, color: Colors.postColors[1] });
         return;
       }
       const index = Colors.postColors.indexOf(el.color);
       if (index === Colors.postColors.length - 1 || index === -1) {
-        updateTextElement(el.id, { rainbow: true });
+        updateTextElement(el.id, { ...whole, rainbow: true });
       } else {
-        updateTextElement(el.id, { color: Colors.postColors[index + 1] });
+        updateTextElement(el.id, { ...whole, color: Colors.postColors[index + 1] });
       }
     };
 
@@ -3686,6 +3753,27 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       {/* Adaptive crop guides for text posts */}
       {renderCropGuides()}
 
+      {/* The screen's centre line, while a dragged text sits on it. Outside
+          the captured canvas, like the crop guides */}
+      <AnimatedReanimated.View pointerEvents="none" style={[styles.centreGuide, centreGuideStyle]} />
+
+      {/* Where a saved picture is cut down to the post's crop (cropTo):
+          behind the canvas, never seen */}
+      {cropJob && (
+        <View pointerEvents="none" style={styles.cropStage}>
+          <View ref={cropStageRef} collapsable={false}
+                style={{ width: screenWidth, height: cropJob.height, overflow: 'hidden' }}>
+            <Image
+              source={{ uri: cropJob.uri }}
+              fadeDuration={0}
+              style={{ width: screenWidth, height: screenHeight, marginTop: -cropJob.top }}
+              onLoad={() => cropJob.loaded()}
+              onError={() => cropJob.failed()}
+            />
+          </View>
+        </View>
+      )}
+
       {/* Signature band preview at the projected top edge of the post -
           where the feed will draw it. Hidden while the parity ghost is up
           (the band is a feed overlay, not part of the rendered PNG). */}
@@ -3713,7 +3801,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       {isEditingText && (
         <View
           style={[StyleSheet.absoluteFill, styles.editingScrim, {
-            backgroundColor: flashColorOn(textElements.find(el => el.id === selectedTextId)?.color ?? '#FFFFFF'),
+            backgroundColor: scrimColorFor(
+              backgroundGradient.length > 0 || backgroundImage ? null : backgroundColor,
+              textElements.find(el => el.id === selectedTextId)?.color ?? '#FFFFFF',
+              CHROME.editingScrimOpacity,
+            ),
           }]}
           pointerEvents="none"
         />
@@ -4198,6 +4290,14 @@ const styles = StyleSheet.create({
   clip: { overflow: 'hidden' },
   // the text being edited, laid out as it will be placed, to read its lines
   // (the placed text's box: up to the wrap width, as wide as its lines)
+  centreGuide: {
+    position: 'absolute', top: 0, bottom: 0, left: screenWidth / 2 - 1, width: 2, zIndex: 25,
+    backgroundColor: 'rgba(255, 255, 255, 0.55)',
+    // a hairline of shade either side, so it shows on a white canvas too
+    borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0, 0, 0, 0.35)',
+  },
+  cropStage: { position: 'absolute', left: 0, top: 0, zIndex: -1 },
   unseen: {
     position: 'absolute', left: 0, top: 0, opacity: 0,
     width: screenWidth * TEXT_WRAP_FRACTION, alignItems: 'center',
