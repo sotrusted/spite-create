@@ -2179,3 +2179,27 @@ class PushTests(RenderTestCase):
             push.deliver([{'to': token, 'title': 't', 'body': 'b', 'data': {}}])
         self.assertEqual(post.call_count, 1)
         self.assertEqual(User.objects.get(device_id='push-a').push_token, '')
+
+
+class HideAllPostsTests(RenderTestCase):
+    def test_the_feed_is_cleared_and_can_be_brought_back(self):
+        import io, tempfile
+        from django.core.management import call_command
+        for text in ('one', 'two'):
+            element = {'content': text, 'x': 540, 'y': 1000, 'fontSize': 60, 'color': '#000000',
+                       'fontFamily': 'arial-black'}
+            self.client.post('/api/posts/', data=json.dumps({
+                'text_content': text, 'text_elements': [element], 'canvas_width': 1080,
+                'canvas_height': 2340, 'background_color': '#F8F8FF'}),
+                content_type='application/json', HTTP_X_DEVICE_ID='hide-a')
+        feed = lambda: self.client.get('/api/feed/', HTTP_X_DEVICE_ID='hide-b').json()['results']
+        self.assertEqual(len(feed()), 2)
+        call_command('hide_all_posts', stdout=io.StringIO(), stderr=io.StringIO())
+        self.assertEqual(len(feed()), 2)  # a dry run changes nothing
+        out = io.StringIO()
+        call_command('hide_all_posts', apply=True, stdout=out, stderr=io.StringIO())
+        self.assertEqual(feed(), [])
+        with tempfile.NamedTemporaryFile('w', suffix='.txt') as ids:
+            ids.write(out.getvalue()); ids.flush()
+            call_command('hide_all_posts', restore=ids.name, stdout=io.StringIO(), stderr=io.StringIO())
+        self.assertEqual(len(feed()), 2)
