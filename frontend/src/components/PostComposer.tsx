@@ -110,6 +110,9 @@ const SLIDER_MAX_FONT = 72;
 // height (Arial Black, Times and Caveat have very different ascents), so the
 // labels are placed like the masthead: top = baseline - ink ascent x size.
 const BAR_BASELINE = 27; // pt from the top of a 38pt control
+// What an empty canvas says where the first text will go
+const PLACEHOLDER = 'Type...';
+
 const onBarBaseline = (fontFamily: string, fontSize: number) => ({
   position: 'absolute' as const,
   left: 0,
@@ -1673,9 +1676,27 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
 
   // Placeholder at half strength, scaled by the element's own opacity so
   // pre-typing opacity taps give immediate feedback
-  const placeholderNode = (element: TextElement) => {
+  // It is drawn the way the text will be - every choice on the config row
+  // shows on it before a letter is typed: capitals, the letter colours
+  // (rainbow, a pair), the highlighter's ink, and (from its callers, which
+  // draw it through OutlinedText) the border and the highlighter itself.
+  const placeholderText = (element: TextElement, caps = false) =>
+    caps && element.capsLock ? PLACEHOLDER.toUpperCase() : PLACEHOLDER;
+  const placeholderShown = (element: TextElement) =>
+    !getDisplayText(element) && !anyElementHasInk() && (isEditingText ? selectedTextId === element.id : element.id === '1');
+  const placeholderNode = (element: TextElement, caps = false) => {
     const alpha = Math.round(128 * (element.opacity ?? 1)).toString(16).padStart(2, '0');
-    return <Text style={{ color: (element.color || '#1B1B1B') + alpha }}>Type...</Text>;
+    const faded = (color: string) => (/^#[0-9a-f]{6}$/i.test(color) ? color + alpha : color);
+    const text = placeholderText(element, caps);
+    const palette = cycleColorsFor(element);
+    if (!palette) {
+      const ink = element.backgroundMode === 'inverted' ? '#FFFFFF' : element.color || '#1B1B1B';
+      return <Text style={{ color: faded(ink) }}>{text}</Text>;
+    }
+    let n = 0;
+    return Array.from(text).map((ch, i) => (
+      <Text key={i} style={{ color: faded(palette[n++ % palette.length]) }}>{ch}</Text>
+    ));
   };
 
   // The palette a text element cycles per letter, or null for a flat colour.
@@ -1710,8 +1731,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
 
   // (caps: in capitals letter for letter, as the editing field holds them)
   const renderDisplayContent = (element: TextElement, caps = false) => {
-    const showPlaceholder = !getDisplayText(element) && element.id === '1' && !isEditingText && !anyElementHasInk();
-    if (showPlaceholder) return placeholderNode(element);
+    if (!isEditingText && placeholderShown(element)) return placeholderNode(element);
     const raw = caps && element.capsLock ? capsOf(drawnText(element)) : drawnText(element);
     // Same rule as the server: one palette advanced per non-space character,
     // with an explicit pair taking precedence over rainbow, and colour
@@ -2318,7 +2338,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                     style={[getTextStyle(element), { transform: [] }]}
                     outlineColor={outlineColorFor(element)}
                     outlineWidth={element.fontSize * OUTLINE.widthEm}
-                    plain={displayPlain(element)}
+                    plain={placeholderShown(element) ? placeholderText(element) : displayPlain(element)}
                     onLines={recordLines(element)}
                     onLayout={(event) => {
                       // True text block size (unlike the 120px-min touch
@@ -2526,6 +2546,21 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               </View>
               </View>
             )}
+            {/* The placeholder, drawn as the text will be (the field's own
+                shows a font and a colour and nothing else): behind the
+                field, where its first line sits */}
+            {!content && placeholderShown(element) && (
+              <View pointerEvents="none" style={[styles.outlineCopy, { left: 0, right: 0, top: 0 }]}>
+                <OutlinedText
+                  style={[fieldStyle, { backgroundColor: chip ?? 'transparent' }]}
+                  outlineColor={outlineColorFor(element)}
+                  outlineWidth={ring}
+                  plain={placeholderText(element, true)}
+                >
+                  {placeholderNode(element, true)}
+                </OutlinedText>
+              </View>
+            )}
             <TextInput
               key={`editing-${element.id}`}
               ref={fieldRef}
@@ -2540,8 +2575,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
               // with caps on the keyboard types capitals, so what it holds is
               // what is drawn; they are kept lower case (utils/editField)
               autoCapitalize={element.capsLock ? 'characters' : 'sentences'}
-              placeholder={anyElementHasInk() ? undefined : 'Type...'}
-              placeholderTextColor={`${element.color || '#1B1B1B'}80`}
+              // (unseen: it only gives the empty field its first line)
+              placeholder={anyElementHasInk() ? undefined : PLACEHOLDER}
+              placeholderTextColor="transparent"
               onChangeText={after => {
                 const typed = typedTextRef.current[element.id] ?? content;
                 const edit = readEdit(typed, fieldDrawn.current, after, opts);
@@ -3306,8 +3342,23 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     );
   };
 
+  // Taps cycle the short list; a grid-only font steps on to the toggle font
+  // that follows it in the grid's order
+  const cycleFont = (el: TextElement) => {
+    const toggle = FONT_TOGGLE as FontChoice[];
+    const at = toggle.indexOf(el.fontFamily);
+    const menuAt = FONT_MENU.indexOf(el.fontFamily);
+    const next = at >= 0
+      ? toggle[(at + 1) % toggle.length]
+      : toggle.find(k => FONT_MENU.indexOf(k) > menuAt) ?? toggle[0];
+    switchFont(el, next);
+  };
+
   const renderTopMenu = () => {
-    
+    // The text the config row is styling, when that row is up
+    const styled = showControlBar ? getCurrentTextElement() : null;
+    const styledFont = styled ? FontChoices[styled.fontFamily] : null;
+
     return (
       <View style={styles.topMenu}>
         {/* Left - Close Button (a spacer while typing keeps the right side put) */}
@@ -3346,6 +3397,28 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           {textElements.length > 0 && (
             <TouchableOpacity style={styles.topMenuButton} onPress={shuffleSelectedElement}>
               <Ionicons name="shuffle" size={CHROME.iconSize - 2} color="white" />
+            </TouchableOpacity>
+          )}
+
+          {/* Font: shows and cycles the typeface; hold for the grid of them all */}
+          {styled && styledFont && (
+            <TouchableOpacity
+              style={styles.topMenuButton}
+              onPress={() => cycleFont(styled)}
+              onLongPress={() => setFontGridOpen(true)}
+              delayLongPress={GESTURES.longPress.controlMs}
+            >
+              <Text
+                // (on the config row's baseline, moved down by what the
+                // taller top-row button adds above it)
+                style={[styles.controlFontLabel, onBarBaseline(styledFont.fontFamily, 22), {
+                  top: onBarBaseline(styledFont.fontFamily, 22).top + (CHROME.iconButton - 38) / 2,
+                  fontFamily: styledFont.fontFamily,
+                  fontWeight: styledFont.fontWeight as any,
+                }]}
+              >
+                Aa
+              </Text>
             </TouchableOpacity>
           )}
 
@@ -3398,20 +3471,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     if (!showControlBar) return null;
     const el = getCurrentTextElement();
     if (!el) return null;
-
-    const fontConfig = FontChoices[el.fontFamily];
-
-    // Taps cycle the short list; a grid-only font steps on to the toggle font
-    // that follows it in the grid's order
-    const cycleFont = () => {
-      const toggle = FONT_TOGGLE as FontChoice[];
-      const at = toggle.indexOf(el.fontFamily);
-      const menuAt = FONT_MENU.indexOf(el.fontFamily);
-      const next = at >= 0
-        ? toggle[(at + 1) % toggle.length]
-        : toggle.find(k => FONT_MENU.indexOf(k) > menuAt) ?? toggle[0];
-      switchFont(el, next);
-    };
 
     const cycleColor = () => {
       // Palette colors in order, then rainbow, then back to the start.
@@ -3494,22 +3553,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
           contentContainerStyle={[styles.bottomControlBar, { flexGrow: 1, justifyContent: 'center' }]}
           keyboardShouldPersistTaps="always"
         >
-          {/* Font: shows and cycles the typeface */}
-          <TouchableOpacity
-            style={styles.controlOption}
-            onPress={cycleFont}
-            onLongPress={() => setFontGridOpen(true)}
-            delayLongPress={GESTURES.longPress.controlMs}
-          >
-            <Text
-              style={[styles.controlFontLabel, onBarBaseline(fontConfig.fontFamily, 22), {
-                fontFamily: fontConfig.fontFamily,
-                fontWeight: fontConfig.fontWeight as any,
-              }]}
-            >
-              Aa
-            </Text>
-          </TouchableOpacity>
           {/* Bold/italic appear only for families with the real face */}
           {canBold && (
             <TouchableOpacity
