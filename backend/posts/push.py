@@ -94,6 +94,9 @@ def deliver(messages):
         except Exception as e:
             print(f'Push send failed: {e}')
             continue
+        for ticket in tickets:
+            if ticket.get('status') == 'error':
+                print(f'Push refused: {ticket.get("message")} ({(ticket.get("details") or {}).get("error")})')
         dead = [message['to'] for message, ticket in zip(batch, tickets)
                 if ticket.get('status') == 'error'
                 and (ticket.get('details') or {}).get('error') == 'DeviceNotRegistered']
