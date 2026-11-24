@@ -195,7 +195,8 @@ export default function MainScreen() {
     });
   };
 
-  // First-open: offer the generated handle for editing before first use
+  // First-open: pick a handle and agree to the terms. The field starts empty;
+  // left empty, the account keeps the handle the server generated for it.
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardHandle, setOnboardHandle] = useState('');
   const [agreedTerms, setAgreedTerms] = useState(false);
@@ -205,12 +206,7 @@ export default function MainScreen() {
       try {
         const info = await FileSystem.getInfoAsync(ONBOARD_FLAG);
         if (!info.exists) {
-          // The terms come up whether or not the profile can be fetched: a
-          // first launch on a bad connection used to skip them altogether.
-          // The handle is filled in when it arrives (left alone if typed in).
           setShowOnboarding(true);
-          const profile = await api.get(endpoints.getUserProfile);
-          setOnboardHandle(current => current || profile.data.handle || '');
         }
       } catch (error) {
         console.log('Onboarding check failed (non-critical):', error);
