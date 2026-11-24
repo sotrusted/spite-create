@@ -20,6 +20,39 @@ export const atLeast = (r: Rect, minWidth: number, minHeight: number): Rect => {
   return { x: r.x + (r.width - width) / 2, y: r.y + (r.height - height) / 2, width, height };
 };
 
+// --- drag: which text element ---
+
+// A text as drawn (scale applied): its centre and half its size, points
+export interface TouchBox { id: string; x: number; y: number; halfWidth: number; halfHeight: number }
+
+// The text a finger coming down at `point` takes hold of (null: none).
+// Each text is a target at least minTarget in size, centred on it, so a
+// short word can be grabbed; where targets overlap, the text whose drawn
+// box is nearest the finger wins, then the smaller one, then the one on
+// top (later in the list). A big text's target is only its own drawn box:
+// it does not reach out and take a touch meant for a text beside it.
+// (Runs on the UI thread: plain loops, no closures.)
+export function pickTouchTarget(boxes: TouchBox[], point: Point, minTarget: number): string | null {
+  'worklet';
+  let best: string | null = null;
+  let bestDistance = 0;
+  let bestArea = 0;
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const box = boxes[i];
+    const offX = Math.abs(point.x - box.x);
+    const offY = Math.abs(point.y - box.y);
+    if (offX > Math.max(box.halfWidth, minTarget / 2) || offY > Math.max(box.halfHeight, minTarget / 2)) continue;
+    const distance = Math.hypot(Math.max(0, offX - box.halfWidth), Math.max(0, offY - box.halfHeight));
+    const area = box.halfWidth * box.halfHeight;
+    if (best === null || distance < bestDistance || (distance === bestDistance && area < bestArea)) {
+      best = box.id;
+      bestDistance = distance;
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
 // --- pinch: which text element ---
 
 export interface PinchCandidate {

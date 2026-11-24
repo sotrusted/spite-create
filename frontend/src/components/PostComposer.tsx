@@ -55,6 +55,7 @@ import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { applyColorToRange, adjustRuns, colorSpans, duoOf, duoRun, RAINBOW_RUN } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
+import { LIMITS } from '../constants/limits';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
 import OutlinedText, { OUTLINE_STEPS } from './OutlinedText';
@@ -63,7 +64,7 @@ import { capsOf, fieldText, FieldOptions, readEdit, toField, toTyped } from '../
 import { softBreaks } from '../utils/lineBreaks';
 import type { LineBox } from '../utils/lineChips';
 import { stripEmoji } from '../utils/emoji';
-import { pickPinchTarget, PinchCandidate } from '../utils/hitTest';
+import { pickPinchTarget, pickTouchTarget, PinchCandidate, TouchBox } from '../utils/hitTest';
 import { toCanvasState, fromCanvasState } from '../utils/canvasState';
 import {
   Draft, DraftTarget, saveDraft, saveDraftThumb, removeDraft, listDrafts, onDraftsChanged,
@@ -103,7 +104,7 @@ const gradientLineFor = (band: { top: number; bottom: number }) => ({
 const CAPTION_CLEARANCE = SPACE.lg + SPACE.lg;
 // The size slider's range (pt), which font switching also keeps to
 const SLIDER_MIN_FONT = 8;
-const SLIDER_MAX_FONT = 72;
+const SLIDER_MAX_FONT = 144;
 
 // Every text label in the config row sits on ONE baseline whatever its font.
 // Centring each label in its button left each face floating at its own
@@ -1839,6 +1840,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   type Hold = {
     id: string;
     base: { x: number; y: number; scale: number }; // committed
+    fontSize: number; // its slider size: the pinch's limits are on the letters
     dx: number; dy: number; scale: number; // where the hold has taken it
     pan: boolean; pinch: boolean; // which gestures are still down
     // the touch point the move is measured from, and the offset then: taken
@@ -1858,7 +1860,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const el = textElements.find(e => e.id === elementId);
     if (!el) return null;
     hold.current = {
-      id: elementId, base: { x: el.x, y: el.y, scale: el.scale || 1 },
+      id: elementId, base: { x: el.x, y: el.y, scale: el.scale || 1 }, fontSize: el.fontSize || 24,
       dx: 0, dy: 0, scale: el.scale || 1, pan: false, pinch: false, anchor: null, engagedAt: null,
     };
     return hold.current;
@@ -1925,29 +1927,28 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const callLive = (name: string, ...args: any[]) => (live.current as any)[name](...args);
   // Which text a touch comes down on is decided on the UI thread, where the
   // gesture can be failed or started by hand: from these boxes, drawn size
-  const textBoxes = useSharedValue<{ id: string; x: number; y: number; halfWidth: number; halfHeight: number }[]>([]);
+  // (the text itself, not the box it is laid out in: that box is at least
+  // the touch minimum before the pinch scales it, so a small word made big
+  // had an unseen box several times its size, and took the drags meant for
+  // the texts around it)
+  const textBoxes = useSharedValue<TouchBox[]>([]);
   const textDraggable = useSharedValue(true);
   const textTouch = useSharedValue<{ x: number; y: number; moving: boolean } | null>(null);
   useEffect(() => {
     textBoxes.value = textElements.map(el => {
-      const size = elementSizes[el.id] ?? { width: GESTURES.touch.minElementTarget, height: GESTURES.touch.minElementTarget };
+      const size = textInkSizes[el.id] ?? elementSizes[el.id] ?? { width: 0, height: 0 };
       const scale = el.scale || 1;
       return { id: el.id, x: el.x, y: el.y, halfWidth: size.width * scale / 2, halfHeight: size.height * scale / 2 };
     });
-  }, [textElements, elementSizes]);
+  }, [textElements, elementSizes, textInkSizes]);
   useEffect(() => { textDraggable.value = !isEditingText; }, [isEditingText]);
   const textPanDown = (e: GestureTouchEvent, manager: GestureStateManager) => {
     'worklet';
     if (textTouch.value) return; // a later finger of the same hold
     const touch = e.allTouches[0];
-    let id: string | null = null;
-    if (touch && textDraggable.value) {
-      const boxes = textBoxes.value;
-      for (let i = boxes.length - 1; i >= 0 && !id; i--) {
-        const box = boxes[i];
-        if (Math.abs(touch.x - box.x) <= box.halfWidth && Math.abs(touch.y - box.y) <= box.halfHeight) id = box.id;
-      }
-    }
+    const id = touch && textDraggable.value
+      ? pickTouchTarget(textBoxes.value, { x: touch.x, y: touch.y }, GESTURES.touch.minElementTarget)
+      : null;
     if (!id) {
       manager.fail();
       return;
@@ -2031,7 +2032,9 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       // from the size it reached
       h.engagedAt = scale / Math.pow(h.scale / h.base.scale, 1 / GESTURES.pinch.gain);
     }
-    h.scale = Math.max(GESTURES.pinch.minScale, Math.min(GESTURES.pinch.maxScale,
+    // (no bigger than the server draws: its limit is in canvas px)
+    const maxSize = Math.min(GESTURES.pinch.maxSize, LIMITS.fontSizeMax * screenWidth / LIMITS.canvasWidth);
+    h.scale = Math.max(GESTURES.pinch.minSize / h.fontSize, Math.min(maxSize / h.fontSize,
       h.base.scale * Math.pow(scale / h.engagedAt, GESTURES.pinch.gain)));
     const place = placements.current[h.id];
     if (place) place.scale.value = h.scale;

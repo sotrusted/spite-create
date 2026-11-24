@@ -17,9 +17,11 @@ export interface GesturePolicy {
     // Response to the fingers: the text's size changes as the spread raised
     // to this power, so a small pinch does a lot (1 = follows the fingers)
     gain: number;
-    // Text scale limits
-    minScale: number;
-    maxScale: number;
+    // How small and how big a pinch may make a text's letters (points on
+    // screen: slider size x pinch scale) - the same for every text, whatever
+    // its slider size
+    minSize: number;
+    maxSize: number;
     // A text block smaller than this is pinched as if it were this big
     // (centred on it): two adult fingers do not fit on a short word
     minTargetWidth: number;
@@ -54,7 +56,7 @@ export interface GesturePolicy {
 
 export const GESTURES: GesturePolicy = {
   drag: { canvasMinDistance: 28, elementMinDistance: 4 },
-  pinch: { deadZone: 0.03, gain: 1.8, minScale: 0.3, maxScale: 5, minTargetWidth: 240, minTargetHeight: 180 },
+  pinch: { deadZone: 0.03, gain: 1.8, minSize: 3, maxSize: 720, minTargetWidth: 240, minTargetHeight: 180 },
   touch: { minElementTarget: 120 },
   tap: { doubleTapWindowMs: 260 },
   zoom: { maxScale: 8, settleMs: 120, maxTextResolution: 6 },

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { atLeast, pickPinchTarget, quotedLevelAt, quotedPostAt } from './hitTest';
+import { atLeast, pickPinchTarget, pickTouchTarget, quotedLevelAt, quotedPostAt } from './hitTest';
 
 const policy = { minTargetWidth: 180, minTargetHeight: 120 };
 const word = (id: string, x: number, y: number) => ({ id, box: { x, y, width: 60, height: 30 } });
@@ -61,4 +61,32 @@ test('the level under a tap carries its own strip', () => {
   ];
   assert.deepEqual(quotedLevelAt(chain, { x: 500, y: 600 })?.rect, chain[0].rect);
   assert.equal(quotedLevelAt(chain, { x: 500, y: 200 }), null);
+});
+
+const box = (id: string, x: number, y: number, width: number, height: number) =>
+  ({ id, x, y, halfWidth: width / 2, halfHeight: height / 2 });
+
+test('a drag takes the text under the finger, not a big one beside it', () => {
+  const big = box('big', 200, 300, 300, 200); // on top (later in the list)
+  const word = box('word', 200, 480, 60, 30);
+  assert.equal(pickTouchTarget([word, big], { x: 200, y: 480 }, 120), 'word');
+  assert.equal(pickTouchTarget([word, big], { x: 200, y: 300 }, 120), 'big');
+  // just below the big text: outside its drawn box, so it is not taken
+  assert.equal(pickTouchTarget([big], { x: 200, y: 420 }, 120), null);
+});
+
+test('a short word is grabbed near it; between two, the nearer', () => {
+  const a = box('a', 100, 100, 40, 20);
+  const b = box('b', 100, 160, 40, 20);
+  assert.equal(pickTouchTarget([a, b], { x: 100, y: 150 }, 120), 'b');
+  assert.equal(pickTouchTarget([a, b], { x: 100, y: 115 }, 120), 'a');
+  assert.equal(pickTouchTarget([a, b], { x: 300, y: 300 }, 120), null);
+});
+
+test('one text on another: the smaller, then the one on top', () => {
+  const block = box('block', 200, 200, 300, 300);
+  const small = box('small', 200, 200, 60, 30);
+  assert.equal(pickTouchTarget([small, block], { x: 200, y: 200 }, 120), 'small');
+  const twin = box('twin', 200, 200, 60, 30);
+  assert.equal(pickTouchTarget([small, twin], { x: 200, y: 200 }, 120), 'twin');
 });
