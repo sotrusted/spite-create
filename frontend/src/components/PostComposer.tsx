@@ -1499,13 +1499,11 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     console.trace('📍 stopEditingText call stack');
     
     // Commit any local text changes and font size to actual state before
-    // stopping edit mode. The slider sets how the text wraps, not its size
-    // on the canvas: the scale takes up the change, so the letters stay as
-    // big as they were and only the lines change.
+    // stopping edit mode. The slider's size is the text's size: what it did
+    // to the text while typing, it does to the text on the canvas (any pinch
+    // scale stays on top of it).
     Object.entries(localTextContent).forEach(([id, content]) => {
-      const el = textElements.find(e => e.id === id);
-      const scale = el ? (el.scale || 1) * el.fontSize / currentFontSize : undefined;
-      updateTextElement(id, { content, fontSize: currentFontSize, ...(scale ? { scale } : {}) });
+      updateTextElement(id, { content, fontSize: currentFontSize });
     });
     
     setIsEditingText(false);
@@ -1522,8 +1520,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   // Only the rainbow: the two-stop presets were decoration, and gradients
   // are grid-only now (long-press the background swatch).
   const GRADIENT_PRESETS: string[][] = [Colors.rainbowPalette];
-  // Applying a background in one place: the ink guard is the same whether the
-  // colour came from the cycle button or the grid.
+  // Applying a background from the grid. The text keeps its colour whatever
+  // the background becomes: its colour is the user's choice.
   const applyBackground = (color: string, gradient: string[] = []) => {
     setBackgroundGradient(gradient);
     setBackgroundColor(color);
@@ -1533,11 +1531,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
       lastBgRef.current = color;
       persistComposerPrefs();
     }
-    setTextElements(prev => prev.map(el => {
-      if (el.rainbow) return el;
-      if (contrastRatio(hexToRgb(color), hexToRgb(el.color)) >= 3.0) return el;
-      return { ...el, color: pickReadableColor(color, Colors.postColors, el.color) };
-    }));
   };
 
 
@@ -1558,14 +1551,6 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     setBackgroundColor(nextColor);
     lastBgRef.current = nextColor;
     persistComposerPrefs();
-
-    // Keep text readable: any element whose color vanishes against the new
-    // background gets bumped to the next palette color that reads clearly
-    setTextElements(prev => prev.map(el => {
-      if (el.rainbow) return el;
-      if (contrastRatio(hexToRgb(nextColor), hexToRgb(el.color)) >= 3.0) return el;
-      return { ...el, color: pickReadableColor(nextColor, Colors.postColors, el.color) };
-    }));
   };
 
   const createNewTextElement = () => {
