@@ -1,6 +1,7 @@
 import type { Post, PostCreate, RepostData, StickerElement } from '../types';
 import { ColorRun, runsToCodePoints } from './colorRuns';
 import { LIMITS } from '../constants/limits';
+import { chipFill, inkColor } from './chip';
 import type { OutlineSetting } from '../constants/textStyle';
 import { resolveOutlineColor } from './outline';
 import { breaksToCodePoints } from './lineBreaks';
@@ -49,6 +50,7 @@ export interface ComposerTextElement {
   // (UTF-16 offsets into content; utils/lineBreaks)
   breaks?: number[];
   backgroundMode?: 'off' | 'white' | 'inverted';
+  chipColor?: string;
 }
 
 // Everything the payload depends on, captured as plain data. Keeping this a
@@ -140,9 +142,11 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
   return {
     text_content: allText,
     text_elements: s.textElements.map(el => {
-      // Chip mode maps to render fields here: 'white' = white chip behind
-      // the colored text, 'inverted' = colored chip behind white text
+      // The box maps to render fields here: its colour and the letters'
+      // (utils/chip)
       const mode = el.backgroundMode || (el.hasBackground ? 'white' : 'off');
+      const boxed = { color: el.color, backgroundMode: mode, chipColor: el.chipColor };
+      const ink = inkColor(boxed);
       return {
       // capsLock is a display-only transform in the composer, so bake it
       // into the content the backend renders
@@ -150,10 +154,10 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       x: Math.round(el.x * k),
       y: Math.round(el.y * k),
       fontSize: clampFontSize(Math.round(el.fontSize * el.scale * k)),
-      color: mode === 'inverted' ? '#FFFFFF' : el.color,
+      color: ink,
       fontFamily: el.fontFamily,
       hasBackground: mode !== 'off',
-      backgroundColor: mode === 'inverted' ? el.color : '#FFFFFF',
+      backgroundColor: chipFill(boxed) ?? '#FFFFFF',
       letterSpacing: Math.round((el.letterSpacing ?? 0) * k),
       glow: !!el.glow,
       rainbow: !!el.rainbow,
@@ -162,7 +166,7 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
       // 'auto' is resolved here, against the post's solid background (a
       // gradient or image varies under the text, so only the text counts)
       ...(el.outline && el.outline.mode !== 'off'
-        ? { outlineColor: resolveOutlineColor(el.outline, mode === 'inverted' ? '#FFFFFF' : el.color,
+        ? { outlineColor: resolveOutlineColor(el.outline, ink,
             s.backgroundGradient.length > 0 || s.backgroundImage ? null : s.backgroundColor) }
         : {}),
       ...(el.colorRuns?.length

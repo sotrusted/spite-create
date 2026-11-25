@@ -34,6 +34,8 @@ export interface CanvasTextElement {
   hasBackground: boolean;
   backgroundColor: string;
   backgroundMode: 'off' | 'white' | 'inverted';
+  // the coloured box's own colour (utils/chip)
+  chipColor?: string;
   capsLock: boolean;
   scale: number;
   letterSpacing: number;

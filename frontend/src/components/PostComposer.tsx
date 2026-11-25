@@ -55,6 +55,7 @@ import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
 import { applyColorToRange, adjustRuns, colorSpans, duoOf, duoRun, RAINBOW_RUN } from '../utils/colorRuns';
 import { GESTURES } from '../constants/gestures';
+import { chipFill, inkColor, nextChip } from '../utils/chip';
 import { LIMITS } from '../constants/limits';
 import { OUTLINE } from '../constants/textStyle';
 import { resolveOutlineColor, applyFontChange, startingStyle, outlineAfterTextColor, nextOutline } from '../utils/outline';
@@ -1590,18 +1591,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const fontFace = resolveFontFace(element.fontFamily, element.bold, element.italic);
     const effectiveAlign = element.listStyle !== 'none' ? 'left' : element.align;
     
-    let textColor = element.color;
-    let bgColor = 'transparent';
-    let hasPadding = false;
-    
-    if (element.backgroundMode === 'white') {
-      bgColor = '#FFFFFF';
-      hasPadding = true;
-    } else if (element.backgroundMode === 'inverted') {
-      bgColor = element.color;
-      textColor = '#FFFFFF';
-      hasPadding = true;
-    }
+    // (the box and the letters each have their own colour: utils/chip)
+    const textColor = inkColor(element);
+    const bgColor = chipFill(element) ?? 'transparent';
+    const hasPadding = chipFill(element) !== null;
     
     return {
       fontSize: element.fontSize,
@@ -1676,7 +1669,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     const text = placeholderText(element, caps);
     const palette = cycleColorsFor(element);
     if (!palette) {
-      const ink = element.backgroundMode === 'inverted' ? '#FFFFFF' : element.color || '#1B1B1B';
+      const ink = inkColor(element) || '#1B1B1B';
       return <Text style={{ color: faded(ink) }}>{text}</Text>;
     }
     let n = 0;
@@ -1711,7 +1704,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
   const outlineColorFor = (element: TextElement) =>
     resolveOutlineColor(
       element.outline,
-      element.backgroundMode === 'inverted' ? '#FFFFFF' : element.color,
+      inkColor(element),
       backgroundGradient.length > 0 || backgroundImage ? null : backgroundColor,
     );
 
@@ -3476,7 +3469,10 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         return;
       }
       const index = Colors.postColors.indexOf(el.color);
-      if (index === Colors.postColors.length - 1 || index === -1) {
+      if (index === -1) {
+        // (white letters on a coloured box: start the palette)
+        updateTextElement(el.id, { ...whole, color: Colors.postColors[0] });
+      } else if (index === Colors.postColors.length - 1) {
         updateTextElement(el.id, { ...whole, rainbow: true });
       } else {
         updateTextElement(el.id, { ...whole, color: Colors.postColors[index + 1] });
@@ -3502,9 +3498,8 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
     };
 
     const cycleChip = () => {
-      const nextMode = el.backgroundMode === 'off' ? 'white'
-        : el.backgroundMode === 'white' ? 'inverted' : 'off';
-      updateTextElement(el.id, { backgroundMode: nextMode });
+      // (the border is left as it is: the box button is not a recolouring)
+      updateTextElement(el.id, { ...nextChip(el), outline: el.outline });
     };
 
     const variants = (FontChoices[el.fontFamily] as any).variants || {};
