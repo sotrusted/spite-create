@@ -4249,8 +4249,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     overflow: 'hidden',
     zIndex: 12,
-    borderWidth: 1,
-    borderColor: '#88888A',
   },
   // Single config row controls
   controlFontLabel: {

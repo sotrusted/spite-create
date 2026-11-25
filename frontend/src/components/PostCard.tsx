@@ -311,8 +311,6 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
         <View
           style={{
             width: displayWidth,
-            borderWidth: 1,
-            borderColor: '#88888A',
             overflow: 'hidden',
             backgroundColor: ancestor.background_color || Colors.surface,
           }}

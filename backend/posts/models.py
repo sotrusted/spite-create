@@ -924,8 +924,7 @@ class Post(models.Model):
         orig_height = original.image_height or settings.POST_IMAGE_HEIGHT
         crop_top, crop_bottom = self.quoted_crop(original, self.repost_geometry)
 
-        # Quoted strips are inset with a hairline so quotation reads visually;
-        # nested composites naturally produce nested frames (chain depth cue)
+        # Quoted strips are inset, so nested quotes nest visibly (chain depth cue)
         canvas_width = int(self.image_width)
         canvas_height = int(self.image_height or settings.POST_IMAGE_HEIGHT)
 
@@ -990,20 +989,9 @@ class Post(models.Model):
             strip = strip.resize(
                 (geometry['strip_width'], geometry['strip_height']), Image.LANCZOS
             )
+            # (no frame: the quoted post's own colour against this one's is
+            # what sets it apart)
             img.paste(strip, (geometry['paste_x'], geometry['paste_y']))
-
-            # Hairline frame around the quoted strip
-            draw = ImageDraw.Draw(img)
-            draw.rectangle(
-                (
-                    geometry['paste_x'] - 1,
-                    geometry['paste_y'] - 1,
-                    geometry['paste_x'] + geometry['strip_width'],
-                    geometry['paste_y'] + geometry['strip_height'],
-                ),
-                outline='#88888A',
-                width=2,
-            )
         except Exception as e:
             _report_render_error('Error compositing quoted parent strip', e)
 
