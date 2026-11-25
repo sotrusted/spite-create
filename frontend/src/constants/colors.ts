@@ -25,7 +25,7 @@ export const Colors = {
     '#3D3D42', // Graphite
     '#000000', // Eerie Black
     '#690016', // Oxblood
-    '#6F4E37', // Coffee
+    '#735849', // Taupe
     '#FF1A1A', // Bright Red
     '#FF940A', // Bright Orange
     '#F0FF00', // Bright Yellow
@@ -37,6 +37,7 @@ export const Colors = {
     '#2749F5', // Royal Blue
     '#AB00FF', // Electric Violet
     '#9932CC', // Dark Orchid
+    '#E1BFFF', // Lilac
     '#FF1493', // Deep Pink
     '#FF90C2', // Baby Pink
     '#F7B1D1', // Blush (the composer overlay's pink)

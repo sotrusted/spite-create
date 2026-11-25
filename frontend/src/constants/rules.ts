@@ -16,7 +16,7 @@ export const RULE_ON: Record<string, string> = {
   '#3D3D42': '#B7BEC7', // Graphite       / Cool Gray
   '#000000': '#B7BEC7', // Black          / Cool Gray
   '#690016': '#FAEBD7', // Oxblood        / Antique White
-  '#6F4E37': '#FAEBD7', // Coffee         / Antique White
+  '#735849': '#FAEBD7', // Taupe          / Antique White
   '#FF1A1A': '#690016', // Bright Red     / Oxblood
   '#FF940A': '#690016', // Bright Orange  / Oxblood
   '#F0FF00': '#0000EE', // Bright Yellow  / Link Blue
@@ -28,6 +28,7 @@ export const RULE_ON: Record<string, string> = {
   '#2749F5': '#00CED1', // Royal Blue     / Dark Turquoise
   '#AB00FF': '#FF90C2', // Electric Violet/ Baby Pink
   '#9932CC': '#FF90C2', // Dark Orchid    / Baby Pink
+  '#E1BFFF': '#AB00FF', // Lilac          / Electric Violet
   '#FF1493': '#FF90C2', // Deep Pink      / Baby Pink
   '#FF90C2': '#FF1493', // Baby Pink      / Deep Pink
   '#F7B1D1': '#690016', // Blush          / Oxblood
