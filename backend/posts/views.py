@@ -16,7 +16,7 @@ import uuid
 import os
 import time
 from django.core.cache import cache
-from .models import Post, PostReport
+from .models import Post, PostLike, PostReport
 from .serializers import (
     PostSerializer, PostListSerializer, PostReportSerializer,
     UserReportSerializer, MuteUserSerializer, UserCreateSerializer,
@@ -157,6 +157,10 @@ class FeedListView(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         page = self.paginate_queryset(self.filter_queryset(self.get_queryset()))
         self._ancestors = self.fetch_ancestors(page or [])
+        viewer = self.get_user_from_request()
+        self._liked_ids = set(PostLike.objects.filter(
+            user=viewer, post__in=[p.pk for p in page or []]
+        ).values_list('post_id', flat=True)) if viewer else set()
         serializer = self.get_serializer(page, many=True)
         return self.get_paginated_response(serializer.data)
 
@@ -181,6 +185,7 @@ class FeedListView(generics.ListAPIView):
         context = super().get_serializer_context()
         context['blocked_author_ids'] = self.get_blocked_author_ids(self.get_user_from_request())
         context['ancestors'] = getattr(self, '_ancestors', {})
+        context['liked_ids'] = getattr(self, '_liked_ids', set())
         return context
 
     def get_user_from_request(self):
@@ -222,6 +227,32 @@ class PostDetailView(generics.RetrieveAPIView):
         Post.objects.filter(pk=post.pk).update(view_count=F('view_count') + 1)
         post.view_count += 1
         return Response(self.get_serializer(post).data)
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([permissions.AllowAny])
+def like_post(request, post_id):
+    """Heart a post (POST) or take the heart back (DELETE). Either one twice
+    changes nothing; the answer is the post's count and where you stand."""
+    try:
+        post = Post.objects.get(id=post_id, is_hidden=False)
+    except Post.DoesNotExist:
+        return Response({'error': 'Post not found'}, status=status.HTTP_404_NOT_FOUND)
+    user = get_or_create_user_from_request(request)
+    liked = request.method == 'POST'
+    try:
+        with transaction.atomic():
+            if liked:
+                _, changed = PostLike.objects.get_or_create(post=post, user=user)
+            else:
+                changed = PostLike.objects.filter(post=post, user=user).delete()[0] > 0
+            if changed:
+                Post.objects.filter(pk=post.pk).update(
+                    like_count=PostLike.objects.filter(post=post).count())
+    except IntegrityError:  # the same heart, twice at once: the other one counted
+        pass
+    post.refresh_from_db(fields=['like_count'])
+    return Response({'liked': liked, 'like_count': post.like_count})
 
 
 @api_view(['POST'])

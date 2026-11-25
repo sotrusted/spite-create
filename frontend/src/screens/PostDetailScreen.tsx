@@ -35,6 +35,7 @@ import { Post } from '../types';
 import { fullPostLayout, gradientEndpoints, canvasPointIn, boxRectOf, CardLayout } from '../utils/cardLayout';
 import { quotedLevelAt } from '../utils/hitTest';
 import PressFlash, { PressFlashHandle, flashColorOn } from '../components/PressFlash';
+import HeartButton from '../components/HeartButton';
 import { GESTURES } from '../constants/gestures';
 import { TEXT_WRAP_FRACTION } from '../utils/buildPostPayload';
 
@@ -452,6 +453,7 @@ export default function PostDetailScreen() {
           >
             <Text style={[styles.quoteButtonText, { color: background }]}>Aa</Text>
           </TouchableOpacity>
+          <HeartButton post={post} fill={chrome} ink={background} large style={styles.heartButton} />
         </>
       )}
     </View>
@@ -531,6 +533,12 @@ const styles = StyleSheet.create({
     borderColor: CHROME.hairline,
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 10,
+  },
+  // left of the quote button, level with it
+  heartButton: {
+    right: CHROME.inset + CHROME.detailButtonWidth + CHROME.buttonGap,
+    bottom: CHROME.bottomInset,
     zIndex: 10,
   },
   // bottom left, level with the quote button

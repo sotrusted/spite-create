@@ -39,6 +39,9 @@ export interface Post {
   rendered_image_url?: string;
   created_at: string;
   view_count: number;
+  // hearts on the post, and whether this phone's is among them
+  like_count?: number;
+  liked?: boolean;
   is_repost?: boolean;
   // the quoted post's id (the serializers send the key, not the object)
   original_post?: string | null;

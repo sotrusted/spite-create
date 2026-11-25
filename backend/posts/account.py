@@ -14,7 +14,7 @@ import logging
 from django.core.files.storage import default_storage
 from django.db import transaction
 
-from .models import Post
+from .models import Post, PostLike
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,11 @@ def delete_account(user):
                     }
                     Post.objects.filter(pk=child.pk).update(repost_geometry=child.repost_geometry)
         files = [name for post in doomed for name in _post_files(post)]
-        user.delete()  # cascades posts, reports, notifications, mutes, blocks
+        hearted = list(user.likes.values_list('post_id', flat=True))
+        user.delete()  # cascades posts, reports, notifications, mutes, blocks, hearts
+        # other people's posts lose this account's hearts
+        for post_id in hearted:
+            Post.objects.filter(pk=post_id).update(like_count=PostLike.objects.filter(post_id=post_id).count())
 
     _delete_files(files)
 

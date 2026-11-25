@@ -253,6 +253,8 @@ class Post(models.Model):
     
     # Analytics (optional for MVP)
     view_count = models.PositiveIntegerField(default=0)
+    # kept in step with PostLike rows by the like endpoint
+    like_count = models.PositiveIntegerField(default=0)
 
     # Signature system
     is_signed = models.BooleanField(default=False, help_text="Whether the post was published with a signature")
@@ -1670,6 +1672,20 @@ class PostView(models.Model):
     
     def __str__(self):
         return f"View of {self.post.id}"
+
+
+class PostLike(models.Model):
+    """A heart: one per person per post."""
+
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='likes')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='likes')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['post', 'user']
+
+    def __str__(self):
+        return f"Like of {self.post_id}"
 
 
 class Notification(models.Model):

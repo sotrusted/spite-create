@@ -20,6 +20,20 @@ CANVAS_STATE_MAX_BYTES = 100_000
 QUOTE_MARGIN_MAX = 400
 
 
+def _is_liked(post, context):
+    """Has the viewer hearted this post? A list view hands over the liked ids
+    of its whole page (one query); a single post asks for itself."""
+    liked = context.get('liked_ids')
+    if liked is not None:
+        return post.pk in liked
+    request = context.get('request')
+    device_id = request.META.get('HTTP_X_DEVICE_ID') if request else None
+    if not device_id:
+        return False
+    from .models import PostLike
+    return PostLike.objects.filter(post=post, user__device_id=device_id).exists()
+
+
 def _is_author(post, context):
     """True when the request comes from the post author's device."""
     request = context.get('request')
@@ -246,6 +260,7 @@ class PostSerializer(serializers.ModelSerializer):
     canvas_state = serializers.JSONField(required=False, allow_null=True)
     editable = serializers.SerializerMethodField()
     is_author = serializers.SerializerMethodField()
+    liked = serializers.SerializerMethodField()
     textless_image_url = serializers.SerializerMethodField()
     quote_chain = serializers.SerializerMethodField()
     
@@ -262,8 +277,9 @@ class PostSerializer(serializers.ModelSerializer):
             'is_signed', 'signature_style',
             'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes',
             'canvas_state', 'editable', 'textless_image_url', 'quote_chain', 'text_plan', 'is_author',
+            'like_count', 'liked',
         ]
-        read_only_fields = ['id', 'author', 'text_plan', 'rendered_image_url', 'created_at', 'view_count', 
+        read_only_fields = ['id', 'author', 'text_plan', 'rendered_image_url', 'created_at', 'view_count', 'like_count', 
                            'is_repost', 'original_post', 'repost_screenshot_url',
                            'image_width', 'image_height', 'top_y', 'bottom_y', 'content_boxes']
         extra_kwargs = {
@@ -435,6 +451,9 @@ class PostSerializer(serializers.ModelSerializer):
 
     def get_editable(self, obj):
         return obj.canvas_state is not None and _is_author(obj, self.context)
+
+    def get_liked(self, obj):
+        return _is_liked(obj, self.context)
 
     def get_is_author(self, obj):
         # the post page's menu: your own post offers Edit, not Report/Mute/Block
@@ -699,6 +718,7 @@ class PostListSerializer(serializers.ModelSerializer):
     repost_screenshot_url = serializers.SerializerMethodField()
     editable = serializers.SerializerMethodField()
     is_author = serializers.SerializerMethodField()
+    liked = serializers.SerializerMethodField()
     # the feed hands its post to the post page, which draws over this
     textless_image_url = serializers.SerializerMethodField()
 
@@ -711,11 +731,15 @@ class PostListSerializer(serializers.ModelSerializer):
             'response_image_url', 'response_top_y', 'response_bottom_y', 'quote', 'quote_chain',
             'repost_screenshot_url', 'image_width', 'image_height', 'top_y', 'bottom_y',
             'content_boxes', 'editable', 'textless_image_url', 'text_plan', 'is_author',
+            'like_count', 'liked',
         ]
 
     def get_editable(self, obj):
         # author is select_related on the feed, so this costs no query
         return obj.canvas_state is not None and _is_author(obj, self.context)
+
+    def get_liked(self, obj):
+        return _is_liked(obj, self.context)
 
     def get_is_author(self, obj):
         return _is_author(obj, self.context)

@@ -14,6 +14,7 @@ urlpatterns = [
     
     # Moderation endpoints
     path('posts/<uuid:post_id>/report/', views.report_post, name='report-post'),
+    path('posts/<uuid:post_id>/like/', views.like_post, name='like-post'),
     path('users/<str:user_handle>/report/', views.report_user, name='report-user'),
     path('users/<str:user_handle>/mute/', views.mute_user, name='mute-user'),
     path('users/<str:user_handle>/unmute/', views.unmute_user, name='unmute-user'),

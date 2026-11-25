@@ -1191,7 +1191,22 @@ class CanvasStateTests(RenderTestCase):
         self.assertEqual(mine('someone-else'), [])
         self.assertEqual(mine('never-seen-device'), [])
 
-    def test_malformed_state_is_rejected(self):
+    def test_a_heart_counts_once_and_comes_back_off(self):
+        post_id = self._create(self.STATE).json()['id']
+        url = f'/api/posts/{post_id}/like/'
+        like = lambda method, device: getattr(self.client, method)(url, HTTP_X_DEVICE_ID=device).json()
+        self.assertEqual(like('post', 'reader-one'), {'liked': True, 'like_count': 1})
+        self.assertEqual(like('post', 'reader-one'), {'liked': True, 'like_count': 1})
+        self.assertEqual(like('post', 'reader-two'), {'liked': True, 'like_count': 2})
+        feed = lambda device: self.client.get('/api/feed/', HTTP_X_DEVICE_ID=device).json()['results'][0]
+        self.assertEqual((feed('reader-one')['liked'], feed('reader-one')['like_count']), (True, 2))
+        self.assertFalse(feed('author-device')['liked'])
+        page = self.client.get(f'/api/posts/{post_id}/', HTTP_X_DEVICE_ID='reader-two').json()
+        self.assertEqual((page['liked'], page['like_count']), (True, 2))
+        self.assertEqual(like('delete', 'reader-one'), {'liked': False, 'like_count': 1})
+        self.assertEqual(like('delete', 'reader-one'), {'liked': False, 'like_count': 1})
+
+
         self.assertEqual(self._create({'no': 'version'}).status_code, 400)
         self.assertEqual(self._create({'version': 1, 'blob': 'x' * 200_000}).status_code, 400)
 
