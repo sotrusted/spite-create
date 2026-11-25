@@ -191,6 +191,18 @@ class FeedListView(generics.ListAPIView):
         return self._viewer
 
 
+class MyPostsView(FeedListView):
+    """The viewer's own posts, newest first, in the feed's shape - what the
+    profile lists. A phone the server has never seen has none."""
+
+    def get_queryset(self):
+        user = self.get_user_from_request()
+        if user is None:
+            return Post.objects.none()
+        return (Post.objects.filter(author=user, is_hidden=False)
+                .select_related('author', 'original_post__author'))
+
+
 class PostDetailView(generics.RetrieveAPIView):
     """Get individual post details"""
     serializer_class = PostSerializer

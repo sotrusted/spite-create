@@ -125,6 +125,7 @@ export const endpoints = {
   createUser: '/users/create/',
   getUserProfile: '/users/profile/',
   deleteAccount: '/users/me/',
+  getMyPosts: '/users/me/posts/',
 };
 
 // Request interceptor to add device ID and logging

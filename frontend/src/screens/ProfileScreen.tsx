@@ -1,19 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Colors, FontChoices, FONT_MENU } from '../constants/colors';
-import { FontChoice, User } from '../types';
+import { FontChoice, Post, User } from '../types';
+import PostCard from '../components/PostCard';
 import { api, endpoints } from '../config/api';
 import { SPACE, CHROME } from '../constants/space';
 
@@ -32,6 +33,47 @@ export default function ProfileScreen() {
   useEffect(() => {
     fetchProfile();
   }, []);
+
+  // Your own posts, newest first, a page at a time. Fetched again each time
+  // the profile comes back into view: a post opened from here may have been
+  // deleted on its page. An answer for a list since restarted is dropped.
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [nextUrl, setNextUrl] = useState<string | null>(null);
+  const [postsLoaded, setPostsLoaded] = useState(false);
+  const loadingMore = useRef(false);
+  const listEpoch = useRef(0);
+
+  const fetchPosts = useCallback(async (cursor?: string) => {
+    const epoch = cursor ? listEpoch.current : ++listEpoch.current;
+    try {
+      const response = await api.get(endpoints.getMyPosts, { params: cursor ? { cursor } : {} });
+      if (epoch !== listEpoch.current) return;
+      const { results, next } = response.data;
+      setPosts(prev => {
+        if (!cursor) return results;
+        const have = new Set(prev.map(p => p.id));
+        return [...prev, ...results.filter((p: Post) => !have.has(p.id))];
+      });
+      setNextUrl(next);
+    } catch (error) {
+      console.log('Could not load your posts:', error);
+    } finally {
+      if (epoch === listEpoch.current) {
+        setPostsLoaded(true);
+        loadingMore.current = false;
+      }
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { fetchPosts(); }, [fetchPosts]));
+
+  const loadMorePosts = () => {
+    if (!nextUrl || loadingMore.current) return;
+    const cursor = new URL(nextUrl).searchParams.get('cursor');
+    if (!cursor) return;
+    loadingMore.current = true;
+    fetchPosts(cursor);
+  };
 
   const fetchProfile = async () => {
     try {
@@ -116,8 +158,18 @@ export default function ProfileScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content}>
-        {user && (
+      <FlatList
+        style={styles.content}
+        data={user ? posts : []}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => <PostCard post={item} />}
+        onEndReached={loadMorePosts}
+        onEndReachedThreshold={0.5}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={user && postsLoaded ? (
+          <Text style={styles.noPosts}>Nothing posted yet</Text>
+        ) : null}
+        ListHeaderComponent={user ? (
           <>
             <View style={styles.profileSection}>
               <TouchableOpacity
@@ -269,9 +321,11 @@ export default function ProfileScreen() {
                 <Ionicons name="chevron-forward" size={16} color={Colors.secondary} />
               </TouchableOpacity>
             </View>
+
+            <Text style={[styles.sectionTitle, styles.postsTitle]}>YOUR POSTS</Text>
           </>
-        )}
-      </ScrollView>
+        ) : null}
+      />
     </SafeAreaView>
   );
 }
@@ -394,6 +448,16 @@ const styles = StyleSheet.create({
   },
   actionSection: {
     padding: SPACE.xl,
+  },
+  postsTitle: {
+    paddingHorizontal: SPACE.xl,
+    marginBottom: SPACE.md,
+  },
+  noPosts: {
+    fontSize: 14,
+    color: Colors.secondary,
+    paddingHorizontal: SPACE.xl,
+    paddingBottom: SPACE.xl,
   },
   handleEditRow: {
     flexDirection: 'row',

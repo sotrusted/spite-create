@@ -1183,6 +1183,14 @@ class CanvasStateTests(RenderTestCase):
         self.assertFalse(feed('someone-else')[0]['editable'])
         self.assertNotIn('canvas_state', feed('author-device')[0])  # list stays light
 
+    def test_my_posts_lists_only_the_viewers_own(self):
+        self._create(self.STATE)
+        mine = lambda device: self.client.get('/api/users/me/posts/', HTTP_X_DEVICE_ID=device).json()['results']
+        self.assertEqual(len(mine('author-device')), 1)
+        self.assertTrue(mine('author-device')[0]['editable'])
+        self.assertEqual(mine('someone-else'), [])
+        self.assertEqual(mine('never-seen-device'), [])
+
     def test_malformed_state_is_rejected(self):
         self.assertEqual(self._create({'no': 'version'}).status_code, 400)
         self.assertEqual(self._create({'version': 1, 'blob': 'x' * 200_000}).status_code, 400)
