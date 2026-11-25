@@ -25,7 +25,7 @@ export const Colors = {
     '#3D3D42', // Graphite
     '#000000', // Eerie Black
     '#690016', // Oxblood
-    '#8B4513', // Saddle Brown
+    '#6F4E37', // Coffee
     '#FF1A1A', // Bright Red
     '#FF940A', // Bright Orange
     '#F0FF00', // Bright Yellow
