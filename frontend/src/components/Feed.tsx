@@ -112,7 +112,14 @@ export default function Feed({
     listRef.current?.scrollToOffset({ offset: 0, animated: true });
   }, []);
 
+  // Each first-page fetch starts a new list. An answer that belongs to an
+  // earlier list is dropped: an older page (asked for before a refresh,
+  // answered after it) used to be added under the fresh one, leaving a hole
+  // in the feed, and a slow first page could overwrite a newer one.
+  const listEpoch = useRef(0);
+
   const fetchFeed = useCallback(async (isRefresh = false, cursor?: string) => {
+    const epoch = cursor ? listEpoch.current : ++listEpoch.current;
     try {
       setError(null);
       
@@ -123,6 +130,7 @@ export default function Feed({
 
       const response = await api.get<FeedResponse>(endpoints.getFeed, { params });
       const { results, next } = response.data;
+      if (epoch !== listEpoch.current) return;
       if (!cursor) firstPageFailedRef.current = false;
 
       if (__DEV__) {
@@ -164,6 +172,7 @@ export default function Feed({
 
       setNextUrl(next);
     } catch (error: any) {
+      if (epoch !== listEpoch.current) return;
       console.error('Error fetching feed:', error);
       const offline = isOfflineError(error);
       if (!cursor) firstPageFailedRef.current = offline;
@@ -185,6 +194,12 @@ export default function Feed({
       // settle the first-launch loading screen so the error is visible
       if (!cursor) feedLoadedRef.current?.([]);
     } finally {
+      // (a dropped answer leaves these to the fetch that replaced it; only
+      // the "loading more" spinner is its own)
+      if (epoch !== listEpoch.current) {
+        if (cursor) setLoadingMore(false);
+        return;
+      }
       if (!cursor) setSyncing(false);
       setLoading(false);
       setRefreshing(false);
