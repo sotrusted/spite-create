@@ -2,7 +2,7 @@
 // top_y/bottom_y stay the content extent so quoted strips are cut tight.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { displayCropBounds } from './displayCrop';
+import { displayCropBounds, CARD_CONTENT_MARGIN } from './displayCrop';
 import { MIN_CARD_HEIGHT, CHROME, SPACE } from '../constants/space';
 
 const CANVAS_W = 1080;
@@ -63,13 +63,13 @@ test('content in the button column pushes the bottom down just enough', () => {
   const box: [number, number, number, number] = [100, 1100, 1060, 1500];
   const c = displayCropBounds(1060, 1540, CANVAS_W, CANVAS_H, SCREEN_W, [box]);
   assert.ok(Math.abs(c.bottomY - (1500 + gutter + buttonBlock)) < 1e-6);
-  assert.equal(c.topY, 1060); // only the bottom moves
+  assert.equal(c.topY, 1100 - CARD_CONTENT_MARGIN); // the top has only its margin
 });
 
 test('content clear of the button column leaves the crop alone', () => {
   const box: [number, number, number, number] = [400, 1100, 680, 1500]; // centred, narrow
   const c = displayCropBounds(1060, 1540, CANVAS_W, CANVAS_H, SCREEN_W, [box]);
-  assert.deepEqual(c, { topY: 1060, bottomY: 1540 });
+  assert.deepEqual(c, { topY: 1100 - CARD_CONTENT_MARGIN, bottomY: 1500 + CARD_CONTENT_MARGIN });
 });
 
 test('clearance is idempotent', () => {
@@ -79,3 +79,17 @@ test('clearance is idempotent', () => {
   assert.deepEqual(twice, once);
 });
 
+
+// --- room around the content ------------------------------------------------
+test('a card keeps its margin between content and its edges', () => {
+  // content 440..1760, extent 40 px around it
+  const c = displayCropBounds(400, 1800, CANVAS_W, CANVAS_H, SCREEN_W, [[100, 440, 500, 1760]]);
+  assert.deepEqual(c, { topY: 440 - CARD_CONTENT_MARGIN, bottomY: 1760 + CARD_CONTENT_MARGIN });
+});
+
+test('an edge already further from the content stays put, and the canvas bounds it', () => {
+  const roomy = displayCropBounds(200, 2000, CANVAS_W, CANVAS_H, SCREEN_W, [[100, 440, 500, 1760]]);
+  assert.deepEqual(roomy, { topY: 200, bottomY: 2000 });
+  const edge = displayCropBounds(0, CANVAS_H, CANVAS_W, CANVAS_H, SCREEN_W, [[100, 20, 500, CANVAS_H - 20]]);
+  assert.deepEqual(edge, { topY: 0, bottomY: CANVAS_H });
+});

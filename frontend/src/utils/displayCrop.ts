@@ -7,7 +7,7 @@ import { MIN_CARD_HEIGHT, CHROME, SPACE } from '../constants/space';
 //
 // A standalone card is a different surface: it overlays a quote button. So
 // the card adjusts the crop here, at display time, where it cannot leak back
-// into quoted strips. Two rules, both pure functions of the stored post and
+// into quoted strips. Three rules (room, then these two), all pure functions of the stored post and
 // the screen width, so the same post always crops the same way:
 //
 // 1. Floor. A one-line post's content band is shorter than the chrome, so it
@@ -19,6 +19,9 @@ import { MIN_CARD_HEIGHT, CHROME, SPACE } from '../constants/space';
 //
 // The canvas beyond the content is the post's own background, so extra band
 // reads as the post's colour rather than as a letterbox.
+
+// Least room between a card's content and its top and bottom edges, canvas px
+export const CARD_CONTENT_MARGIN = 64;
 
 export type DisplayCrop = { topY: number; bottomY: number };
 export type ContentBox = [number, number, number, number]; // x0, y0, x1, y1 (canvas px)
@@ -34,6 +37,16 @@ export const displayCropBounds = (
   const k = canvasWidth / screenWidth; // canvas px per point
   let top = topY;
   let bottom = bottomY;
+
+  // Room. The content extent leaves 40 canvas px around the content, which
+  // suits a quoted strip but sits tight in a card: a card keeps at least
+  // CARD_CONTENT_MARGIN between its content and its top and bottom edges.
+  // (Only ever more of the post's own background: an edge already further
+  // from the content - crop bars, a reply's outer edge - stays where it is.)
+  if (contentBoxes && contentBoxes.length) {
+    top = Math.max(0, Math.min(top, Math.min(...contentBoxes.map(b => b[1])) - CARD_CONTENT_MARGIN));
+    bottom = Math.min(canvasHeight, Math.max(bottom, Math.max(...contentBoxes.map(b => b[3])) + CARD_CONTENT_MARGIN));
+  }
 
   const floor = Math.min(MIN_CARD_HEIGHT * k, canvasHeight);
   if (bottom - top < floor) {
