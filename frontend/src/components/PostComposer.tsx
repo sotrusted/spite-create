@@ -3647,15 +3647,13 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
             style={[styles.controlOption, (el.letterSpacing || 0) > 0 && styles.controlOptionActive]}
             onPress={cycleSpacing}
           >
-            <Text
-              style={[styles.controlSpacingLabel, onBarBaseline('CourierPrimeBold', 19), {
-                color: (el.letterSpacing || 0) > 0 ? Colors.accent : 'white',
-                letterSpacing: Math.min(el.letterSpacing || 0, 4),
-                marginRight: -Math.min(el.letterSpacing || 0, 4),
-              }]}
-            >
-              AB
-            </Text>
+            {/* a two-headed arrow (the vertical one, on its side) */}
+            <MaterialIcons
+              name="height"
+              size={24}
+              color={(el.letterSpacing || 0) > 0 ? Colors.accent : 'white'}
+              style={{ transform: [{ rotate: '90deg' }] }}
+            />
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -4298,11 +4296,6 @@ const styles = StyleSheet.create({
   },
   controlItalicLabel: {
     fontFamily: 'CourierPrimeItalic',
-  },
-  controlSpacingLabel: {
-    fontSize: 19,
-    fontFamily: 'CourierPrimeBold',
-    includeFontPadding: false,
   },
   topMenuButtonActive: {
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
