@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildPostPayload, getRepostStripRect, CANVAS_WIDTH, ComposerSnapshot } from './buildPostPayload';
+import { buildPostPayload, getRepostStripRect, quotedBand, QUOTE_MARGIN, CANVAS_WIDTH, ComposerSnapshot } from './buildPostPayload';
 
 const fixturesDir = path.join(__dirname, '..', '..', '..', 'shared', 'fixtures');
 
@@ -161,4 +161,15 @@ test('sticker geometry scales uniformly, gesture scale untouched', () => {
   assert.equal(sticker.width, Math.round(80 * k));
   assert.equal(sticker.scale, 1.25);
   assert.equal(sticker.rotation, 15);
+});
+
+test('a quote shows its margin around the quoted content, kept on the canvas', () => {
+  const original = { image_width: 1080, image_height: 2341, top_y: 1000, bottom_y: 1200 };
+  assert.deepEqual(quotedBand(original), { top: 1000 - QUOTE_MARGIN, bottom: 1200 + QUOTE_MARGIN });
+  assert.deepEqual(quotedBand({ ...original, top_y: 10, bottom_y: 2330 }), { top: 0, bottom: 2341 });
+  assert.equal(quotedBand({ ...original, top_y: null }), null);
+  const rect = getRepostStripRect(original as any, 393, 852)!;
+  assert.ok(Math.abs(rect.height - ((200 + 2 * QUOTE_MARGIN) / 1080) * rect.width) < 1e-9);
+  const payload = buildPostPayload({ ...baseSnapshot, repostData: { originalPost: original as any, screenshotUri: 'x' } });
+  assert.equal(payload.repost_data!.repost_geometry!.margin, QUOTE_MARGIN);
 });

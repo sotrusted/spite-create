@@ -170,6 +170,7 @@ export interface PostCreate {
       x: number;
       y: number;
       width: number;
+      margin?: number; // extra band above and below the quoted content (quotedBand)
     };
   };
   is_signed?: boolean;

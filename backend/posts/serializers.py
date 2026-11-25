@@ -16,6 +16,8 @@ from . import push
 CANVAS_STATE_VERSIONS = {1}
 HEX_COLOR = re.compile(r'^#[0-9A-Fa-f]{6}$')
 CANVAS_STATE_MAX_BYTES = 100_000
+# The most extra band (canvas px, each side) a quote may show around what it quotes
+QUOTE_MARGIN_MAX = 400
 
 
 def _is_author(post, context):
@@ -412,6 +414,9 @@ class PostSerializer(serializers.ModelSerializer):
                     'x': int(geometry.get('x', 0)),
                     'y': int(geometry.get('y', 0)),
                     'width': int(geometry['width']),
+                    # extra band above and below the quoted content, as the
+                    # composer showed it (absent from older apps: none)
+                    'margin': min(max(int(geometry.get('margin') or 0), 0), QUOTE_MARGIN_MAX),
                 }
                 if value['repost_geometry']['width'] <= 0:
                     raise ValueError
@@ -474,6 +479,9 @@ class PostSerializer(serializers.ModelSerializer):
                 original = validated_data.get('original_post')
                 if original:
                     top, bottom = Post.quoted_crop(original, None)
+                    margin = int(geometry.get('margin') or 0)
+                    top = max(0, top - margin)
+                    bottom = min(original.image_height or settings.POST_IMAGE_HEIGHT, bottom + margin)
                     validated_data['repost_geometry'].update(crop_top=top, crop_bottom=bottom)
 
         # A repost may not reuse its parent's background color: the quote

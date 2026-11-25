@@ -79,19 +79,37 @@ export interface ComposerSnapshot {
 // Where the quoted strip sits on the composer canvas (screen points).
 // Single source of WYSIWYG truth: the preview layer renders it here and the
 // payload sends the same rect (in canvas px) for the server bake.
+// A quoted post is shown with more of its own background above and below
+// its content than its content extent has (canvas px of the quoted post, each
+// side): tight, a quote read as a cramped sliver. Sent with the quote, and
+// the server cuts the same band (clamped the same way).
+export const QUOTE_MARGIN = 60;
+
+// The band of a post a quote of it shows, canvas px (null: no crop geometry)
+export function quotedBand(
+  original: Pick<Post, 'image_height' | 'top_y' | 'bottom_y'> | undefined | null,
+): { top: number; bottom: number } | null {
+  const top = typeof original?.top_y === 'number' ? original.top_y : null;
+  const bottom = typeof original?.bottom_y === 'number' ? original.bottom_y : null;
+  if (top === null || bottom === null || bottom <= top) return null;
+  return {
+    top: Math.max(0, top - QUOTE_MARGIN),
+    bottom: Math.min(original?.image_height || Infinity, bottom + QUOTE_MARGIN),
+  };
+}
+
 export function getRepostStripRect(
   original: Post | undefined,
   screenW: number,
   screenH: number,
 ): { left: number; top: number; width: number; height: number } | null {
   const origWidth = original?.image_width;
-  const topY = typeof original?.top_y === 'number' ? original.top_y : null;
-  const bottomY = typeof original?.bottom_y === 'number' ? original.bottom_y : null;
-  if (!origWidth || topY === null || bottomY === null || bottomY <= topY) return null;
+  const band = quotedBand(original);
+  if (!origWidth || !band) return null;
 
   const inset = screenW * 0.05;
   let width = screenW - 2 * inset;
-  let height = ((bottomY - topY) / origWidth) * width;
+  let height = ((band.bottom - band.top) / origWidth) * width;
 
   // Quotes are NOT shrunk to fit any more. Every automatic height cap made
   // deep quotes too small to read, and the canvas now lets you pinch a quote
@@ -214,6 +232,7 @@ export function buildPostPayload(snapshot: ComposerSnapshot): PostCreate {
                   x: Math.round(rect.left * k),
                   y: Math.round(rect.top * k),
                   width: Math.round(rect.width * k),
+                  margin: QUOTE_MARGIN,
                 }
               : undefined,
           };

@@ -872,6 +872,32 @@ class BlockTests(RenderTestCase):
         self.assertIn('post from b', self._feed_texts('device-c'))
         self.assertIn('post from a', self._feed_texts('device-c'))
 
+    def test_quote_shows_the_margin_the_composer_sent(self):
+        """A quote's band of the original is the original's content extent
+        plus the margin sent with it (none from an app that sends none),
+        frozen with the quote and kept on the canvas."""
+        a_post = self._post_as('device-a', 'the original words here')
+        original = Post.objects.get(id=a_post['id'])
+
+        def quote(geometry):
+            response = self.client.post(
+                '/api/posts/',
+                {'text_content': 'the response', 'repost_data': {
+                    'original_post_id': a_post['id'], 'screenshot_uri': 'x', 'repost_geometry': geometry}},
+                content_type='application/json', HTTP_X_DEVICE_ID='device-b',
+            )
+            self.assertEqual(response.status_code, 201, response.content)
+            return Post.objects.get(id=response.json()['id']).repost_geometry
+
+        tight = quote({'x': 54, 'y': 900, 'width': 972})
+        self.assertEqual((tight['crop_top'], tight['crop_bottom']), (original.top_y, original.bottom_y))
+        roomy = quote({'x': 54, 'y': 900, 'width': 972, 'margin': 60})
+        self.assertEqual((roomy['crop_top'], roomy['crop_bottom']),
+                         (max(0, original.top_y - 60), min(original.image_height, original.bottom_y + 60)))
+        huge = quote({'x': 54, 'y': 900, 'width': 972, 'margin': 100000})
+        self.assertEqual((huge['crop_top'], huge['crop_bottom']),
+                         (max(0, original.top_y - 400), min(original.image_height, original.bottom_y + 400)))
+
     def test_quote_chip_data_and_blocked_hiding(self):
         a_post = self._post_as('device-a', 'the original words here')
         # B reposts A

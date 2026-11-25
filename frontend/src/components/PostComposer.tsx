@@ -49,7 +49,7 @@ import { FontChoice, PostCreate, RepostData, StickerElement, User } from '../typ
 import { api, endpoints, absoluteUrl } from '../config/api';
 import { captureRef } from 'react-native-view-shot';
 import { emitPostCreated, emitPostDiscarded, noteOwnPostKey } from '../utils/postEvents';
-import { TEXT_WRAP_FRACTION, buildPostPayload, getRepostStripRect, CANVAS_WIDTH } from '../utils/buildPostPayload';
+import { TEXT_WRAP_FRACTION, buildPostPayload, getRepostStripRect, quotedBand, CANVAS_WIDTH } from '../utils/buildPostPayload';
 import { displayCropBounds } from '../utils/displayCrop';
 import { gradientBandPx } from '../utils/gradient';
 import { compactGaps, Band, MAX_GAP_FRACTION } from '../utils/compactGaps';
@@ -231,7 +231,7 @@ const RepostImageLayer = ({ repostData }: { repostData?: RepostData }) => {
   const rect = getRepostStripRect(original, screenWidth, screenHeight);
   if (rect && original) {
     const scale = rect.width / (original.image_width || 1);
-    const topY = original.top_y || 0;
+    const topY = quotedBand(original)?.top ?? 0;
     return (
       <View
         style={[
@@ -604,7 +604,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
                 style={{
                   width: stripRect.width,
                   height: (original.image_height || 0) * scale,
-                  transform: [{ translateY: -(original.top_y || 0) * scale }],
+                  transform: [{ translateY: -(quotedBand(original)?.top ?? 0) * scale }],
                 }}
                 resizeMode="cover"
               />
