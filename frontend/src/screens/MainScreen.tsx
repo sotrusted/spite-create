@@ -302,6 +302,10 @@ export default function MainScreen() {
     navigation.navigate('PostComposer' as never);
   };
 
+  const openArchive = () => {
+    navigation.navigate('Archive' as never);
+  };
+
   const openProfile = () => {
     navigation.navigate('Profile' as never);
   };
@@ -363,6 +367,9 @@ export default function MainScreen() {
             {/* the feed refreshing its cached page: here, in the masthead's
                 own ink, rather than over the top post */}
             {syncing && <ActivityIndicator size="small" color={headerTheme.text} style={styles.syncSpinner} />}
+            <TouchableOpacity onPress={openArchive} style={styles.archiveButton} accessibilityLabel="Archive">
+              <Ionicons name="grid-outline" size={24} color={headerTheme.text} />
+            </TouchableOpacity>
             <TouchableOpacity onPress={openProfile} style={styles.profileButton}>
               <Ionicons name="person-circle-outline" size={28} color={headerTheme.text} />
             </TouchableOpacity>
@@ -504,6 +511,10 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: Colors.primary,
     letterSpacing: 1,
+  },
+  archiveButton: {
+    padding: SPACE.xs,
+    marginRight: SPACE.xs,
   },
   profileButton: {
     padding: SPACE.xs,

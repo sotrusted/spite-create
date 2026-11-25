@@ -37,6 +37,7 @@ import { loadDrafts } from './src/utils/drafts';
 import PostComposerScreen from './src/screens/PostComposerScreen';
 import PostDetailScreen from './src/screens/PostDetailScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import ArchiveScreen from './src/screens/ArchiveScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import { registerForPush, onNotificationOpened } from './src/services/push';
 
@@ -98,7 +99,7 @@ const useAutoUpdates = () => {
 //   exp://<host>/--/post/<id>?textMode=plan
 const devHost = Constants.expoConfig?.hostUri;
 const DEV_LINKING = __DEV__ && devHost
-  ? { prefixes: [`exp://${devHost}/--/`], config: { screens: { PostDetail: 'post/:postId' } } }
+  ? { prefixes: [`exp://${devHost}/--/`], config: { screens: { PostDetail: 'post/:postId', Archive: 'archive' } } }
   : undefined;
 
 export default function App() {
@@ -199,6 +200,11 @@ export default function App() {
               gestureEnabled: true,
               cardStyle: { backgroundColor: 'transparent' },
             }}
+          />
+          <Stack.Screen
+            name="Archive"
+            component={ArchiveScreen}
+            options={{ headerShown: false, presentation: 'card', gestureEnabled: true }}
           />
           <Stack.Screen
             name="Profile"

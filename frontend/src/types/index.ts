@@ -191,6 +191,7 @@ export type RootStackParamList = {
   PostComposer: { repostData?: RepostData; restoreState?: CanvasState };
   PostDetail: { postId: string; post?: Post };
   Profile: undefined;
+  Archive: undefined;
   Settings: undefined;
 };
 
