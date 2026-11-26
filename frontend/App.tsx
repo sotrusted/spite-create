@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import React, { useState, useEffect } from 'react';
 import * as Updates from 'expo-updates';
+import * as LegacyFS from 'expo-file-system/legacy';
 import { AppState } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -58,37 +59,71 @@ const openWaitingPost = () => {
 
 // Updates must never restart the app while someone is looking at it: that
 // showed the feed, then the loading screen, then a feed with a different
-// masthead, and read as broken. So an update is fetched at launch and on
-// every return to the foreground, and applied the moment the app goes to the
-// background - a restart nobody sees. (A cold start also applies a fetched
-// update on its own; the background restart covers iOS keeping the app warm
-// for days, when no cold start comes.)
+// masthead, and read as broken. So there are two moments an update lands:
+//
+// 1. A cold launch. Before the first screen is drawn the app asks for an
+//    update and, if one arrives within LAUNCH_UPDATE_WAIT_MS, restarts into
+//    it - one launch shows the newest version. Past the wait the app opens
+//    as it is and the download carries on behind it.
+// 2. Going to the background, for an update fetched while the app was open
+//    (at launch past the wait, or on a return to the foreground) - a restart
+//    nobody sees. iOS keeps the app warm for days; no cold start comes.
+const LAUNCH_UPDATE_WAIT_MS = 3000;
+// A launch restart is not repeated within this long: an update that fails to
+// start is rolled back by the system, and would otherwise be fetched and
+// restarted into again, for ever
+const LAUNCH_RESTART_GUARD_MS = 2 * 60 * 1000;
+const LAUNCH_RESTART_FILE = LegacyFS.documentDirectory + 'launch-update-restart';
+
+const updatesOn = !__DEV__ && Updates.isEnabled;
+let updateChecking = false;
+let updateReady = false;
+const fetchUpdateIfAvailable = async () => {
+  if (updateChecking || updateReady) return;
+  updateChecking = true;
+  try {
+    const check = await Updates.checkForUpdateAsync();
+    if (check.isAvailable) {
+      await Updates.fetchUpdateAsync();
+      updateReady = true;
+    }
+  } catch {
+    // offline or mid-publish; try again next foreground
+  } finally {
+    updateChecking = false;
+  }
+};
+
+const restartedJustNow = async () => {
+  try {
+    const at = Number(await LegacyFS.readAsStringAsync(LAUNCH_RESTART_FILE));
+    return Date.now() - at < LAUNCH_RESTART_GUARD_MS;
+  } catch {
+    return false;
+  }
+};
+
+// Resolves when the app may draw its first screen. If an update arrives in
+// time it restarts instead and the promise is left behind with the old code.
+const settleLaunchUpdate = (): Promise<void> => {
+  if (!updatesOn || Updates.isEmergencyLaunch) return Promise.resolve();
+  let waiting = true;
+  const wait = new Promise<void>(resolve => setTimeout(() => { waiting = false; resolve(); }, LAUNCH_UPDATE_WAIT_MS));
+  const apply = (async () => {
+    await fetchUpdateIfAvailable();
+    if (!updateReady || !waiting || (await restartedJustNow())) return;
+    await LegacyFS.writeAsStringAsync(LAUNCH_RESTART_FILE, String(Date.now())).catch(() => {});
+    await Updates.reloadAsync();
+  })().catch(() => {});
+  return Promise.race([wait, apply]);
+};
+
 const useAutoUpdates = () => {
   useEffect(() => {
-    if (__DEV__ || !Updates.isEnabled) return;
-
-    let checking = false;
-    let ready = false;
-    const fetchIfAvailable = async () => {
-      if (checking || ready) return;
-      checking = true;
-      try {
-        const check = await Updates.checkForUpdateAsync();
-        if (check.isAvailable) {
-          await Updates.fetchUpdateAsync();
-          ready = true;
-        }
-      } catch {
-        // offline or mid-publish; try again next foreground
-      } finally {
-        checking = false;
-      }
-    };
-
-    fetchIfAvailable();
+    if (!updatesOn) return;
     const sub = AppState.addEventListener('change', state => {
-      if (state === 'active') fetchIfAvailable();
-      else if (state === 'background' && ready) Updates.reloadAsync().catch(() => {});
+      if (state === 'active') fetchUpdateIfAvailable();
+      else if (state === 'background' && updateReady) Updates.reloadAsync().catch(() => {});
     });
     return () => sub.remove();
   }, []);
@@ -145,7 +180,7 @@ export default function App() {
   // Drafts too: the composer opens straight onto an unfinished canvas.
   const [bootReady, setBootReady] = useState(false);
   useEffect(() => {
-    Promise.all([loadBootFeed(), loadDrafts()]).finally(() => setBootReady(true));
+    Promise.all([loadBootFeed(), loadDrafts(), settleLaunchUpdate()]).finally(() => setBootReady(true));
   }, []);
 
   if (!fontsLoaded || !bootReady) {
