@@ -126,7 +126,6 @@ export const endpoints = {
   getUserProfile: '/users/profile/',
   deleteAccount: '/users/me/',
   getMyPosts: '/users/me/posts/',
-  likePost: (id: string) => `/posts/${id}/like/`,
 };
 
 // Request interceptor to add device ID and logging

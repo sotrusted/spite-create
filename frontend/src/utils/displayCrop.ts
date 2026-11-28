@@ -58,8 +58,7 @@ export const displayCropBounds = (
 
   if (contentBoxes && contentBoxes.length) {
     const right = canvasWidth - CHROME.inset * k;
-    // the heart and the quote button, side by side
-    const left = right - (2 * CHROME.buttonWidth + CHROME.buttonGap) * k;
+    const left = right - CHROME.buttonWidth * k;
     const gutter = SPACE.sm * k;
     const inColumn = contentBoxes.filter(
       b => b[2] > left - gutter && b[0] < right + gutter && b[1] < bottom,

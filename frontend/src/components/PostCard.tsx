@@ -19,7 +19,6 @@ import { tap } from '../utils/haptics';
 import { feedCardLayout, canvasPointIn, gradientEndpoints, boxRectOf, CARD } from '../utils/cardLayout';
 import { quotedLevelAt } from '../utils/hitTest';
 import PressFlash, { PressFlashHandle, flashColorOn } from './PressFlash';
-import HeartButton from './HeartButton';
 import { editAgain } from '../utils/editAgain';
 import { GESTURES } from '../constants/gestures';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -553,15 +552,6 @@ export default function PostCard({ post, onSwipeableOpen }: Props) {
             <Text style={[styles.quoteButtonText, { color: post.background_color || Colors.background }]}>Aa</Text>
           </TouchableOpacity>
         )}
-        {/* (a post still on its way to the server has nothing to heart yet) */}
-        {collapsedAt !== 0 && !(post as any).__optimistic && (
-          <HeartButton
-            post={post}
-            fill={flashColor}
-            ink={post.background_color || Colors.background}
-            style={styles.heartButton}
-          />
-        )}
       </View>
     </Swipeable>
   );
@@ -578,12 +568,6 @@ const styles = StyleSheet.create({
     borderColor: CHROME.hairline,
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 30,
-  },
-  // left of the quote button, level with it
-  heartButton: {
-    right: CHROME.inset + CHROME.buttonWidth + CHROME.buttonGap,
-    bottom: CHROME.inset,
     zIndex: 30,
   },
   quoteButtonText: {
