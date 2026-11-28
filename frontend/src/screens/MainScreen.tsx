@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { api, endpoints, ONBOARD_FLAG } from '../config/api';
+import { registerForPush } from '../services/push';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -207,6 +208,9 @@ export default function MainScreen() {
         const info = await FileSystem.getInfoAsync(ONBOARD_FLAG);
         if (!info.exists) {
           setShowOnboarding(true);
+        } else {
+          // someone already through the door who has never been asked
+          registerForPush(true);
         }
       } catch (error) {
         console.log('Onboarding check failed (non-critical):', error);
@@ -223,6 +227,9 @@ export default function MainScreen() {
       }
       await FileSystem.writeAsStringAsync(ONBOARD_FLAG, 'done');
       setShowOnboarding(false);
+      // The handle is picked: ask about notifications now, on the first
+      // launch (iOS shows the prompt once; an answer already given stands)
+      registerForPush(true);
     } catch (error: any) {
       Alert.alert('Handle', error.response?.data?.handle?.[0] || 'Could not save handle');
     }

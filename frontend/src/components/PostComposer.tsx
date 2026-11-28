@@ -1399,7 +1399,7 @@ export default function PostComposer({ onPost, onClose, onPosted, repostData, re
         headers: { 'Idempotency-Key': postKey },
       });
       removeDraft(keptId);
-      // The first post is the moment replies start to matter: ask then
+      // Asked on first launch; asked again here in case that was missed
       // (iOS shows the prompt once; later calls just refresh the token)
       registerForPush(true);
       // The snapshot holds the slot until the server render is on the
